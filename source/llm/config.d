@@ -1,0 +1,243 @@
+module llm.config;
+
+import logger = std.logger;
+import std.sumtype : SumType;
+import std.algorithm : filter, map;
+import std.array : array, empty;
+import std.file : readText, exists, mkdirRecurse;
+import std.format : format;
+import std.json : JSONValue, parseJSON;
+
+import my.path;
+
+import llm.query : RequestConfig;
+
+immutable ProgramName = "llm_fun";
+
+struct LlmConfig {
+    // LLM save a memory to this file which is used between runs.
+    Path memoryArea = ProgramName ~ "/data/memory";
+
+    Path rag = ProgramName ~ "/data/rag.json";
+
+    Path scratchArea = ProgramName ~ "/data/scratch";
+
+    Path thinkingTemplatesDir = ProgramName ~ "/config/thinking";
+
+    Path promptDir = ProgramName ~ "/config/prompt";
+
+    void resolvePaths() {
+        import my.resource;
+        import my.optional;
+
+        // prio local dirs but VERY important which files are allowed to override
+        // because there could be malicious configs in the cwd path.
+        auto prioDataCwdDirs = AbsolutePath(ProgramName ~ "/data") ~ dataSearch(ProgramName);
+        auto prioConfCwdDirs = AbsolutePath(ProgramName ~ "/config") ~ configSearch(ProgramName);
+
+        memoryArea = prioDataCwdDirs.resolve("memory".Path)
+            .orElse(ResourceFile(memoryArea.AbsolutePath)).get.Path;
+
+        rag = prioDataCwdDirs.resolve("rag.json".Path)
+            .orElse(ResourceFile(rag.AbsolutePath)).get.Path;
+
+        scratchArea = prioDataCwdDirs.resolve("scratch".Path)
+            .orElse(ResourceFile(scratchArea.AbsolutePath)).get.Path;
+
+        thinkingTemplatesDir = prioConfCwdDirs.resolve("thinking".Path)
+            .orElse(ResourceFile(thinkingTemplatesDir.AbsolutePath)).get.Path;
+
+        promptDir = prioConfCwdDirs.resolve("prompt".Path)
+            .orElse(ResourceFile(thinkingTemplatesDir.AbsolutePath)).get.Path;
+    }
+
+    // Directory where the LLM can work with assets, create files etc.
+    Path workArea = ProgramName ~ "/workarea";
+
+    string containerCmd = "podman";
+
+    CodeModelConfig codeModel;
+    SummaryModelConfig summaryModel;
+    EmbedConfig embedConfig;
+}
+
+Path promptToPath(LlmConfig conf, string prompt) {
+    return conf.promptDir ~ prompt;
+}
+
+LlmConfig makeLlmConfig() {
+    LlmConfig conf;
+    conf.resolvePaths;
+    return conf;
+}
+
+struct ServerConfig {
+    string url;
+    string promptUrl;
+    string chatUrl;
+    string slotUrl;
+    long timeoutSeconds;
+    long httpVerbosity;
+
+    /// API key for Bearer token authentication (e.g. OpenAI API key).
+    /// If empty, the OPENAI_API_KEY environment variable is checked as fallback.
+    /// Leave empty for servers that do not require authentication (e.g. local llama.cpp).
+    string apiKey;
+
+    string toChatUrl() {
+        return format!"%s/%s"(url, chatUrl);
+    }
+
+    string toPromptUrl() {
+        return format!"%s/%s"(url, promptUrl);
+    }
+
+    string toSlotUrl() {
+        return format!"%s/%s"(url, slotUrl);
+    }
+}
+
+struct CodeModelConfig {
+    ServerConfig server;
+    string name;
+    string prompt = "AGENT.md";
+    double temp;
+    long contextSize;
+    long maxTokens;
+    long reasoningBudget;
+    bool preserveThinking;
+}
+
+struct SummaryModelConfig {
+    ServerConfig server;
+    string name;
+    string prompt = "SUMMARY.md";
+    double temp;
+    long contextSize;
+    long reasoningBudget;
+    bool preserveThinking;
+    long maxTokens;
+    string[] decisionKeywords;
+}
+
+/// Configuration for a local embedding backend (llama.cpp).
+struct LocalEmbedConfig {
+    Path modelPath;
+    long context;
+    long nBatch;
+}
+
+/// Configuration for a remote embedding backend (HTTP API).
+struct RemoteEmbedConfig {
+    string baseUrl;
+    string modelName;
+    string apiKey;
+    int timeoutSeconds;
+    int dimensions;
+}
+
+/// Union type for embedding backend configuration.
+alias EmbedConfig = SumType!(LocalEmbedConfig, RemoteEmbedConfig);
+
+RequestConfig toRequestConfig(ConfigT)(ConfigT conf) {
+    // dfmt off
+    return RequestConfig(
+         chatUrl: conf.server.toChatUrl,
+         promptUrl: conf.server.toPromptUrl,
+         slotUrl: conf.server.toSlotUrl,
+         timeoutS: cast(int) conf.server.timeoutSeconds,
+         verbosity: cast(int) conf.server.httpVerbosity,
+        apiKey: conf.server.apiKey.empty ? getEnvApiKey() : conf.server.apiKey,
+          chat: RequestConfig.Chat(model: conf.name,
+                                  max_tokens: conf.maxTokens,
+                                  temperature: conf.temp,
+                                  reasoning_budget: conf.reasoningBudget,
+                                  preserve_thinking: conf.preserveThinking));
+    // dfmt on
+}
+
+LlmConfig readConfig(Path path = Path("config/default.json")) {
+    auto conf = makeLlmConfig();
+
+    if (path.exists) {
+        logger.infof("Reading configuration from %s", path);
+        return jsonToLlmConfig(conf, readText(path.toString).parseJSON);
+    }
+    logger.infof("No configuration at %s. Using default values", path);
+    return conf;
+}
+
+EmbedConfig jsonToEmbedConfig(JSONValue json) {
+    import std.exception : enforce;
+
+    if ("type" !in json) {
+        throw new Exception("embedConfig JSON missing required field 'type'");
+    }
+
+    string type = json["type"].str;
+    if (type == "remote") {
+        return EmbedConfig(jsonToConfig!(RemoteEmbedConfig)(RemoteEmbedConfig.init, json));
+    }
+    if (type == "local") {
+        return EmbedConfig(jsonToConfig!(LocalEmbedConfig)(LocalEmbedConfig.init, json));
+    }
+    throw new Exception("embedConfig: unknown type '" ~ type ~ "', expected 'remote' or 'local'");
+}
+
+auto jsonToConfig(ConfigT)(ConfigT conf, JSONValue json) {
+    import std.traits;
+
+    logger.trace("read json config start: " ~ ConfigT.stringof);
+    bool[string] used;
+
+    static foreach (llmMemberName; __traits(allMembers, ConfigT)) {
+        {
+            alias member = __traits(getMember, conf, llmMemberName);
+            static if (!isType!member) {
+                if (llmMemberName in json) {
+                    used[llmMemberName] = true;
+                    alias Type = typeof(member);
+                    static if (is(Type : Path)) {
+                        __traits(getMember, conf, llmMemberName) = json[llmMemberName].str.Path;
+                    } else static if (is(Type : string)) {
+                        __traits(getMember, conf, llmMemberName) = json[llmMemberName].str;
+                    } else static if (is(Type : bool)) {
+                        __traits(getMember, conf, llmMemberName) = json[llmMemberName].boolean;
+                    } else static if (isFloatingPoint!Type) {
+                        __traits(getMember, conf, llmMemberName) = json[llmMemberName].floating;
+                    } else static if (isIntegral!Type) {
+                        __traits(getMember, conf, llmMemberName) = cast(Type) json[llmMemberName]
+                            .integer;
+                    } else static if (is(Type : string[])) {
+                        __traits(getMember, conf, llmMemberName) = json[llmMemberName].array.map!(a => a.str)
+                            .array;
+                    } else static if (is(Type : EmbedConfig)) {
+                        __traits(getMember, conf, llmMemberName) = jsonToEmbedConfig(
+                                json[llmMemberName]);
+                    } else static if (isAggregateType!Type) {
+                        __traits(getMember, conf, llmMemberName) = jsonToConfig(__traits(getMember,
+                                conf, llmMemberName), *(llmMemberName in json));
+                    }
+                } else {
+                    logger.tracef("using default value for %s:%s", ConfigT.stringof, llmMemberName);
+                }
+            }
+        }
+    }
+
+    foreach (k; json.object.byKey.filter!(a => a !in used)) {
+        logger.warningf("Unknown json configuration %s:%s", ConfigT.stringof, k);
+    }
+
+    logger.trace("read json config done: " ~ ConfigT.stringof);
+    return conf;
+}
+
+alias jsonToLlmConfig = jsonToConfig!LlmConfig;
+
+/// Returns the OpenAI API key from the OPENAI_API_KEY environment variable, or "" if not set.
+string getEnvApiKey() {
+    import std.process : environment;
+
+    return environment.get("OPENAI_API_KEY", null);
+}

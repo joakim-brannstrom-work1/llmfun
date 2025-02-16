@@ -1,0 +1,91 @@
+module llm.coder;
+
+import logger = std.logger;
+
+import llm.agent : Agent;
+import llm.config : LlmConfig, promptToPath;
+import llm.metric.monitor : MetricMonitor;
+import llm.pipeline : Pipeline, PipelineResult, pipelineBuilder;
+import llm.rag.rag : RAG;
+import llm.utility : SystemPromptInit;
+
+/// Runs a coder-reviewer loop pipeline.
+///
+/// Agent 1 (Coder): implements code based on the user's request,
+///     saves output to `code/implementation.md`, and incorporates
+///     reviewer feedback on subsequent iterations.
+///
+/// Agent 2 (Code Reviewer): reviews the coder's output using
+///     `getThinkingTemplate("code_review")`, produces structured
+///     feedback, and passes it back via `pipelineOutput`.
+///
+/// The loop runs up to three times:
+///   1. Coder implements → Reviewer reviews
+///   2. Coder revises → Reviewer reviews
+///   3. Coder finalizes (pipeline stops)
+///
+/// Both agents are transient and only exist for the duration of the pipeline.
+PipelineResult runCoderPipeline(string query, LlmConfig llmConf, RAG rag,
+        MetricMonitor monitor, bool delegate() interrupt = null) {
+
+    // dfmt off
+    // --- Agent 1: Coder ---
+    const codeQuery =
+        "You are a Coder. Your job is to implement working code based on the user's request.\\n\\n" ~
+        "## Instructions\\n" ~
+        "1. Call `getThinkingTemplate(\\\"implementation_plan\\\")` to get a structured thinking framework.\\n" ~
+        "2. Analyze the user's request and plan your implementation.\\n" ~
+        "3. Write clean, well-structured code.\\n" ~
+        "4. Save your implementation to `code/implementation.md` using `writeFile`.\\n" ~
+        "5. If you receive feedback from a code reviewer (passed as input), address each point in your revision.\\n" ~
+        "6. After saving, call `pipelineOutput` with your implementation summary and call `taskDone` to complete your task.\\n";
+
+    // --- Agent 2: Code Reviewer ---
+    const reviewerQuery =
+        "You are a Code Reviewer. Your job is to review the coder's implementation and provide actionable feedback.\\n\\n" ~
+        "## Instructions\\n" ~
+        "1. Read the implementation from `code/implementation.md` using `readFile`.\\n" ~
+        "2. Call `getThinkingTemplate(\\\"code_review\\\")` to get a structured framework for reviewing code.\\n" ~
+        "3. Follow the template to thoroughly analyze the code for bugs, security issues, style violations, performance problems, and improvements.\\n" ~
+        "4. Produce a detailed review that:\\n" ~
+        "   - Summarizes what works well.\\n" ~
+        "   - Identifies specific issues with line numbers or code snippets.\\n" ~
+        "   - Provides concrete, actionable suggestions for each issue.\\n" ~
+        "5. Call `pipelineOutput` with your review feedback as argument.\\n" ~
+        "6. After calling `pipelineOutput`, call `taskDone` to complete your task.\\n";
+    // dfmt on
+
+    // Create transient agents
+    auto coder = new Agent("coder", llmConf, monitor, rag);
+    coder.setSystemPrompt(SystemPromptInit(llmConf.promptToPath(llmConf.codeModel.prompt))
+            .toString);
+    coder.addUserQuery(codeQuery);
+
+    auto reviewer = new Agent("code_reviewer", llmConf, monitor, rag);
+    reviewer.setSystemPrompt(
+            SystemPromptInit(llmConf.promptToPath(llmConf.codeModel.prompt)).toString);
+    reviewer.addUserQuery(reviewerQuery);
+
+    // Wire into a loop pipeline: coder -> reviewer -> coder (up to 3 coder runs)
+    // maxLoops=2 on the feedback edge means the reviewer feeds back to the coder
+    // at most 2 times, resulting in 3 total coder executions.
+    // dfmt off
+    auto pipeline = pipelineBuilder
+        .addNode("coder", coder)
+        .addNode("reviewer", reviewer)
+        .addEdge("coder", "reviewer")
+        .addEdge("reviewer", "coder", 1u)
+        .addEdge("reviewer", "done", 0)
+        .startNode("coder")
+        .stopNode("done").build;
+    // dfmt on
+
+    logger.trace(pipeline);
+    logger.infof("[coder] Starting coder-reviewer pipeline for query: %s", query);
+    auto result = pipeline.run(query, interrupt);
+
+    logger.infof("[coder] Pipeline completed: allSuccess=%s, agents=%d",
+            result.allSuccess, result.agentResults.length);
+
+    return result;
+}
