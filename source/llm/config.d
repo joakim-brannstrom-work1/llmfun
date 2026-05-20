@@ -117,7 +117,6 @@ struct SummaryModelConfig {
     long reasoningBudget;
     bool preserveThinking;
     long maxTokens;
-    string[] decisionKeywords;
 }
 
 /// Configuration for a local embedding backend (llama.cpp).
@@ -137,7 +136,7 @@ struct RemoteEmbedConfig {
 }
 
 /// Union type for embedding backend configuration.
-alias EmbedConfig = SumType!(LocalEmbedConfig, RemoteEmbedConfig);
+alias EmbedConfig = SumType!(RemoteEmbedConfig, LocalEmbedConfig);
 
 RequestConfig toRequestConfig(ConfigT)(ConfigT conf) {
     // dfmt off
