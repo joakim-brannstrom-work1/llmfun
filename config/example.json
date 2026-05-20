@@ -1,0 +1,33 @@
+{
+  "codeModel": {
+    "server": {
+      "url": "http://127.0.0.1:1234",
+      "chatUrl": "v1/chat/completions",
+      "promptUrl": "v1/completion",
+      "slotUrl": "slots",
+      "timeoutSeconds": 3600,
+      "httpVerbosity": 0
+    },
+    "name": "my-model",
+    "temp": 0.6,
+    "contextSize": 128000,
+    "reasoningBudget": 4096,
+    "preserveThinking": true,
+    "maxTokens": -1
+  },
+  "summaryModel": {
+    "server": {
+      "url": "http://127.0.0.1:1234",
+      "chatUrl": "v1/chat/completions",
+      "promptUrl": "v1/completion",
+      "slotUrl": "slots",
+      "timeoutSeconds": 60,
+      "httpVerbosity": 0
+    },
+    "name": "my-model",
+    "temp": 0.3,
+    "contextSize": 32768,
+    "reasoningBudget": 0,
+    "maxTokens": 4096
+  }
+}
