@@ -166,7 +166,7 @@ LlmConfig readConfig(Path path = Path("config/default.json")) {
     return conf;
 }
 
-EmbedConfig jsonToEmbedConfig(JSONValue json) {
+private EmbedConfig jsonToEmbedConfig(JSONValue json) {
     import std.exception : enforce;
 
     if ("type" !in json) {

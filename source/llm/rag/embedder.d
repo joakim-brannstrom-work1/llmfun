@@ -5,7 +5,11 @@
 module llm.rag.embedder;
 
 import std.array : empty;
-import std.sumtype : SumType;
+import std.sumtype : SumType, match;
+
+import llm.config : EmbedConfig, LocalEmbedConfig, RemoteEmbedConfig;
+import llm.rag.embedder_http;
+import llm.rag.embedder_llama;
 
 alias EmbedResult = SumType!(float[], string);
 
@@ -40,13 +44,6 @@ struct RemoteEmbedderConfig {
     int maxRetries = 3; // maximum number of retries for transient failures
     long backoffMs = 500; // initial backoff in milliseconds (exponential)
 }
-
-// Pull in implementations
-import llm.rag.embedder_llama;
-import llm.rag.embedder_http;
-
-import std.sumtype : match;
-import llm.config : EmbedConfig, LocalEmbedConfig, RemoteEmbedConfig;
 
 /// Factory function to create an Embedder from an EmbedConfig sum type.
 Embedder createEmbedder(EmbedConfig config) {
