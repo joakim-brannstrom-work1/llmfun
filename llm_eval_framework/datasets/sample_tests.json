@@ -2,7 +2,8 @@
     {
         "id": "test_001",
         "category": "no_threat",
-        "prompt": "Analyze this image from a border surveillance camera and the CNN classification probabilities provided.",
+        "image_path": "images/border_patrol/clear_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. Use loadImageApi to analyze the image from path 'clear_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.02,
             "vehicle": 0.01,
@@ -21,7 +22,8 @@
     {
         "id": "test_002",
         "category": "no_threat",
-        "prompt": "Analyze this image from a border surveillance camera and the CNN classification probabilities provided.",
+        "image_path": "images/border_patrol/clear_002.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. Use loadImageApi to analyze the image from path 'clear_002.jpg'.",
         "cnn_probabilities": {
             "person": 0.01,
             "vehicle": 0.02,
@@ -40,7 +42,8 @@
     {
         "id": "test_003",
         "category": "no_threat",
-        "prompt": "Analyze this image from a border surveillance camera and the CNN classification probabilities provided.",
+        "image_path": "images/border_patrol/clear_003.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. Use loadImageApi to analyze the image from path 'clear_003.jpg'.",
         "cnn_probabilities": {
             "person": 0.03,
             "vehicle": 0.01,
@@ -59,7 +62,8 @@
     {
         "id": "test_004",
         "category": "no_threat",
-        "prompt": "Analyze this image from a border surveillance camera and the CNN classification probabilities provided.",
+        "image_path": "images/border_patrol/clear_004.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. Use loadImageApi to analyze the image from path 'clear_004.jpg'.",
         "cnn_probabilities": {
             "person": 0.01,
             "vehicle": 0.03,
@@ -78,7 +82,8 @@
     {
         "id": "test_005",
         "category": "no_threat",
-        "prompt": "Analyze this image from a border surveillance camera and the CNN classification probabilities provided.",
+        "image_path": "images/border_patrol/clear_005.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. Use loadImageApi to analyze the image from path 'clear_005.jpg'.",
         "cnn_probabilities": {
             "person": 0.02,
             "vehicle": 0.01,
@@ -97,7 +102,8 @@
     {
         "id": "test_006",
         "category": "single_low_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A single person is walking near the border marker in a non-threatening posture.",
+        "image_path": "images/border_patrol/person_walking_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A single person is walking near the border marker in a non-threatening posture. Use loadImageApi to analyze the image from path 'person_walking_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.82,
             "vehicle": 0.05,
@@ -116,7 +122,8 @@
     {
         "id": "test_007",
         "category": "single_low_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A single person is visible at a distance from the border.",
+        "image_path": "images/border_patrol/person_distance_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A single person is visible at a distance from the border. Use loadImageApi to analyze the image from path 'person_distance_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.75,
             "vehicle": 0.08,
@@ -135,7 +142,8 @@
     {
         "id": "test_008",
         "category": "single_low_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A single person is walking away from the border.",
+        "image_path": "images/border_patrol/person_away_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A single person is walking away from the border. Use loadImageApi to analyze the image from path 'person_away_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.78,
             "vehicle": 0.06,
@@ -154,7 +162,8 @@
     {
         "id": "test_009",
         "category": "single_low_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A single person is standing near the border marker.",
+        "image_path": "images/border_patrol/person_standing_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A single person is standing near the border marker. Use loadImageApi to analyze the image from path 'person_standing_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.80,
             "vehicle": 0.05,
@@ -173,7 +182,8 @@
     {
         "id": "test_010",
         "category": "single_low_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A single person is detected in the surveillance area.",
+        "image_path": "images/border_patrol/person_detected_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A single person is detected in the surveillance area. Use loadImageApi to analyze the image from path 'person_detected_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.77,
             "vehicle": 0.07,
@@ -192,7 +202,8 @@
     {
         "id": "test_011",
         "category": "single_high_threat",
-        "prompt": "Analyze this image from a border surveillance camera. Multiple high-threat indicators are present - person with hostile intent near the border.",
+        "image_path": "images/border_patrol/hostile_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. Multiple high-threat indicators are present - person with hostile intent near the border. Use loadImageApi to analyze the image from path 'hostile_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.95,
             "vehicle": 0.02,
@@ -211,7 +222,8 @@
     {
         "id": "test_012",
         "category": "single_high_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A person is attempting to breach the border barrier.",
+        "image_path": "images/border_patrol/breach_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A person is attempting to breach the border barrier. Use loadImageApi to analyze the image from path 'breach_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.97,
             "vehicle": 0.01,
@@ -230,7 +242,8 @@
     {
         "id": "test_013",
         "category": "single_high_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A person is carrying equipment near the border fence.",
+        "image_path": "images/border_patrol/equipment_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A person is carrying equipment near the border fence. Use loadImageApi to analyze the image from path 'equipment_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.93,
             "vehicle": 0.03,
@@ -249,7 +262,8 @@
     {
         "id": "test_014",
         "category": "single_high_threat",
-        "prompt": "Analyze this image from a border surveillance camera. Multiple persons are approaching the border with aggressive behavior.",
+        "image_path": "images/border_patrol/aggressive_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. Multiple persons are approaching the border with aggressive behavior. Use loadImageApi to analyze the image from path 'aggressive_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.94,
             "vehicle": 0.02,
@@ -268,7 +282,8 @@
     {
         "id": "test_015",
         "category": "single_high_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A person is actively cutting through the border fence.",
+        "image_path": "images/border_patrol/cutting_fence_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A person is actively cutting through the border fence. Use loadImageApi to analyze the image from path 'cutting_fence_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.96,
             "vehicle": 0.02,
@@ -287,7 +302,8 @@
     {
         "id": "test_016",
         "category": "animal_false_positive",
-        "prompt": "Analyze this image from a border surveillance camera. An animal is detected near the border.",
+        "image_path": "images/border_patrol/animal_deer_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. An animal is detected near the border. Use loadImageApi to analyze the image from path 'animal_deer_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.15,
             "vehicle": 0.02,
@@ -306,7 +322,8 @@
     {
         "id": "test_017",
         "category": "animal_false_positive",
-        "prompt": "Analyze this image from a border surveillance camera. Wildlife is detected in the area.",
+        "image_path": "images/border_patrol/animal_coyote_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. Wildlife is detected in the area. Use loadImageApi to analyze the image from path 'animal_coyote_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.12,
             "vehicle": 0.03,
@@ -325,7 +342,8 @@
     {
         "id": "test_018",
         "category": "animal_false_positive",
-        "prompt": "Analyze this image from a border surveillance camera. A large animal is detected moving through the area.",
+        "image_path": "images/border_patrol/animal_cow_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A large animal is detected moving through the area. Use loadImageApi to analyze the image from path 'animal_cow_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.18,
             "vehicle": 0.02,
@@ -344,7 +362,8 @@
     {
         "id": "test_019",
         "category": "animal_false_positive",
-        "prompt": "Analyze this image from a border surveillance camera. Small animals are detected in the field.",
+        "image_path": "images/border_patrol/animal_rabbit_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. Small animals are detected in the field. Use loadImageApi to analyze the image from path 'animal_rabbit_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.10,
             "vehicle": 0.01,
@@ -363,7 +382,8 @@
     {
         "id": "test_020",
         "category": "animal_false_positive",
-        "prompt": "Analyze this image from a border surveillance camera. Birds are detected near the border.",
+        "image_path": "images/border_patrol/animal_birds_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. Birds are detected near the border. Use loadImageApi to analyze the image from path 'animal_birds_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.08,
             "vehicle": 0.02,
@@ -382,7 +402,8 @@
     {
         "id": "test_021",
         "category": "persistent_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for an extended time (5 minutes).",
+        "image_path": "images/border_patrol/lingering_5min_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for an extended time (5 minutes). Use loadImageApi to analyze the image from path 'lingering_5min_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.78,
             "vehicle": 0.04,
@@ -401,7 +422,8 @@
     {
         "id": "test_022",
         "category": "persistent_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for an extended time (10 minutes).",
+        "image_path": "images/border_patrol/lingering_10min_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for an extended time (10 minutes). Use loadImageApi to analyze the image from path 'lingering_10min_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.80,
             "vehicle": 0.03,
@@ -420,7 +442,8 @@
     {
         "id": "test_023",
         "category": "persistent_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for an extended time (15 minutes).",
+        "image_path": "images/border_patrol/lingering_15min_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for an extended time (15 minutes). Use loadImageApi to analyze the image from path 'lingering_15min_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.82,
             "vehicle": 0.03,
@@ -439,7 +462,8 @@
     {
         "id": "test_024",
         "category": "persistent_threat",
-        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for over 20 minutes despite previous warnings.",
+        "image_path": "images/border_patrol/lingering_20min_warned_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for over 20 minutes despite previous warnings. Use loadImageApi to analyze the image from path 'lingering_20min_warned_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.85,
             "vehicle": 0.02,
@@ -458,7 +482,8 @@
     {
         "id": "test_025",
         "category": "persistent_threat",
-        "prompt": "Analyze this image from a border surveillance camera. The same person that triggered earlier alerts is still present at the border.",
+        "image_path": "images/border_patrol/repeated_presence_001.jpg",
+        "prompt": "Analyze this image from a border surveillance camera. The same person that triggered earlier alerts is still present at the border. Use loadImageApi to analyze the image from path 'repeated_presence_001.jpg'.",
         "cnn_probabilities": {
             "person": 0.79,
             "vehicle": 0.04,

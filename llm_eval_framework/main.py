@@ -21,7 +21,8 @@ from scorer import evaluate_batch, save_results
 def run_evaluation(
     test_cases: List[TestCase],
     output_file: Path = None,
-    verbose: bool = False
+    verbose: bool = False,
+    datasets_dir: Path = None
 ) -> dict:
     """Run evaluation on all test cases.
     
@@ -29,6 +30,7 @@ def run_evaluation(
         test_cases: List of test cases to evaluate
         output_file: Optional path to save results
         verbose: Print progress information
+        datasets_dir: Base directory for datasets (for image path resolution)
         
     Returns:
         Dictionary with evaluation results
@@ -42,7 +44,8 @@ def run_evaluation(
         if verbose:
             print(f"  [{i+1}/{len(test_cases)}] Evaluating {test_case.id}...")
         
-        response = evaluate_test_case(test_case)
+        # Pass datasets_dir so evaluator can copy images to workarea
+        response = evaluate_test_case(test_case, datasets_dir=datasets_dir)
         responses.append(response)
         
         if verbose:
@@ -127,9 +130,15 @@ def main():
         print("Error: No test cases loaded", file=sys.stderr)
         return 1
     
+    # Determine datasets directory for image path resolution
+    if dataset_path.is_file():
+        datasets_dir = dataset_path.parent
+    else:
+        datasets_dir = dataset_path
+    
     # Run evaluation
     output_file = Path(args.output) if args.output else None
-    results = run_evaluation(test_cases, output_file, args.verbose)
+    results = run_evaluation(test_cases, output_file, args.verbose, datasets_dir)
     
     return 0
 

@@ -8,7 +8,17 @@ This document defines a minimal viable product (MVP) for evaluating the BorderAg
 
 ## 1. What We're Evaluating
 
-The BorderAgent LLM receives an image and CNN classification probabilities, and must decide on an appropriate action from a set of tools following a 5-level escalation protocol.
+The BorderAgent LLM is a **multimodal** system that:
+- Uses built-in vision to analyze images from border surveillance cameras
+- Receives CNN classification probabilities as supplementary data to enhance strategic decision-making
+- Must decide on an appropriate action from a set of tools following a 5-level escalation protocol
+
+### How llmfun Accesses Images
+
+The llmfun agent uses the `loadImageApi` tool to read images from its workarea. During evaluation:
+1. Test images are copied to `llmfun/workarea/`
+2. The prompt instructs the agent to use `loadImageApi` to analyze the image from a specific path
+3. The agent analyzes both the visual content AND CNN probabilities to make strategic decisions
 
 ### 1.1 Evaluation Dimensions
 
@@ -40,7 +50,8 @@ Each test case is a JSON record:
 {
   "id": "test_001",
   "category": "no_threat",
-  "prompt": "Analyze this image from a border surveillance camera...",
+  "image_path": "images/border_patrol/clear_001.jpg",
+  "prompt": "Analyze this image from a border surveillance camera. Use loadImageApi to analyze the image from path 'images/border_patrol/clear_001.jpg'.",
   "cnn_probabilities": {
     "person": 0.02,
     "vehicle": 0.01,
@@ -57,6 +68,11 @@ Each test case is a JSON record:
   }
 }
 ```
+
+**Note:** The `image_path` field specifies where the test image is located. During evaluation:
+- Images are copied to `llmfun/workarea/` so the agent can access them
+- The `prompt` should include instructions to use `loadImageApi` with the image path
+- This enables testing the multimodal capability of the LLM (vision + CNN probabilities)
 
 ### 2.2 Initial Test Categories
 
@@ -148,12 +164,27 @@ Fail: Any high-threat case missed (FN)
 
 1. **Load Test Dataset** - Read JSON file with test cases
 2. **For each test case:**
-   - Build prompt from test case data
-   - Call llmfun agent
-   - Parse response to extract tools called
-   - Calculate scores against ground truth
+   - **Copy image to workarea**: Copy `image_path` to `llmfun/workarea/` so the agent can access it
+   - **Build prompt**: Include instruction to use `loadImageApi` with the image path + CNN probabilities
+   - **Call llmfun agent**: The multimodal LLM analyzes the image AND uses CNN probabilities
+   - **Parse response**: Extract tools called from agent output
+   - **Calculate scores**: Compare against ground truth
 3. **Aggregate Results** - Compute composite score
 4. **Generate Report** - Output JSON with results
+
+**Example Prompt Construction:**
+```
+Analyze this image from a border surveillance camera. 
+Use loadImageApi to analyze the image from path 'images/border_patrol/clear_001.jpg'.
+
+CNN Classification Probabilities:
+- person: 2.00%
+- vehicle: 1.00%
+- animal: 5.00%
+- background: 92.00%
+
+Based on your analysis, determine the appropriate action(s) using your available tools.
+```
 
 ### 4.3 Response Parser
 

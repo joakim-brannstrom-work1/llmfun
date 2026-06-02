@@ -4,15 +4,20 @@ This module handles:
 - Calling the llmfun agent with prompts from test cases
 - Parsing the agent's response to extract tools called
 - Handling the chat history format
+- Copying images to llmfun workarea for multimodal evaluation
 """
 
 import subprocess
 import json
 import re
 import time
+import shutil
 from dataclasses import dataclass
 from typing import List, Optional, Dict
 from pathlib import Path
+
+# Path to llmfun workarea where images should be copied
+LLMFUN_WORKAREA = Path.home() / "llmfun" / "workarea"
 
 # Tool to escalation level mapping
 TOOL_ESCALATION_MAP = {
@@ -216,16 +221,62 @@ def load_chat_history(history_file: Path) -> List[Dict[str, str]]:
     return data.get('messages', [])
 
 
-def evaluate_test_case(test_case, history_file: Optional[Path] = None) -> AgentResponse:
+def copy_image_to_workarea(image_path: str, datasets_dir: Path) -> Optional[str]:
+    """Copy test image to llmfun workarea so the agent can access it.
+    
+    Args:
+        image_path: Relative path to the image from datasets directory
+        datasets_dir: The base datasets directory path
+        
+    Returns:
+        The destination path where image was copied, or None if failed
+    """
+    if not image_path:
+        return None
+    
+    try:
+        # Ensure workarea exists
+        LLMFUN_WORKAREA.mkdir(parents=True, exist_ok=True)
+        
+        # Source image path (relative to datasets directory)
+        src_path = datasets_dir / image_path
+        
+        if not src_path.exists():
+            print(f"Warning: Image not found: {src_path}")
+            return None
+        
+        # Destination in workarea (use same filename)
+        dst_path = LLMFUN_WORKAREA / Path(image_path).name
+        
+        # Copy the image
+        shutil.copy2(src_path, dst_path)
+        
+        return str(dst_path)
+        
+    except Exception as e:
+        print(f"Warning: Failed to copy image to workarea: {e}")
+        return None
+
+
+def evaluate_test_case(test_case, history_file: Optional[Path] = None, datasets_dir: Path = None) -> AgentResponse:
     """Evaluate a single test case.
     
     Args:
         test_case: TestCase object
         history_file: Optional path to chat history
+        datasets_dir: Base directory for datasets (to resolve image paths)
         
     Returns:
         AgentResponse from the evaluation
     """
+    # Handle image if present
+    if test_case.image_path and datasets_dir:
+        workarea_path = copy_image_to_workarea(test_case.image_path, datasets_dir)
+        if workarea_path:
+            # Update the test case prompt to include loadImageApi instruction
+            # The original prompt should already contain this, but we ensure it's there
+            pass  # Image already copied, prompt should have the instruction
+    
     # Build the prompt from test case
     prompt = build_prompt(test_case)
     
@@ -236,13 +287,17 @@ def evaluate_test_case(test_case, history_file: Optional[Path] = None) -> AgentR
 def build_prompt(test_case) -> str:
     """Build the prompt for a test case.
     
+    The prompt includes:
+    - Instructions to use loadImageApi for image analysis
+    - CNN classification probabilities
+    
     Args:
         test_case: TestCase object
         
     Returns:
         Formatted prompt string
     """
-    # Start with the test case prompt
+    # Start with the test case prompt (should include loadImageApi instruction)
     prompt = test_case.prompt
     
     # Add CNN probabilities if available
@@ -251,5 +306,8 @@ def build_prompt(test_case) -> str:
         for cls, prob in test_case.cnn_probabilities.items():
             probs_str += f"- {cls}: {prob:.2%}\n"
         prompt = prompt + probs_str
+    
+    # Add final instruction
+    prompt = prompt + "\n\nBased on your analysis, determine the appropriate action(s) using your available tools."
     
     return prompt

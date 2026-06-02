@@ -25,6 +25,7 @@ class TestCase:
     """A single test case for evaluation."""
     id: str
     category: str
+    image_path: str  # Path to the test image (relative to datasets directory)
     prompt: str
     cnn_probabilities: Dict[str, float]
     ground_truth: GroundTruth
@@ -65,6 +66,7 @@ def load_test_cases_from_file(filepath: Path) -> List[TestCase]:
         test_case = TestCase(
             id=case_data.get('id', ''),
             category=case_data.get('category', 'unknown'),
+            image_path=case_data.get('image_path', ''),
             prompt=case_data.get('prompt', case_data.get('user_prompt', '')),
             cnn_probabilities=case_data.get('cnn_probabilities', {}),
             ground_truth=ground_truth,
