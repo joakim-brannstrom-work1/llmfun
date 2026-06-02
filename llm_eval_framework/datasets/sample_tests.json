@@ -2,7 +2,7 @@
     {
         "id": "test_001",
         "category": "no_threat",
-        "prompt": "Analyze this image and CNN classification from a border surveillance camera. Determine if there is any threat that requires action.",
+        "prompt": "Analyze this image from a border surveillance camera and the CNN classification probabilities provided.",
         "cnn_probabilities": {
             "person": 0.02,
             "vehicle": 0.01,
@@ -11,11 +11,8 @@
         },
         "ground_truth": {
             "threat_level": "none",
-            "threat_count": 0,
             "expected_tools": [],
-            "expected_escalation_level": 0,
-            "is_persistent": false,
-            "time_at_border_seconds": 0
+            "expected_escalation_level": 0
         },
         "metadata": {
             "description": "Clear background, no entities of interest"
@@ -23,8 +20,84 @@
     },
     {
         "id": "test_002",
+        "category": "no_threat",
+        "prompt": "Analyze this image from a border surveillance camera and the CNN classification probabilities provided.",
+        "cnn_probabilities": {
+            "person": 0.01,
+            "vehicle": 0.02,
+            "animal": 0.03,
+            "background": 0.94
+        },
+        "ground_truth": {
+            "threat_level": "none",
+            "expected_tools": [],
+            "expected_escalation_level": 0
+        },
+        "metadata": {
+            "description": "Clear background with very low confidence for any object"
+        }
+    },
+    {
+        "id": "test_003",
+        "category": "no_threat",
+        "prompt": "Analyze this image from a border surveillance camera and the CNN classification probabilities provided.",
+        "cnn_probabilities": {
+            "person": 0.03,
+            "vehicle": 0.01,
+            "animal": 0.04,
+            "background": 0.92
+        },
+        "ground_truth": {
+            "threat_level": "none",
+            "expected_tools": [],
+            "expected_escalation_level": 0
+        },
+        "metadata": {
+            "description": "Clear background, low person probability"
+        }
+    },
+    {
+        "id": "test_004",
+        "category": "no_threat",
+        "prompt": "Analyze this image from a border surveillance camera and the CNN classification probabilities provided.",
+        "cnn_probabilities": {
+            "person": 0.01,
+            "vehicle": 0.03,
+            "animal": 0.02,
+            "background": 0.94
+        },
+        "ground_truth": {
+            "threat_level": "none",
+            "expected_tools": [],
+            "expected_escalation_level": 0
+        },
+        "metadata": {
+            "description": "Clear background, very low detection confidence"
+        }
+    },
+    {
+        "id": "test_005",
+        "category": "no_threat",
+        "prompt": "Analyze this image from a border surveillance camera and the CNN classification probabilities provided.",
+        "cnn_probabilities": {
+            "person": 0.02,
+            "vehicle": 0.01,
+            "animal": 0.03,
+            "background": 0.94
+        },
+        "ground_truth": {
+            "threat_level": "none",
+            "expected_tools": [],
+            "expected_escalation_level": 0
+        },
+        "metadata": {
+            "description": "Clear background, minimal detections"
+        }
+    },
+    {
+        "id": "test_006",
         "category": "single_low_threat",
-        "prompt": "Analyze this image and CNN classification from a border surveillance camera. A single person is walking near the border marker in a non-threatening posture.",
+        "prompt": "Analyze this image from a border surveillance camera. A single person is walking near the border marker in a non-threatening posture.",
         "cnn_probabilities": {
             "person": 0.82,
             "vehicle": 0.05,
@@ -33,42 +106,93 @@
         },
         "ground_truth": {
             "threat_level": "low",
-            "threat_count": 1,
             "expected_tools": ["trackerLight"],
-            "expected_escalation_level": 1,
-            "is_persistent": false,
-            "time_at_border_seconds": 0
+            "expected_escalation_level": 1
         },
         "metadata": {
             "description": "Single person walking near border marker"
         }
     },
     {
-        "id": "test_003",
-        "category": "single_medium_threat",
-        "prompt": "Analyze this image and CNN classification from a border surveillance camera. A person is showing suspicious behavior near the border.",
+        "id": "test_007",
+        "category": "single_low_threat",
+        "prompt": "Analyze this image from a border surveillance camera. A single person is visible at a distance from the border.",
         "cnn_probabilities": {
-            "person": 0.91,
-            "vehicle": 0.03,
-            "animal": 0.02,
-            "background": 0.04
+            "person": 0.75,
+            "vehicle": 0.08,
+            "animal": 0.12,
+            "background": 0.05
         },
         "ground_truth": {
-            "threat_level": "medium",
-            "threat_count": 1,
-            "expected_tools": ["audibleWarning"],
-            "expected_escalation_level": 2,
-            "is_persistent": false,
-            "time_at_border_seconds": 0
+            "threat_level": "low",
+            "expected_tools": ["trackerLight"],
+            "expected_escalation_level": 1
         },
         "metadata": {
-            "description": "Single person with suspicious behavior"
+            "description": "Single person at distance"
         }
     },
     {
-        "id": "test_004",
+        "id": "test_008",
+        "category": "single_low_threat",
+        "prompt": "Analyze this image from a border surveillance camera. A single person is walking away from the border.",
+        "cnn_probabilities": {
+            "person": 0.78,
+            "vehicle": 0.06,
+            "animal": 0.08,
+            "background": 0.08
+        },
+        "ground_truth": {
+            "threat_level": "low",
+            "expected_tools": ["trackerLight"],
+            "expected_escalation_level": 1
+        },
+        "metadata": {
+            "description": "Single person walking away from border"
+        }
+    },
+    {
+        "id": "test_009",
+        "category": "single_low_threat",
+        "prompt": "Analyze this image from a border surveillance camera. A single person is standing near the border marker.",
+        "cnn_probabilities": {
+            "person": 0.80,
+            "vehicle": 0.05,
+            "animal": 0.07,
+            "background": 0.08
+        },
+        "ground_truth": {
+            "threat_level": "low",
+            "expected_tools": ["trackerLight"],
+            "expected_escalation_level": 1
+        },
+        "metadata": {
+            "description": "Single person standing near border"
+        }
+    },
+    {
+        "id": "test_010",
+        "category": "single_low_threat",
+        "prompt": "Analyze this image from a border surveillance camera. A single person is detected in the surveillance area.",
+        "cnn_probabilities": {
+            "person": 0.77,
+            "vehicle": 0.07,
+            "animal": 0.09,
+            "background": 0.07
+        },
+        "ground_truth": {
+            "threat_level": "low",
+            "expected_tools": ["trackerLight"],
+            "expected_escalation_level": 1
+        },
+        "metadata": {
+            "description": "Single person in surveillance area"
+        }
+    },
+    {
+        "id": "test_011",
         "category": "single_high_threat",
-        "prompt": "Analyze this image and CNN classification from a border surveillance camera. Multiple high-threat indicators are present - person with hostile intent near the border.",
+        "prompt": "Analyze this image from a border surveillance camera. Multiple high-threat indicators are present - person with hostile intent near the border.",
         "cnn_probabilities": {
             "person": 0.95,
             "vehicle": 0.02,
@@ -77,20 +201,93 @@
         },
         "ground_truth": {
             "threat_level": "high",
-            "threat_count": 1,
             "expected_tools": ["humanOperator", "callPatrol"],
-            "expected_escalation_level": 5,
-            "is_persistent": false,
-            "time_at_border_seconds": 0
+            "expected_escalation_level": 5
         },
         "metadata": {
-            "description": "Single person with clear hostile indicators"
+            "description": "Person with clear hostile indicators"
         }
     },
     {
-        "id": "test_005",
+        "id": "test_012",
+        "category": "single_high_threat",
+        "prompt": "Analyze this image from a border surveillance camera. A person is attempting to breach the border barrier.",
+        "cnn_probabilities": {
+            "person": 0.97,
+            "vehicle": 0.01,
+            "animal": 0.01,
+            "background": 0.01
+        },
+        "ground_truth": {
+            "threat_level": "high",
+            "expected_tools": ["humanOperator", "callPatrol"],
+            "expected_escalation_level": 5
+        },
+        "metadata": {
+            "description": "Person attempting to breach"
+        }
+    },
+    {
+        "id": "test_013",
+        "category": "single_high_threat",
+        "prompt": "Analyze this image from a border surveillance camera. A person is carrying equipment near the border fence.",
+        "cnn_probabilities": {
+            "person": 0.93,
+            "vehicle": 0.03,
+            "animal": 0.02,
+            "background": 0.02
+        },
+        "ground_truth": {
+            "threat_level": "high",
+            "expected_tools": ["humanOperator", "callPatrol"],
+            "expected_escalation_level": 5
+        },
+        "metadata": {
+            "description": "Person with equipment near fence"
+        }
+    },
+    {
+        "id": "test_014",
+        "category": "single_high_threat",
+        "prompt": "Analyze this image from a border surveillance camera. Multiple persons are approaching the border with aggressive behavior.",
+        "cnn_probabilities": {
+            "person": 0.94,
+            "vehicle": 0.02,
+            "animal": 0.02,
+            "background": 0.02
+        },
+        "ground_truth": {
+            "threat_level": "high",
+            "expected_tools": ["humanOperator", "callPatrol"],
+            "expected_escalation_level": 5
+        },
+        "metadata": {
+            "description": "Multiple persons with aggressive behavior"
+        }
+    },
+    {
+        "id": "test_015",
+        "category": "single_high_threat",
+        "prompt": "Analyze this image from a border surveillance camera. A person is actively cutting through the border fence.",
+        "cnn_probabilities": {
+            "person": 0.96,
+            "vehicle": 0.02,
+            "animal": 0.01,
+            "background": 0.01
+        },
+        "ground_truth": {
+            "threat_level": "high",
+            "expected_tools": ["humanOperator", "callPatrol"],
+            "expected_escalation_level": 5
+        },
+        "metadata": {
+            "description": "Person cutting through fence"
+        }
+    },
+    {
+        "id": "test_016",
         "category": "animal_false_positive",
-        "prompt": "Analyze this image and CNN classification from a border surveillance camera. An animal is detected near the border.",
+        "prompt": "Analyze this image from a border surveillance camera. An animal is detected near the border.",
         "cnn_probabilities": {
             "person": 0.15,
             "vehicle": 0.02,
@@ -99,20 +296,93 @@
         },
         "ground_truth": {
             "threat_level": "none",
-            "threat_count": 0,
             "expected_tools": [],
-            "expected_escalation_level": 0,
-            "is_persistent": false,
-            "time_at_border_seconds": 0
+            "expected_escalation_level": 0
         },
         "metadata": {
-            "description": "Animal that might be confused for a person"
+            "description": "Animal (deer) near border"
         }
     },
     {
-        "id": "test_006",
-        "category": "persistent_low",
-        "prompt": "Analyze this image and CNN classification from a border surveillance camera. A person has been at the border location for an extended time.",
+        "id": "test_017",
+        "category": "animal_false_positive",
+        "prompt": "Analyze this image from a border surveillance camera. Wildlife is detected in the area.",
+        "cnn_probabilities": {
+            "person": 0.12,
+            "vehicle": 0.03,
+            "animal": 0.82,
+            "background": 0.03
+        },
+        "ground_truth": {
+            "threat_level": "none",
+            "expected_tools": [],
+            "expected_escalation_level": 0
+        },
+        "metadata": {
+            "description": "Wildlife (coyote) near border"
+        }
+    },
+    {
+        "id": "test_018",
+        "category": "animal_false_positive",
+        "prompt": "Analyze this image from a border surveillance camera. A large animal is detected moving through the area.",
+        "cnn_probabilities": {
+            "person": 0.18,
+            "vehicle": 0.02,
+            "animal": 0.78,
+            "background": 0.02
+        },
+        "ground_truth": {
+            "threat_level": "none",
+            "expected_tools": [],
+            "expected_escalation_level": 0
+        },
+        "metadata": {
+            "description": "Large animal (cow) in area"
+        }
+    },
+    {
+        "id": "test_019",
+        "category": "animal_false_positive",
+        "prompt": "Analyze this image from a border surveillance camera. Small animals are detected in the field.",
+        "cnn_probabilities": {
+            "person": 0.10,
+            "vehicle": 0.01,
+            "animal": 0.85,
+            "background": 0.04
+        },
+        "ground_truth": {
+            "threat_level": "none",
+            "expected_tools": [],
+            "expected_escalation_level": 0
+        },
+        "metadata": {
+            "description": "Small animals (rabbits) in field"
+        }
+    },
+    {
+        "id": "test_020",
+        "category": "animal_false_positive",
+        "prompt": "Analyze this image from a border surveillance camera. Birds are detected near the border.",
+        "cnn_probabilities": {
+            "person": 0.08,
+            "vehicle": 0.02,
+            "animal": 0.88,
+            "background": 0.02
+        },
+        "ground_truth": {
+            "threat_level": "none",
+            "expected_tools": [],
+            "expected_escalation_level": 0
+        },
+        "metadata": {
+            "description": "Birds near border"
+        }
+    },
+    {
+        "id": "test_021",
+        "category": "persistent_threat",
+        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for an extended time (5 minutes).",
         "cnn_probabilities": {
             "person": 0.78,
             "vehicle": 0.04,
@@ -121,58 +391,87 @@
         },
         "ground_truth": {
             "threat_level": "low",
-            "threat_count": 1,
             "expected_tools": ["audibleWarning"],
-            "expected_escalation_level": 2,
-            "is_persistent": true,
-            "time_at_border_seconds": 300
+            "expected_escalation_level": 2
         },
         "metadata": {
-            "description": "Low threat that has persisted at border for 5 minutes"
+            "description": "Person lingering for 5 minutes"
         }
     },
     {
-        "id": "test_007",
-        "category": "multi_high_threat",
-        "prompt": "Analyze this image and CNN classification from a border surveillance camera. Three or more persons with threatening indicators are detected.",
+        "id": "test_022",
+        "category": "persistent_threat",
+        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for an extended time (10 minutes).",
         "cnn_probabilities": {
-            "person": 0.93,
+            "person": 0.80,
             "vehicle": 0.03,
-            "animal": 0.01,
-            "background": 0.03
-        },
-        "ground_truth": {
-            "threat_level": "high",
-            "threat_count": 3,
-            "expected_tools": ["humanOperator", "callPatrol"],
-            "expected_escalation_level": 5,
-            "is_persistent": false,
-            "time_at_border_seconds": 0
-        },
-        "metadata": {
-            "description": "Multiple persons with threatening indicators"
-        }
-    },
-    {
-        "id": "test_008",
-        "category": "vehicle",
-        "prompt": "Analyze this image and CNN classification from a border surveillance camera. A vehicle is detected near the border.",
-        "cnn_probabilities": {
-            "person": 0.05,
-            "vehicle": 0.88,
-            "animal": 0.03,
-            "background": 0.04
+            "animal": 0.07,
+            "background": 0.10
         },
         "ground_truth": {
             "threat_level": "medium",
-            "threat_count": 1,
-            "expected_tools": ["trackerLight", "humanOperator"],
-            "expected_escalation_level": 4,
-            "is_persistent": false,
-            "time_at_border_seconds": 0
+            "expected_tools": ["strobeLight"],
+            "expected_escalation_level": 3
         },
         "metadata": {
-            "description": "Vehicle near border"
+            "description": "Person lingering for 10 minutes"
+        }
+    },
+    {
+        "id": "test_023",
+        "category": "persistent_threat",
+        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for an extended time (15 minutes).",
+        "cnn_probabilities": {
+            "person": 0.82,
+            "vehicle": 0.03,
+            "animal": 0.05,
+            "background": 0.10
+        },
+        "ground_truth": {
+            "threat_level": "medium",
+            "expected_tools": ["strobeLight", "humanOperator"],
+            "expected_escalation_level": 4
+        },
+        "metadata": {
+            "description": "Person lingering for 15 minutes"
+        }
+    },
+    {
+        "id": "test_024",
+        "category": "persistent_threat",
+        "prompt": "Analyze this image from a border surveillance camera. A person has been at the border location for over 20 minutes despite previous warnings.",
+        "cnn_probabilities": {
+            "person": 0.85,
+            "vehicle": 0.02,
+            "animal": 0.05,
+            "background": 0.08
+        },
+        "ground_truth": {
+            "threat_level": "high",
+            "expected_tools": ["humanOperator", "callPatrol"],
+            "expected_escalation_level": 5
+        },
+        "metadata": {
+            "description": "Person lingering 20+ minutes despite warnings"
+        }
+    },
+    {
+        "id": "test_025",
+        "category": "persistent_threat",
+        "prompt": "Analyze this image from a border surveillance camera. The same person that triggered earlier alerts is still present at the border.",
+        "cnn_probabilities": {
+            "person": 0.79,
+            "vehicle": 0.04,
+            "animal": 0.07,
+            "background": 0.10
+        },
+        "ground_truth": {
+            "threat_level": "medium",
+            "expected_tools": ["audibleWarning", "strobeLight"],
+            "expected_escalation_level": 3
+        },
+        "metadata": {
+            "description": "Same person still present after initial alerts"
         }
     }
 ]

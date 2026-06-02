@@ -139,6 +139,11 @@ def calculate_composite_score(
 ) -> float:
     """Calculate composite score from individual metrics.
     
+    MVP simplified weights:
+    - 40% tool selection accuracy
+    - 30% escalation level accuracy
+    - 30% threat detection score
+    
     Args:
         tool_selection: Tool selection accuracy
         escalation_accuracy: Escalation level accuracy
@@ -150,11 +155,9 @@ def calculate_composite_score(
     """
     if weights is None:
         weights = {
-            'tool_selection': 0.30,
-            'escalation': 0.25,
-            'threat_detection': 0.25,
-            'latency': 0.10,
-            'consistency': 0.10
+            'tool_selection': 0.40,
+            'escalation': 0.30,
+            'threat_detection': 0.30,
         }
     
     # Normalize threat detection from (-3, 1) to (0, 1)
@@ -205,12 +208,28 @@ def evaluate_test_case(
         threat_present
     )
     
+    # Calculate composite score
+    composite = calculate_composite_score(
+        tool_selection,
+        escalation_accuracy,
+        threat_detection
+    )
+    
+    # MVP pass/fail criteria:
+    # - Pass: Composite score >= 0.70
+    # - Fail: Any high-threat case missed (FN)
+    # Note: threat_level "high" means expected_tools includes humanOperator or callPatrol (level >= 4)
+    is_high_threat = expected_level >= 4
+    missed_high_threat = is_high_threat and not response.tools_called
+    
     # Determine failure type
     failure_type = ""
-    is_correct = tool_selection >= 0.7 and escalation_accuracy >= 0.7
+    is_correct = composite >= 0.70 and not missed_high_threat
     
     if not is_correct:
-        if not threat_present and response.tools_called:
+        if missed_high_threat:
+            failure_type = "missed_high_threat"
+        elif not threat_present and response.tools_called:
             failure_type = "false_alarm"
         elif threat_present and not response.tools_called:
             failure_type = "missed_threat"
@@ -218,12 +237,6 @@ def evaluate_test_case(
             failure_type = "wrong_tool"
         elif escalation_accuracy < 0.5:
             failure_type = "wrong_escalation"
-    
-    composite = calculate_composite_score(
-        tool_selection,
-        escalation_accuracy,
-        threat_detection
-    )
     
     return Scores(
         tool_selection_accuracy=tool_selection,
@@ -264,7 +277,8 @@ def evaluate_batch(
     
     # Calculate aggregate statistics
     total = len(results)
-    correct = sum(1 for r in results if r['scores'].is_correct)
+    passed = sum(1 for r in results if r['scores'].is_correct)
+    failed = total - passed
     
     tool_selections = [r['scores'].tool_selection_accuracy for r in results]
     escalations = [r['scores'].escalation_level_accuracy for r in results]
@@ -277,27 +291,28 @@ def evaluate_batch(
         if cat not in categories:
             categories[cat] = {
                 'total': 0,
-                'correct': 0,
+                'passed': 0,
                 'composite_scores': []
             }
         categories[cat]['total'] += 1
         if r['scores'].is_correct:
-            categories[cat]['correct'] += 1
+            categories[cat]['passed'] += 1
         categories[cat]['composite_scores'].append(r['scores'].composite_score)
     
-    # Calculate category averages
+    # Calculate category averages (use composite scores per MVP spec)
     for cat in categories:
         scores = categories[cat]['composite_scores']
         categories[cat]['average_score'] = sum(scores) / len(scores) if scores else 0
-        categories[cat]['accuracy'] = categories[cat]['correct'] / categories[cat]['total'] if categories[cat]['total'] > 0 else 0
+        categories[cat]['passed_count'] = categories[cat]['passed']
+        categories[cat]['failed_count'] = categories[cat]['total'] - categories[cat]['passed']
+        # Remove old keys
+        del categories[cat]['passed']
     
     return {
         'total_test_cases': total,
-        'correct': correct,
-        'accuracy': correct / total if total > 0 else 0,
-        'average_tool_selection': sum(tool_selections) / total if total > 0 else 0,
-        'average_escalation': sum(escalations) / total if total > 0 else 0,
-        'average_composite': sum(composites) / total if total > 0 else 0,
+        'passed': passed,
+        'failed': failed,
+        'composite_score': sum(composites) / total if total > 0 else 0,
         'per_case_results': results,
         'per_category': categories
     }
@@ -306,35 +321,50 @@ def evaluate_batch(
 def save_results(results: Dict, output_file: Path):
     """Save evaluation results to a JSON file.
     
+    MVP report format:
+    - run_id: unique identifier for this run
+    - timestamp: when the evaluation was run
+    - total_test_cases, passed, failed counts
+    - composite_score: overall score
+    - per_category_scores: scores grouped by category
+    - results: detailed per-test-case results
+    
     Args:
         results: Results dictionary from evaluate_batch
         output_file: Path to output file
     """
-    # Convert dataclass to dict for JSON serialization
+    from datetime import datetime
+    
+    # Build per-category scores (MVP format)
+    per_category_scores = {}
+    for cat, data in results['per_category'].items():
+        per_category_scores[cat] = data.get('average_score', 0.0)
+    
+    # Convert dataclass to dict for JSON serialization (MVP format)
     serializable_results = {
+        'run_id': f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        'timestamp': datetime.now().isoformat() + 'Z',
         'total_test_cases': results['total_test_cases'],
-        'correct': results['correct'],
-        'accuracy': results['accuracy'],
-        'average_tool_selection': results['average_tool_selection'],
-        'average_escalation': results['average_escalation'],
-        'average_composite': results['average_composite'],
-        'per_category': results['per_category'],
-        'per_case_results': []
+        'passed': results['passed'],
+        'failed': results['failed'],
+        'composite_score': results['composite_score'],
+        'per_category_scores': per_category_scores,
+        'results': []
     }
     
     for r in results['per_case_results']:
-        serializable_results['per_case_results'].append({
+        serializable_results['results'].append({
             'test_case_id': r['test_case_id'],
             'category': r['category'],
             'expected_tools': r['expected_tools'],
             'actual_tools': r['actual_tools'],
-            'expected_level': r['expected_level'],
-            'actual_level': r['actual_level'],
-            'tool_selection_accuracy': r['scores'].tool_selection_accuracy,
-            'escalation_level_accuracy': r['scores'].escalation_level_accuracy,
+            'expected_escalation': r['expected_level'],
+            'actual_escalation': r['actual_level'],
+            'tool_selection_score': r['scores'].tool_selection_accuracy,
+            'escalation_score': r['scores'].escalation_level_accuracy,
             'threat_detection_score': r['scores'].threat_detection_score,
             'composite_score': r['scores'].composite_score,
-            'is_correct': r['scores'].is_correct,
+            'passed': r['scores'].is_correct,
             'failure_type': r['scores'].failure_type
         })
     

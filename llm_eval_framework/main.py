@@ -54,20 +54,18 @@ def run_evaluation(
     # Evaluate all results
     results = evaluate_batch(test_cases, responses)
     
-    # Print summary
+    # Print summary (MVP format)
     print("\n" + "="*50)
-    print("EVALUATION RESULTS")
+    print("EVALUATION RESULTS (MVP)")
     print("="*50)
     print(f"Total test cases: {results['total_test_cases']}")
-    print(f"Correct: {results['correct']}")
-    print(f"Accuracy: {results['accuracy']:.2%}")
-    print(f"Average composite score: {results['average_composite']:.3f}")
-    print(f"Average tool selection: {results['average_tool_selection']:.3f}")
-    print(f"Average escalation accuracy: {results['average_escalation']:.3f}")
+    print(f"Passed: {results['passed']}")
+    print(f"Failed: {results['failed']}")
+    print(f"Composite score: {results['composite_score']:.3f}")
     
-    print("\nPer-category results:")
+    print("\nPer-category scores:")
     for cat, data in results['per_category'].items():
-        print(f"  {cat}: {data['accuracy']:.2%} ({data['correct']}/{data['total']})")
+        print(f"  {cat}: {data['average_score']:.2%} ({data['passed_count']}/{data['total']})")
     
     # Save results if output file specified
     if output_file:
