@@ -160,3 +160,15 @@ T getValue(T)(JSONValue v, T delegate(JSONValue v) accessor, T default_) @truste
         return default_;
     }
 }
+
+/// Compute MurmurHash3 checksum of file content
+ulong computeFileChecksum(const(ubyte)[] data) {
+    import std.digest.murmurhash : MurmurHash3;
+    import std.digest : digest;
+
+    long toUint(ubyte[4] a) {
+        return a[0] | a[1] << 8 | a[2] << 16 | a[3] << 24;
+    }
+
+    return toUint(digest!(MurmurHash3!32)(data));
+}

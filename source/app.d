@@ -13,6 +13,7 @@ import argparse : CLI, NamedArgument, PositionalArgument, ArgumentGroup,
 import my.term_color;
 import my.path;
 import colorlog;
+import llm.utility;
 
 int main(string[] args) {
     UserConfig cli;
@@ -69,6 +70,8 @@ struct UserConfig {
             bool rm;
             @(NamedArgument().Description("List all sources"))
             bool list;
+            @(NamedArgument().Description("Synchronize RAG database with filesystem"))
+            bool sync;
         }
 
         @(NamedArgument("path").Description("Recursively add all text files"))
@@ -336,9 +339,9 @@ int appMain(UserConfig uconf, UserConfig.Rag conf) {
             return new RAG(embed, llmConf.rag, llmConf.embedDimensions);
         } catch (Exception e) {
             logger.warning(e);
+            return new RAG(createEmbedder(EmbedConfig(RemoteEmbedConfig.init)),
+                    null, llmConf.embedDimensions);
         }
-        return new RAG(createEmbedder(EmbedConfig(RemoteEmbedConfig.init)),
-                null, llmConf.embedDimensions);
     }();
     scope (exit) {
         rag.destroy;
@@ -372,12 +375,27 @@ int appMain(UserConfig uconf, UserConfig.Rag conf) {
         try {
             return filter.to();
         } catch (Exception e) {
-            logger.warningf("Invalid ragFilter regex pattern: %s - falling back to defaults",
-                    e.msg);
-            filter.include = [".*\\.txt", ".*\\.md"];
-            filter.exclude = [];
-            return filter.to();
+            return ReFilter.init;
         }
+    }
+
+    ReFilter ragFilter = buildRagFilter();
+
+    /// Build a map of file paths to their sources from RAG database
+    Path[Origin] buildFileToSourceMap(RAG rag) {
+        import llm.rag.database;
+
+        Path[Origin] sourceMap;
+        foreach (dbSource; rag.getSources()) {
+            foreach (source; dbSource.sources) {
+                source.origin.match!((Path p) { sourceMap[source.origin] = p; }, (Url u) {
+                    // URLs are not file paths, skip
+                }, (Unknown u) {
+                    // Unknown origins, skip
+                });
+            }
+        }
+        return sourceMap;
     }
 
     void addData() {
@@ -387,8 +405,6 @@ int appMain(UserConfig uconf, UserConfig.Rag conf) {
             logger.warningf("Path %s do not exist", conf.path);
             return;
         }
-
-        auto ragFilter = buildRagFilter();
 
         if (conf.path.isFile) {
             if (ragFilter.match(baseName(conf.path))) {
@@ -407,14 +423,12 @@ int appMain(UserConfig uconf, UserConfig.Rag conf) {
     }
 
     void removeData() {
-        auto ragFilter = buildRagFilter();
-
-        if (conf.path.empty) {
-            if (conf.ragInclude.empty && conf.ragExclude.empty
-                    && llmConf.ragFilter.include.empty && llmConf.ragFilter.exclude.empty) {
-                logger.warning("No --path provided and no --include/--exclude filters active (CLI or config). " ~ "Nothing to remove. Use --include <pattern> or --exclude <pattern> to select sources for removal, " ~ "or provide --path for a specific file/directory.");
-                return;
-            }
+        if (conf.path.empty && conf.ragInclude.empty && conf.ragExclude.empty
+                && llmConf.ragFilter.include.empty && llmConf.ragFilter.exclude.empty) {
+            logger.warning("No --path provided and no --include/--exclude filters active (CLI or config). "
+                    ~ "Nothing to remove. Use --include <pattern> or --exclude <pattern> to select sources for removal, "
+                    ~ "or provide --path for a specific file/directory.");
+            return;
         }
 
         // path-based removal

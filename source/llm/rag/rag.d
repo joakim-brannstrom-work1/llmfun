@@ -32,6 +32,7 @@ public import my.path : Path;
 import llm.rag.embedder;
 import llm.rag.embedder_llama;
 import llm.rag.database : SourceMatch;
+import llm.utility;
 
 struct Unknown {
 }
@@ -251,11 +252,7 @@ RagAddResult add(RAG rag, Document doc) {
     import std.uni;
     import llm.rag.database;
 
-    long toUint(ubyte[4] a) {
-        return a[0] | a[1] << 8 | a[2] << 16 | a[3] << 24;
-    }
-
-    long dataHash = toUint(digest!(MurmurHash3!32)(doc.data));
+    ulong dataHash = computeFileChecksum(cast(const(ubyte)[]) doc.data);
 
     if (spinSql!(() => rag.hasSource(Source(doc.origin, dataHash.SourceChecksum)))) {
         logger.trace("source already exist in database");
