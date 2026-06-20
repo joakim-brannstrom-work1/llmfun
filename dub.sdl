@@ -20,10 +20,10 @@ configuration "default" {
     dflags "-P-I./vendor/sqlite3" "-P-I./vendor/sqlite3-vec"
     preBuildCommands "make -C $PACKAGE_DIR -f linenoise.mak" platform="posix"
     dflags "-P-I./vendor/linenoise"
-    preBuildCommands "make -C $PACKAGE_DIR -f imtui.mak" platform="posix"
-    dflags "-P-I./vendor/imtui/include"
+    preBuildCommands "make -C $PACKAGE_DIR -f tui.mak" platform="posix"
+    # dflags "-P-I./vendor/imtui/include"
 
-    sourceFiles "build/linenoise.o" "build/sqlite3.o" "build/sqlite-vec.o" "build/imtui/src/libimtui.a" "build/imtui/src/libimtui-ncurses.a"
+    sourceFiles "build/linenoise.o" "build/sqlite3.o" "build/sqlite-vec.o" "build/tui/imtui/src/libimtui.a" "build/tui/imtui/src/libimtui-ncurses.a"
     mainSourceFile "source/app.d"
     excludeSourceFiles "source/utility_app.d"
 }

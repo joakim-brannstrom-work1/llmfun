@@ -36,3 +36,4 @@ FeedbackEngine. When it triggers, such as a tool reaching a high enough threshol
 # rag
 - Add a warning when the DB is wiped. Need to add migration in the future.
 - memories should automatically be added to the RAG so they are always searchable
+- use an actual regulator such as PID och kalman filter for the token window instead of the primitive "5 times and fixed step +/-"

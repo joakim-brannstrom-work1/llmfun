@@ -2,6 +2,7 @@
 
 rm -rf llmfun/workarea/llmfun/.git
 rsync -va --delete source/ llmfun/workarea/llmfun/source/
+rsync -va --delete cpp_tui/ llmfun/workarea/llmfun/cpp_tui/
 rsync -a dub.sdl llmfun/workarea/llmfun/dub.sdl
 rsync -a README.md llmfun/workarea/llmfun/
 rsync -a config/ llmfun/workarea/llmfun/config/
@@ -14,4 +15,4 @@ git add source dub.sdl *.mak vendor
 git commit -m "import source"
 popd
 
-llmfun rag --db llmfun/data/rag.sqlite3 --sync --path source/ -i '.*\.d'
+llmfun rag --db llmfun/data/rag.sqlite3 --sync --path source/ --path cpp_tui -i '.*\.d' -i '.*\.(h|hpp|c|cpp)$'
