@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -11,8 +12,8 @@ struct TuiState {
     // Note: This struct is non-copyable and non-movable due to std::mutex.
     // Always pass by reference (TuiState&) to avoid accidental copies.
 
-    // Bounded output display
-    std::vector<std::string> outputLines;
+    // Bounded output display (deque for O(1) FIFO eviction)
+    std::deque<std::string> outputLines;
     static constexpr size_t MAX_OUTPUT_LINES = 10000;
 
     // Auto-scroll flag
@@ -32,7 +33,7 @@ struct TuiState {
     // Status line text
     std::string statusText;
 
-    // Thread safety for output
+    // Thread safety for all shared mutable state
     std::mutex outputMutex;
 };
 
@@ -47,22 +48,29 @@ void tuiShutdown(ImTui::TScreen* screen);
 bool tuiRender(TuiState& state);
 
 /// Add an output line with FIFO eviction if bound exceeded.
+/// Thread-safe: acquires outputMutex.
 void tuiAddOutputLine(TuiState& state, const std::string& line);
 
 /// Clear all output lines.
+/// Thread-safe: acquires outputMutex.
 void tuiClearOutput(TuiState& state);
 
 /// Set the status line text.
+/// Thread-safe: acquires outputMutex.
 void tuiSetStatusText(TuiState& state, const std::string& text);
 
 /// Get the current input buffer content.
+/// Thread-safe: acquires outputMutex.
 std::string tuiGetInput(const TuiState& state);
 
 /// Clear the input buffer.
+/// Thread-safe: acquires outputMutex.
 void tuiClearInput(TuiState& state);
 
 /// Check if input is ready to be submitted.
+/// Thread-safe: acquires outputMutex.
 bool tuiIsSubmitReady(const TuiState& state);
 
 /// Reset the submission flag.
+/// Thread-safe: acquires outputMutex.
 void tuiResetSubmit(TuiState& state);
