@@ -5,8 +5,7 @@ rsync -va --delete source/ llmfun/workarea/llmfun/source/
 rsync -a dub.sdl llmfun/workarea/llmfun/dub.sdl
 rsync -a README.md llmfun/workarea/llmfun/
 rsync -a config/ llmfun/workarea/llmfun/config/
-rsync -a linenoise.mak llmfun/workarea/llmfun/
-rsync -a sqlite3.mak llmfun/workarea/llmfun/
+rsync -a *.mak llmfun/workarea/llmfun/
 rsync -a --delete --exclude ".git" vendor/ llmfun/workarea/llmfun/vendor/
 
 pushd llmfun/workarea/llmfun
