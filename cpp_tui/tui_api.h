@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -56,7 +58,7 @@ extern "C" {
  */
 typedef struct String {
     const char* data;
-    size_t len;
+    uint64_t len;
 } String;
 
 /*
@@ -75,7 +77,7 @@ String String_New(const char* cstr);
  * Null-safe: returns {NULL, 0} if data is NULL (len is ignored).
  * Thread-safe: yes.
  */
-String String_NewBuf(const char* data, size_t len);
+String String_NewBuf(const char* data, uint64_t len);
 
 /*
  * Free a String that was returned by an API function or created via String_New / String_NewBuf.

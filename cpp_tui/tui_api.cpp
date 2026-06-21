@@ -81,15 +81,15 @@ String String_New(const char* cstr) {
     return String_NewBuf(cstr, std::strlen(cstr));
 }
 
-String String_NewBuf(const char* data, size_t len) {
+String String_NewBuf(const char* data, uint64_t len) {
     if (!data)
-        return String(nullptr, 0);
+        return {nullptr, 0};
     if (len == 0)
-        return String("", 0); /* valid empty string, distinguishable from error */
+        return {"", 0}; /* valid empty string, distinguishable from error */
     /* +1 to guarantee null-termination for safe C-string interop */
     char* buf = static_cast<char*>(std::malloc(len + 1));
     if (!buf)
-        return String8nullptr, 0);
+        return {nullptr, 0};
     std::memcpy(buf, data, len);
     buf[len] = '\0';
     {

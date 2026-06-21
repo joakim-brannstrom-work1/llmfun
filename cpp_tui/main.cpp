@@ -1,8 +1,8 @@
-#include "tui.h"
-
 #include <cstdio>
 #include <cstring>
 #include <string>
+
+#include "tui_api.h"
 
 /* Helper: build a String from a null-terminated C string literal. */
 static inline String makeStr(const char* s) { return String{s, std::strlen(s)}; }
