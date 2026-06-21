@@ -45,6 +45,17 @@ void tuiResetSubmit(TuiState& state) {
     state.submitReady = false;
 }
 
+// ─── Input Resize Callback (static, per-frame reuse) ─────────────────────────
+// Fix: Extracted from lambda to avoid per-frame recreation. Matches imgui_stdlib pattern.
+static int InputResizeCallback(ImGuiInputTextCallbackData* data) {
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
+        std::string* str = reinterpret_cast<std::string*>(data->UserData);
+        str->resize(data->BufSize);
+        data->Buf = str->data();
+    }
+    return 0;
+}
+
 // ─── Task 4: Theme Application ───────────────────────────────────────────────
 
 static void applyTheme() {
@@ -93,12 +104,27 @@ void tuiShutdown(ImTui::TScreen* screen) {
 // ─── Task 5: Render Function — Output Area ───────────────────────────────────
 
 bool tuiRender(TuiState& state) {
-    // Exit condition: Ctrl+Escape to quit
-    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        return false;
+    ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
+
+    // Minimum terminal size check
+    if (DisplaySize.x < 40 || DisplaySize.y < 15) {
+        ImGui::Text("Terminal too small! Minimum size: 40x15");
+        return true;
     }
 
-    ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
+    // Keyboard shortcuts
+    if (ImGui::GetIO().KeyCtrl &&
+        (ImGui::IsKeyPressed(ImGuiKey_C) || ImGui::IsKeyPressed(ImGuiKey_D))) {
+        return false;
+    }
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_L)) {
+        tuiClearOutput(state);
+    }
+
+    // End key: scroll output to bottom and re-enable auto-scroll
+    if (ImGui::IsKeyPressed(ImGuiKey_End)) {
+        state.autoScroll = true;
+    }
 
     // ── Output Area ──────────────────────────────────────────────────────────
     // Clamp height to avoid negative values on very small terminals
@@ -135,6 +161,111 @@ bool tuiRender(TuiState& state) {
     float scrollMax = ImGui::GetScrollMax().y;
     if (scrollMax > 0.0f) {
         state.autoScroll = (scrollY >= scrollMax - 1.0f);
+    }
+
+    ImGui::EndChild();
+
+    // ── Task 6: Input Area ───────────────────────────────────────────────────────
+    ImVec2 inputPos(0, DisplaySize.y - 3);
+    ImVec2 inputSize(DisplaySize.x, 2);
+
+    ImGui::SetNextWindowPos(inputPos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(inputSize, ImGuiCond_Always);
+
+    ImGuiWindowFlags inputFlags = ImGuiWindowFlags_None;
+    ImGui::BeginChild("input", inputSize, false, inputFlags);
+
+    ImGuiInputTextFlags flags =
+        ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_EnterReturnsTrue;
+
+    bool submitted =
+        ImGui::InputTextMultiline("##input", state.inputBuf.data(), state.inputBuf.size() + 1,
+                                  ImVec2(-FLT_MIN, 0), flags, InputResizeCallback, &state.inputBuf);
+
+    // All input state modifications are protected by outputMutex to prevent
+    // data races with worker threads calling tuiGetInput/tuiClearInput etc.
+    {
+        std::lock_guard<std::mutex> lock(state.outputMutex);
+
+        if (submitted) {
+            state.submitReady = true;
+        }
+
+        // Escape clears the input buffer
+        if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            state.inputBuf.clear();
+        }
+
+        // History navigation: Ctrl+Up/Ctrl+Down to avoid conflict with
+        // InputTextMultiline's internal cursor movement.
+        if (ImGui::IsItemActive() && ImGui::GetIO().KeyCtrl) {
+            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+                // Navigate backward in history
+                if (state.historyPos == -1) {
+                    // First press: save draft and push current input to history.
+                    state.draftBuf = state.inputBuf;
+                    if (state.inputHistory.empty() || state.inputHistory.back() != state.inputBuf) {
+                        state.inputHistory.push_back(state.inputBuf);
+                        if (state.inputHistory.size() > state.MAX_HISTORY) {
+                            state.inputHistory.erase(state.inputHistory.begin());
+                        }
+                    }
+                    // Point to the entry before the one we just saved (if any).
+                    state.historyPos = static_cast<int>(state.inputHistory.size()) - 2;
+                } else if (state.historyPos > 0) {
+                    state.historyPos--;
+                }
+                if (state.historyPos >= 0) {
+                    state.inputBuf = state.inputHistory[state.historyPos];
+                }
+            } else if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+                // Navigate forward in history
+                if (state.historyPos >= 0) {
+                    state.historyPos++;
+                    if (static_cast<size_t>(state.historyPos) < state.inputHistory.size()) {
+                        state.inputBuf = state.inputHistory[state.historyPos];
+                    } else {
+                        // Past the end: restore the saved draft and reset.
+                        state.inputBuf = state.draftBuf;
+                        state.historyPos = -1;
+                    }
+                }
+            }
+        }
+
+        // When submitting, push the input to history if non-empty and not a
+        // duplicate of the most recent entry.
+        if (submitted && !state.inputBuf.empty()) {
+            if (state.inputHistory.empty() || state.inputHistory.back() != state.inputBuf) {
+                state.inputHistory.push_back(state.inputBuf);
+                if (state.inputHistory.size() > state.MAX_HISTORY) {
+                    state.inputHistory.erase(state.inputHistory.begin());
+                }
+            }
+            state.historyPos = -1;
+        }
+    }
+
+    ImGui::EndChild();
+
+    // ── Task 7: Status Line ──────────────────────────────────────────────────
+    ImVec2 statusPos(0, DisplaySize.y - 1);
+    ImVec2 statusSize(DisplaySize.x, 1);
+
+    ImGui::SetNextWindowPos(statusPos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(statusSize, ImGuiCond_Always);
+
+    ImGuiWindowFlags statusFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar |
+                                   ImGuiWindowFlags_NoScrollbar |
+                                   ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::BeginChild("status", statusSize, false, statusFlags);
+
+    // Render status text (default if empty)
+    if (state.statusText.empty()) {
+        ImGui::Text("Context: 0/0 tokens | Model: none | Ready");
+    } else {
+        ImGui::Text("%s", state.statusText.c_str());
     }
 
     ImGui::EndChild();

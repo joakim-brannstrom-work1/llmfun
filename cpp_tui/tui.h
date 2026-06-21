@@ -21,13 +21,14 @@ struct TuiState {
 
     // Dynamic input buffer
     std::string inputBuf;
+    std::string draftBuf; // saves current input when entering history navigation
 
     // Submission flag
     bool submitReady = false;
 
     // Input history
     std::vector<std::string> inputHistory;
-    std::ptrdiff_t historyPos = -1;
+    int historyPos = -1;
     static constexpr size_t MAX_HISTORY = 500;
 
     // Status line text
