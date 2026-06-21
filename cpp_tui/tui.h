@@ -35,7 +35,9 @@ struct TuiState {
     std::string statusText;
 
     // Thread safety for all shared mutable state
-    std::mutex outputMutex;
+    // outputMutex protects: outputLines, statusText, inputBuf, submitReady
+    // Main-thread-only (no lock needed): autoScroll, historyPos, draftBuf, inputHistory
+    mutable std::mutex outputMutex;
 };
 
 /// Initialize terminal and create TScreen.

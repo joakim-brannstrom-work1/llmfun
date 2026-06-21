@@ -3,10 +3,17 @@
 #include "imtui/imtui-impl-ncurses.h"
 #include "imtui/imtui-impl-text.h"
 
+#include <algorithm>
+#include <cfloat>
 #include <cstdio>
+#include <cstring>
 
-// All functions below acquire state.outputMutex for thread safety.
+// Named key codes for Ctrl shortcuts (ncurses raw key codes)
+static constexpr int KEY_CTRL_D = 4;  // Ctrl+D exit
+static constexpr int KEY_CTRL_L = 12; // Ctrl+L clear output
+
 // outputMutex protects: outputLines, statusText, inputBuf, submitReady.
+// Main-thread-only (no lock needed): autoScroll, historyPos, draftBuf, inputHistory.
 
 void tuiAddOutputLine(TuiState& state, const std::string& line) {
     std::lock_guard<std::mutex> lock(state.outputMutex);
@@ -97,12 +104,10 @@ bool tuiInit(ImTui::TScreen** screen) {
 }
 
 void tuiShutdown(ImTui::TScreen* screen) {
-    // Note: ImTui_ImplNcurses_Shutdown() is global and does not take a screen
-    // parameter (see imtui-impl-ncurses.h). The TScreen object is owned by the
-    // ncurses backend and will be freed internally during shutdown.
-    (void)screen; // Owned by ncurses backend; freed during ImTui_ImplNcurses_Shutdown()
-    ImTui_ImplText_Shutdown();
-    ImTui_ImplNcurses_Shutdown();
+    if (screen) {
+        ImTui_ImplText_Shutdown();
+        ImTui_ImplNcurses_Shutdown();
+    }
     ImGui::DestroyContext();
 }
 
@@ -119,13 +124,14 @@ bool tuiRender(TuiState& state) {
         return true;
     }
 
-    // Keyboard shortcuts (using modern KeyMods bitmask)
-    ImGuiKeyMods mods = ImGui::GetIO().KeyMods;
-    if ((mods & ImGuiMod_Ctrl) &&
-        (ImGui::IsKeyPressed(ImGuiKey_C) || ImGui::IsKeyPressed(ImGuiKey_D))) {
+    // Keyboard shortcuts (ImGui v1.81 compatible)
+    // Ctrl+C uses ImGuiKey_C via GetKeyIndex; Ctrl+D and Ctrl+L use raw ncurses key codes
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.KeyCtrl &&
+        (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_C)) || ImGui::IsKeyPressed(KEY_CTRL_D))) {
         return false;
     }
-    if ((mods & ImGuiMod_Ctrl) && ImGui::IsKeyPressed(ImGuiKey_L)) {
+    if (io.KeyCtrl && ImGui::IsKeyPressed(KEY_CTRL_L)) {
         if (!ImGui::IsAnyItemActive()) { // Only clear if no widget has focus
             tuiClearOutput(state);
         }
@@ -139,7 +145,7 @@ bool tuiRender(TuiState& state) {
     // ── Output Area ──────────────────────────────────────────────────────────
     // Clamp height to avoid negative values on very small terminals
     ImVec2 outPos(0, 0);
-    ImVec2 outSize(DisplaySize.x, ImMax(1.0f, DisplaySize.y - 3));
+    ImVec2 outSize(DisplaySize.x, std::max(1.0f, DisplaySize.y - 3));
 
     ImGui::SetNextWindowPos(outPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(outSize, ImGuiCond_Always);
@@ -168,7 +174,7 @@ bool tuiRender(TuiState& state) {
     // Auto-scroll detection: capture scroll state BEFORE EndChild
     // so we read the "output" child's actual scroll values.
     float scrollY = ImGui::GetScrollY();
-    float scrollMax = ImGui::GetScrollMax().y;
+    float scrollMax = ImGui::GetScrollMaxY();
     if (scrollMax > 0.0f) {
         state.autoScroll = (scrollY >= scrollMax - 1.0f);
     }
@@ -188,6 +194,15 @@ bool tuiRender(TuiState& state) {
     ImGuiInputTextFlags flags =
         ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_EnterReturnsTrue;
 
+    // Ensure buffer is non-empty before passing to InputTextMultiline to avoid
+    // potential buffer over-read/write when ImGui accesses the buffer before
+    // the resize callback fires.
+    if (state.inputBuf.empty()) {
+        state.inputBuf = "";
+    }
+
+    // Standard ImGui pattern: pass current buffer size + 1 for null terminator.
+    // InputResizeCallback handles dynamic resizing via ImGuiInputTextFlags_CallbackResize.
     bool submitted =
         ImGui::InputTextMultiline("##input", state.inputBuf.data(), state.inputBuf.size() + 1,
                                   ImVec2(-FLT_MIN, 0), flags, InputResizeCallback, &state.inputBuf);
@@ -244,14 +259,17 @@ bool tuiRender(TuiState& state) {
         }
 
         // When submitting, push the input to history if non-empty and not a
-        // duplicate of the most recent entry.
-        if (submitted && !state.inputBuf.empty()) {
+        // duplicate of the most recent entry. Skip if currently in history
+        // navigation (historyPos != -1) to avoid duplicate entries.
+        if (submitted && !state.inputBuf.empty() && state.historyPos == -1) {
             if (state.inputHistory.empty() || state.inputHistory.back() != state.inputBuf) {
                 state.inputHistory.push_back(state.inputBuf);
                 if (state.inputHistory.size() > state.MAX_HISTORY) {
                     state.inputHistory.erase(state.inputHistory.begin());
                 }
             }
+        }
+        if (submitted) {
             state.historyPos = -1;
         }
     }
@@ -274,7 +292,7 @@ bool tuiRender(TuiState& state) {
     static constexpr std::string_view defaultStatus = "Context: 0/0 tokens | Model: none | Ready";
 
     if (state.statusText.empty()) {
-        ImGui::TextUnformatted(defaultStatus);
+        ImGui::TextUnformatted(defaultStatus.data());
     } else {
         ImGui::TextUnformatted(state.statusText.c_str());
     }
