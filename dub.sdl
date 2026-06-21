@@ -21,9 +21,9 @@ configuration "default" {
     preBuildCommands "make -C $PACKAGE_DIR -f linenoise.mak" platform="posix"
     dflags "-P-I./vendor/linenoise"
     preBuildCommands "make -C $PACKAGE_DIR -f tui.mak" platform="posix"
-    # dflags "-P-I./vendor/imtui/include"
+    dflags "-P-I./vendor/imtui/include" "-P-I./cpp_tui/"
 
-    sourceFiles "build/linenoise.o" "build/sqlite3.o" "build/sqlite-vec.o" "build/tui/imtui/src/libimtui.a" "build/tui/imtui/src/libimtui-ncurses.a"
+    sourceFiles "build/linenoise.o" "build/sqlite3.o" "build/sqlite-vec.o" "build/tui/libllmfun_tui_lib.a" "build/tui/imtui/src/libimtui.a" "build/tui/imtui/src/libimtui-ncurses.a"
     mainSourceFile "source/app.d"
     excludeSourceFiles "source/utility_app.d"
 }
