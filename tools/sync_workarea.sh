@@ -3,6 +3,7 @@
 rm -rf llmfun/workarea/llmfun/.git
 rsync -va --delete source/ llmfun/workarea/llmfun/source/
 rsync -va --delete cpp_tui/ llmfun/workarea/llmfun/cpp_tui/
+rsync -va --delete doc/ llmfun/workarea/llmfun/doc/
 rsync -a dub.sdl llmfun/workarea/llmfun/dub.sdl
 rsync -a README.md llmfun/workarea/llmfun/
 rsync -a config/ llmfun/workarea/llmfun/config/
