@@ -10,14 +10,18 @@
 #include <new>
 #include <set>
 
-namespace llmfun::tui {
-
 /* ------------------------------------------------------------------ */
-/*  TuiScreen — concrete implementation of the opaque handle          */
+/*  Complete the opaque struct definitions from the C header.         */
+/*  The header forward-declares struct TuiScreen and struct TuiState; */
+/*  here we provide the full definitions so we can access members.    */
 /* ------------------------------------------------------------------ */
 
 struct TuiScreen {
     ImTui::TScreen* screen;
+};
+
+struct TuiState {
+    ::llmfun::tui::TuiState* inner;
 };
 
 /* ------------------------------------------------------------------ */
@@ -39,13 +43,40 @@ static struct CleanupRegistrar {
     CleanupRegistrar() { std::atexit(cleanupOwnedStrings); }
 } cleanupRegistrar;
 
+/* ------------------------------------------------------------------ */
+/*  Thread-local error handling                                       */
+/* ------------------------------------------------------------------ */
+
+static thread_local char lastError[512];
+static thread_local bool hasError = false;
+
+static void setLastError(const char* msg) {
+    if (msg) {
+        std::strncpy(lastError, msg, sizeof(lastError) - 1);
+        lastError[sizeof(lastError) - 1] = '\0';
+    } else {
+        lastError[0] = '\0';
+    }
+    hasError = true;
+}
+
+/* ------------------------------------------------------------------ */
+/*  extern "C" API functions                                          */
+/* ------------------------------------------------------------------ */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ---- String functions ---- */
+
 String String_New(const char* cstr) {
     if (!cstr)
         return {nullptr, 0};
-    return String_New(cstr, std::strlen(cstr));
+    return String_NewBuf(cstr, std::strlen(cstr));
 }
 
-String String_New(const char* data, size_t len) {
+String String_NewBuf(const char* data, size_t len) {
     if (!data)
         return {nullptr, 0};
     if (len == 0)
@@ -74,35 +105,18 @@ void String_Free(String s) {
     }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Thread-local error handling                                       */
-/* ------------------------------------------------------------------ */
+/* ---- Error handling ---- */
 
-static thread_local char lastError[512];
-static thread_local bool hasError = false;
-
-static void setLastError(const char* msg) {
-    if (msg) {
-        std::strncpy(lastError, msg, sizeof(lastError) - 1);
-        lastError[sizeof(lastError) - 1] = '\0';
-    } else {
-        lastError[0] = '\0';
-    }
-    hasError = true;
-}
-
-String tuiLastError() {
+String tuiLastError(void) {
     if (!hasError)
         return {nullptr, 0};
     hasError = false; /* consume */
     return String_New(lastError);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Lifecycle                                                         */
-/* ------------------------------------------------------------------ */
+/* ---- Lifecycle ---- */
 
-TuiScreen* tuiInit() {
+TuiScreen* tuiInit(void) {
     ImTui::TScreen* raw = nullptr;
     if (::llmfun::tui::tuiInit(&raw)) {
         return new TuiScreen{raw};
@@ -119,9 +133,11 @@ void tuiShutdown(TuiScreen* screen) {
     delete screen;
 }
 
-TuiState* tuiCreateState() {
+TuiState* tuiCreateState(void) {
     try {
-        return new TuiState();
+        TuiState* state = new TuiState{nullptr};
+        state->inner = new ::llmfun::tui::TuiState();
+        return state;
     } catch (const std::bad_alloc&) {
         setLastError("Failed to allocate TUI state (out of memory)");
         return nullptr;
@@ -131,16 +147,13 @@ TuiState* tuiCreateState() {
 void tuiDestroyState(TuiState* state) {
     if (!state)
         return;
+    delete state->inner;
     delete state;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Backend frame / render (main-thread only)                         */
-/* ------------------------------------------------------------------ */
+/* ---- Backend frame / render (main-thread only) ---- */
 
-void tuiBackendNewFrame(TuiScreen* screen) {
-    if (!screen)
-        return;
+void tuiBackendNewFrame(void) {
     ImTui_ImplNcurses_NewFrame();
     ImTui_ImplText_NewFrame();
     ImGui::NewFrame();
@@ -154,98 +167,88 @@ void tuiBackendRender(TuiScreen* screen) {
     ImTui_ImplNcurses_DrawScreen();
 }
 
-/* ------------------------------------------------------------------ */
-/*  Rendering                                                         */
-/* ------------------------------------------------------------------ */
+/* ---- Rendering ---- */
 
-bool tuiRender(TuiState* state) {
-    if (!state)
-        return false;
-    return ::llmfun::tui::tuiRender(*state);
+int tuiRender(TuiState* state) {
+    if (!state || !state->inner)
+        return 0;
+    return ::llmfun::tui::tuiRender(*state->inner) ? 1 : 0;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Output                                                            */
-/* ------------------------------------------------------------------ */
+/* ---- Output ---- */
 
 void tuiAddOutputLine(TuiState* state, String line) {
-    if (!state)
+    if (!state || !state->inner)
         return;
     std::string s(line.data ? line.data : "", line.len);
-    ::llmfun::tui::tuiAddOutputLine(*state, s);
+    ::llmfun::tui::tuiAddOutputLine(*state->inner, s);
 }
 
 void tuiClearOutput(TuiState* state) {
-    if (!state)
+    if (!state || !state->inner)
         return;
-    ::llmfun::tui::tuiClearOutput(*state);
+    ::llmfun::tui::tuiClearOutput(*state->inner);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Status                                                            */
-/* ------------------------------------------------------------------ */
+/* ---- Status ---- */
 
 void tuiSetStatusText(TuiState* state, String text) {
-    if (!state)
+    if (!state || !state->inner)
         return;
     std::string s(text.data ? text.data : "", text.len);
-    ::llmfun::tui::tuiSetStatusText(*state, s);
+    ::llmfun::tui::tuiSetStatusText(*state->inner, s);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Input                                                             */
-/* ------------------------------------------------------------------ */
+/* ---- Input ---- */
 
 String tuiGetInput(TuiState* state) {
-    if (!state)
+    if (!state || !state->inner)
         return {nullptr, 0};
-    std::string s = ::llmfun::tui::tuiGetInput(*state);
-    return String_New(s.data(), s.size());
+    std::string s = ::llmfun::tui::tuiGetInput(*state->inner);
+    return String_NewBuf(s.data(), s.size());
 }
 
 void tuiClearInput(TuiState* state) {
-    if (!state)
+    if (!state || !state->inner)
         return;
-    ::llmfun::tui::tuiClearInput(*state);
+    ::llmfun::tui::tuiClearInput(*state->inner);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Submission                                                        */
-/* ------------------------------------------------------------------ */
+/* ---- Submission ---- */
 
-bool tuiIsSubmitReady(TuiState* state) {
-    if (!state)
-        return false;
-    return ::llmfun::tui::tuiIsSubmitReady(*state);
+int tuiIsSubmitReady(TuiState* state) {
+    if (!state || !state->inner)
+        return 0;
+    return ::llmfun::tui::tuiIsSubmitReady(*state->inner) ? 1 : 0;
 }
 
 void tuiResetSubmit(TuiState* state) {
-    if (!state)
+    if (!state || !state->inner)
         return;
-    ::llmfun::tui::tuiResetSubmit(*state);
+    ::llmfun::tui::tuiResetSubmit(*state->inner);
 }
 
 String tuiGetSubmitQuery(TuiState* state) {
-    if (!state)
+    if (!state || !state->inner)
         return {nullptr, 0};
-    std::string s = ::llmfun::tui::tuiGetSubmitQuery(*state);
-    return String_New(s.data(), s.size());
+    std::string s = ::llmfun::tui::tuiGetSubmitQuery(*state->inner);
+    return String_NewBuf(s.data(), s.size());
 }
 
-/* ------------------------------------------------------------------ */
-/*  Auto-scroll                                                       */
-/* ------------------------------------------------------------------ */
+/* ---- Auto-scroll ---- */
 
-bool tuiGetAutoScroll(TuiState* state) {
-    if (!state)
-        return false;
-    return state->autoScroll;
+int tuiGetAutoScroll(TuiState* state) {
+    if (!state || !state->inner)
+        return 0;
+    return state->inner->autoScroll ? 1 : 0;
 }
 
-void tuiSetAutoScroll(TuiState* state, bool enabled) {
-    if (!state)
+void tuiSetAutoScroll(TuiState* state, int enabled) {
+    if (!state || !state->inner)
         return;
-    state->autoScroll = enabled;
+    state->inner->autoScroll = enabled != 0;
 }
 
-} // namespace llmfun::tui
+#ifdef __cplusplus
+}
+#endif
