@@ -129,7 +129,7 @@ bool tuiRender(TuiState& state) {
     // ── Output Area ──────────────────────────────────────────────────────────
     // Clamp height to avoid negative values on very small terminals
     ImVec2 outPos(0, 0);
-    ImVec2 outSize(DisplaySize.x, ImMax(1.0f, DisplaySize.y - 4));
+    ImVec2 outSize(DisplaySize.x, ImMax(1.0f, DisplaySize.y - 3));
 
     ImGui::SetNextWindowPos(outPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(outSize, ImGuiCond_Always);
@@ -261,11 +261,12 @@ bool tuiRender(TuiState& state) {
                                    ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::BeginChild("status", statusSize, false, statusFlags);
 
-    // Render status text (default if empty)
+    static constexpr std::string_view defaultStatus = "Context: 0/0 tokens | Model: none | Ready";
+
     if (state.statusText.empty()) {
-        ImGui::Text("Context: 0/0 tokens | Model: none | Ready");
+        ImGui::TextUnformatted(defaultStatus);
     } else {
-        ImGui::Text("%s", state.statusText.c_str());
+        ImGui::TextUnformatted(state.statusText.c_str());
     }
 
     ImGui::EndChild();
