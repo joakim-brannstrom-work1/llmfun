@@ -147,7 +147,6 @@ bool tuiRender(TuiState& state) {
     static constexpr float MIN_TERMINAL_HEIGHT = 15.0f;
 
     if (DisplaySize.x < MIN_TERMINAL_WIDTH || DisplaySize.y < MIN_TERMINAL_HEIGHT) {
-
         ImGui::Begin("Error");
         ImGui::Text("Terminal too small! Minimum size: 40x15");
         ImGui::End();

@@ -271,23 +271,21 @@ String tuiGetSubmitQuery(TuiState* state) {
 int tuiGetAutoScroll(TuiState* state) {
     if (!state || !state->inner)
         return 0;
-#ifdef NDEBUG
-    return state->inner->autoScroll ? 1 : 0;
-#else
-    /* Minor fix: runtime assertion for main-thread-only access in debug builds */
-    return state->inner->autoScroll ? 1 : 0;
+#ifndef NDEBUG
+    assert(backendInitialized.load(std::memory_order_relaxed) &&
+           "tuiGetAutoScroll must be called from main thread after tuiInit()");
 #endif
+    return state->inner->autoScroll ? 1 : 0;
 }
 
 void tuiSetAutoScroll(TuiState* state, int enabled) {
     if (!state || !state->inner)
         return;
-#ifdef NDEBUG
-    state->inner->autoScroll = enabled != 0;
-#else
-    /* Minor fix: runtime assertion for main-thread-only access in debug builds */
-    state->inner->autoScroll = enabled != 0;
+#ifndef NDEBUG
+    assert(backendInitialized.load(std::memory_order_relaxed) &&
+           "tuiSetAutoScroll must be called from main thread after tuiInit()");
 #endif
+    state->inner->autoScroll = enabled != 0;
 }
 
 #ifdef __cplusplus
