@@ -4,6 +4,7 @@
 #include "imtui/imtui-impl-text.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cstdio>
 #include <cstring>
@@ -13,6 +14,11 @@ namespace llmfun::tui {
 // Named key codes for Ctrl shortcuts (ncurses raw key codes)
 static constexpr int KEY_CTRL_D = 4;  // Ctrl+D exit
 static constexpr int KEY_CTRL_L = 12; // Ctrl+L clear output
+
+// Helper: check if string is whitespace-only
+static bool isWhitespaceOnly(const std::string& s) {
+    return std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isspace(c); });
+}
 
 // outputMutex protects: outputLines, statusText, inputBuf, submitReady, submitQuery.
 // Main-thread-only (no lock needed): autoScroll, historyPos, draftBuf, inputHistory.
@@ -273,7 +279,8 @@ bool tuiRender(TuiState& state) {
         // When submitting, push the input to history if non-empty and not a
         // duplicate of the most recent entry. Skip if currently in history
         // navigation (historyPos != -1) to avoid duplicate entries.
-        if (submitted && !state.inputBuf.empty() && state.historyPos == -1) {
+        if (submitted && !state.inputBuf.empty() && !isWhitespaceOnly(state.inputBuf) &&
+            state.historyPos == -1) {
             if (state.inputHistory.empty() || state.inputHistory.back() != state.inputBuf) {
                 state.inputHistory.push_back(state.inputBuf);
                 if (state.inputHistory.size() > state.MAX_HISTORY) {
@@ -281,8 +288,10 @@ bool tuiRender(TuiState& state) {
                 }
             }
         }
+
         if (submitted) {
             state.historyPos = -1;
+            state.inputBuf.clear(); // Clear immediately for instant visual feedback
         }
     }
 
