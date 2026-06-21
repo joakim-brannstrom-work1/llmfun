@@ -108,17 +108,22 @@ bool tuiRender(TuiState& state) {
 
     // Minimum terminal size check
     if (DisplaySize.x < 40 || DisplaySize.y < 15) {
+        ImGui::Begin("Error");
         ImGui::Text("Terminal too small! Minimum size: 40x15");
+        ImGui::End();
         return true;
     }
 
-    // Keyboard shortcuts
-    if (ImGui::GetIO().KeyCtrl &&
+    // Keyboard shortcuts (using modern KeyMods bitmask)
+    ImGuiKeyMods mods = ImGui::GetIO().KeyMods;
+    if ((mods & ImGuiMod_Ctrl) &&
         (ImGui::IsKeyPressed(ImGuiKey_C) || ImGui::IsKeyPressed(ImGuiKey_D))) {
         return false;
     }
-    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_L)) {
-        tuiClearOutput(state);
+    if ((mods & ImGuiMod_Ctrl) && ImGui::IsKeyPressed(ImGuiKey_L)) {
+        if (!ImGui::IsAnyItemActive()) { // Only clear if no widget has focus
+            tuiClearOutput(state);
+        }
     }
 
     // End key: scroll output to bottom and re-enable auto-scroll
