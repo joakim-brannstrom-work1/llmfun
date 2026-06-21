@@ -33,6 +33,9 @@ FeedbackEngine. When it triggers, such as a tool reaching a high enough threshol
 - planner need to be restructured. First it should analyze the source code to understand the project. This should be written to a file in plan/. Then that is used by the system design step.
 - planner, there should be a plan execute
 
+- each implementation task should be written to its own file with enough information for the task to be finished. The current design force the LLM to read the whole `implementation_plan.md` before it can start on a task.
+- there should be a mode where the pipeline execute all tasks and then optionally ask the user for input
+
 # rag
 - Add a warning when the DB is wiped. Need to add migration in the future.
 - memories should automatically be added to the RAG so they are always searchable
