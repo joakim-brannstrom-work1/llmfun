@@ -24,17 +24,19 @@ FeedbackEngine. When it triggers, such as a tool reaching a high enough threshol
 - must support resuming where a pipeline was last interrupted
 - loading prompts from files
     - with fallback to the general agent prompt.
+
+## plan
 - planner
     - Change chain to. First system_design -> criticies plan -> improve -> implementation_guide -> criticies plan -> improve -> done
     - an agent that compare the system design with implementation to find deviations/contradictions
 
-- planner: need a mode when I update the system design and/or implementation_plan. It should then use another type of prompt.
+- need a mode when I update the system design and/or implementation_plan. It should then use another type of prompt.
 
-- planner need to be restructured. First it should analyze the source code to understand the project. This should be written to a file in plan/. Then that is used by the system design step.
-- planner, there should be a plan execute
-
+- need to be restructured. First it should analyze the source code to understand the project. This should be written to a file in plan/. Then that is used by the system design step.
+- there should be a plan execute
 - each implementation task should be written to its own file with enough information for the task to be finished. The current design force the LLM to read the whole `implementation_plan.md` before it can start on a task.
 - there should be a mode where the pipeline execute all tasks and then optionally ask the user for input
+- there should be something like /plan update, which goes through the pipeline but with other steering prompt such that the LLM understand that it should fix things in the system design and implementation plan.
 
 # rag
 - Add a warning when the DB is wiped. Need to add migration in the future.
