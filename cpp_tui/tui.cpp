@@ -142,8 +142,12 @@ void tuiRenderFrame(ImTui::TScreen* screen) {
 bool tuiRender(TuiState& state) {
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
 
-    // Minimum terminal size check
-    if (DisplaySize.x < 40 || DisplaySize.y < 15) {
+    /* Minimum terminal size check */
+    static constexpr float MIN_TERMINAL_WIDTH = 40.0f;
+    static constexpr float MIN_TERMINAL_HEIGHT = 15.0f;
+
+    if (DisplaySize.x < MIN_TERMINAL_WIDTH || DisplaySize.y < MIN_TERMINAL_HEIGHT) {
+
         ImGui::Begin("Error");
         ImGui::Text("Terminal too small! Minimum size: 40x15");
         ImGui::End();
@@ -286,8 +290,12 @@ bool tuiRender(TuiState& state) {
                             state.inputHistory.erase(state.inputHistory.begin());
                         }
                     }
-                    // Point to the entry before the one we just saved (if any).
-                    state.historyPos = static_cast<int>(state.inputHistory.size()) - 2;
+                    /* Fix: bounds check to prevent underflow if history has 0 or 1 elements.
+                       After push above, size >= 1. If size == 1, historyPos = -1 (no history to
+                       navigate). */
+                    int histSize = static_cast<int>(state.inputHistory.size());
+                    state.historyPos = (histSize > 1) ? histSize - 2 : -1;
+
                 } else if (state.historyPos > 0) {
                     state.historyPos--;
                 }

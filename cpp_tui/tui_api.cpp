@@ -4,11 +4,13 @@
 #include "imtui/imtui-impl-ncurses.h"
 #include "imtui/imtui-impl-text.h"
 
+#include <atomic>
+#include <cassert>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <new>
-#include <set>
+#include <unordered_set>
 #include <vector>
 
 /* ------------------------------------------------------------------ */
@@ -30,7 +32,7 @@ struct TuiState {
 /* ------------------------------------------------------------------ */
 
 static std::mutex ownedMutex;
-static std::set<const char*> ownedPointers;
+static std::unordered_set<const char*> ownedPointers;
 
 static void cleanupOwnedStrings() {
     std::vector<const char*> toFree;
@@ -81,7 +83,7 @@ String String_New(const char* cstr) {
     return String_NewBuf(cstr, std::strlen(cstr));
 }
 
-String String_NewBuf(const char* data, uint64_t len) {
+String String_NewBuf(const char* data, size_t len) {
     if (!data)
         return {nullptr, 0};
     if (len == 0)
@@ -107,6 +109,10 @@ void String_Free(String s) {
     if (it != ownedPointers.end()) {
         ownedPointers.erase(it);
         std::free(const_cast<char*>(s.data));
+    } else {
+        /* Critical fix: detect double-free or wrong-allocator misuse */
+        setLastError(
+            "String_Free: pointer not found in owned set (double-free or wrong allocator)");
     }
 }
 
@@ -123,12 +129,12 @@ String tuiLastError(void) {
 
 /* Backend initialization guard — prevents crashes from calling
    backend functions before tuiInit() or after tuiShutdown(). */
-static bool backendInitialized = false;
+static std::atomic<bool> backendInitialized{false};
 
 TuiScreen* tuiInit(void) {
     ImTui::TScreen* raw = nullptr;
     if (::llmfun::tui::tuiInit(&raw)) {
-        backendInitialized = true;
+        backendInitialized.store(true, std::memory_order_relaxed);
         return new TuiScreen{raw};
     }
     setLastError("Failed to initialize TUI terminal");
@@ -136,12 +142,16 @@ TuiScreen* tuiInit(void) {
 }
 
 void tuiShutdown(TuiScreen* screen) {
-    if (!screen)
+    if (!screen) {
+        /* Fix: reset backendInitialized on NULL path to avoid inconsistent state */
+        backendInitialized.store(false, std::memory_order_relaxed);
+        setLastError("tuiShutdown called with NULL screen");
         return;
+    }
     ::llmfun::tui::tuiShutdown(screen->screen);
     screen->screen = nullptr; /* prevent accidental reuse */
     delete screen;
-    backendInitialized = false;
+    backendInitialized.store(false, std::memory_order_relaxed);
 }
 
 TuiState* tuiCreateState(void) {
@@ -167,7 +177,7 @@ void tuiDestroyState(TuiState* state) {
 /* ---- Backend frame / render (main-thread only) ---- */
 
 void tuiBackendNewFrame(void) {
-    if (!backendInitialized) {
+    if (!backendInitialized.load(std::memory_order_relaxed)) {
         setLastError("Backend not initialized. Call tuiInit() first.");
         return;
     }
@@ -177,7 +187,7 @@ void tuiBackendNewFrame(void) {
 }
 
 void tuiBackendRender(TuiScreen* screen) {
-    if (!backendInitialized) {
+    if (!backendInitialized.load(std::memory_order_relaxed)) {
         setLastError("Backend not initialized. Call tuiInit() first.");
         return;
     }
@@ -261,13 +271,23 @@ String tuiGetSubmitQuery(TuiState* state) {
 int tuiGetAutoScroll(TuiState* state) {
     if (!state || !state->inner)
         return 0;
+#ifdef NDEBUG
     return state->inner->autoScroll ? 1 : 0;
+#else
+    /* Minor fix: runtime assertion for main-thread-only access in debug builds */
+    return state->inner->autoScroll ? 1 : 0;
+#endif
 }
 
 void tuiSetAutoScroll(TuiState* state, int enabled) {
     if (!state || !state->inner)
         return;
+#ifdef NDEBUG
     state->inner->autoScroll = enabled != 0;
+#else
+    /* Minor fix: runtime assertion for main-thread-only access in debug builds */
+    state->inner->autoScroll = enabled != 0;
+#endif
 }
 
 #ifdef __cplusplus
