@@ -48,9 +48,7 @@
 
 #define TUI_API_VERSION 1
 
-#ifdef __cplusplus
 namespace llmfun::tui {
-#endif
 
 /*
  * String — Plain old data struct representing a string slice.
@@ -263,6 +261,4 @@ bool tuiGetAutoScroll(TuiState* state);
  */
 void tuiSetAutoScroll(TuiState* state, bool enabled);
 
-#ifdef __cplusplus
 } // namespace llmfun::tui
-#endif
