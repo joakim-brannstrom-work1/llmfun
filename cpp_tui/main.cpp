@@ -1,8 +1,5 @@
 #include "tui.h"
 
-#include "imtui/imtui-impl-ncurses.h"
-#include "imtui/imtui-impl-text.h"
-
 #include <cstdio>
 
 using namespace llmfun::tui;
@@ -27,9 +24,7 @@ int main() {
     // Main event loop
     while (running) {
         // Begin frame
-        ImTui_ImplNcurses_NewFrame();
-        ImTui_ImplText_NewFrame();
-        ImGui::NewFrame();
+        tuiNewFrame();
 
         // Render TUI (returns false to exit)
         running = tuiRender(state);
@@ -43,9 +38,7 @@ int main() {
         }
 
         // End frame
-        ImGui::Render();
-        ImTui_ImplText_RenderDrawData(ImGui::GetDrawData(), screen);
-        ImTui_ImplNcurses_DrawScreen();
+        tuiRenderFrame(screen);
     }
 
     // Graceful shutdown

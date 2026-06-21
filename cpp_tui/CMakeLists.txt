@@ -17,13 +17,25 @@ add_subdirectory(../vendor/imtui ${CMAKE_BINARY_DIR}/imtui)
 # Ensure pthreads are available
 find_package(Threads REQUIRED)
 
-# Main executable
+# Static library: implementation + C API layer
+# Enables D code (and other languages) to link against the library independently
+add_library(llmfun_tui_lib STATIC
+    tui.cpp
+    tui_api.cpp
+)
+
+target_include_directories(llmfun_tui_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(llmfun_tui_lib
+    PUBLIC imtui-ncurses
+    PRIVATE Threads::Threads
+)
+
+# Main executable — links against the static library
 add_executable(llmfun_tui
     main.cpp
-    tui.cpp
 )
 
 target_link_libraries(llmfun_tui PRIVATE
-    imtui-ncurses
-    Threads::Threads
+    llmfun_tui_lib
 )

@@ -49,6 +49,12 @@ bool tuiInit(ImTui::TScreen** screen);
 /// Cleanup and restore terminal state.
 void tuiShutdown(ImTui::TScreen* screen);
 
+/// Backend frame wrappers — encapsulate imtui backend details.
+/// Call tuiNewFrame() at the start of each frame and tuiRenderFrame() at the end.
+void tuiNewFrame();
+
+void tuiRenderFrame(ImTui::TScreen* screen);
+
 /// Render one frame. Returns false to exit.
 bool tuiRender(TuiState& state);
 

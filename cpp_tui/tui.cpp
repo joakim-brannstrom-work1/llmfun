@@ -125,6 +125,18 @@ void tuiShutdown(ImTui::TScreen* screen) {
     ImGui::DestroyContext();
 }
 
+void tuiNewFrame() {
+    ImTui_ImplNcurses_NewFrame();
+    ImTui_ImplText_NewFrame();
+    ImGui::NewFrame();
+}
+
+void tuiRenderFrame(ImTui::TScreen* screen) {
+    ImGui::Render();
+    ImTui_ImplText_RenderDrawData(ImGui::GetDrawData(), screen);
+    ImTui_ImplNcurses_DrawScreen();
+}
+
 // ─── Task 5: Render Function — Output Area ───────────────────────────────────
 
 bool tuiRender(TuiState& state) {
