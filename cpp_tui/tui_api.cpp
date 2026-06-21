@@ -9,6 +9,7 @@
 #include <mutex>
 #include <new>
 #include <set>
+#include <vector>
 
 /* ------------------------------------------------------------------ */
 /*  Complete the opaque struct definitions from the C header.         */
@@ -32,11 +33,15 @@ static std::mutex ownedMutex;
 static std::set<const char*> ownedPointers;
 
 static void cleanupOwnedStrings() {
-    std::lock_guard<std::mutex> lock(ownedMutex);
-    for (auto ptr : ownedPointers) {
+    std::vector<const char*> toFree;
+    {
+        std::lock_guard<std::mutex> lock(ownedMutex);
+        toFree = std::vector<const char*>(ownedPointers.begin(), ownedPointers.end());
+        ownedPointers.clear();
+    }
+    for (auto ptr : toFree) {
         std::free(const_cast<char*>(ptr));
     }
-    ownedPointers.clear();
 }
 
 static struct CleanupRegistrar {
@@ -80,7 +85,7 @@ String String_NewBuf(const char* data, size_t len) {
     if (!data)
         return {nullptr, 0};
     if (len == 0)
-        return {nullptr, 0};
+        return {"", 0}; /* valid empty string, distinguishable from error */
     /* +1 to guarantee null-termination for safe C-string interop */
     char* buf = static_cast<char*>(std::malloc(len + 1));
     if (!buf)
@@ -116,9 +121,14 @@ String tuiLastError(void) {
 
 /* ---- Lifecycle ---- */
 
+/* Backend initialization guard — prevents crashes from calling
+   backend functions before tuiInit() or after tuiShutdown(). */
+static bool backendInitialized = false;
+
 TuiScreen* tuiInit(void) {
     ImTui::TScreen* raw = nullptr;
     if (::llmfun::tui::tuiInit(&raw)) {
+        backendInitialized = true;
         return new TuiScreen{raw};
     }
     setLastError("Failed to initialize TUI terminal");
@@ -131,14 +141,17 @@ void tuiShutdown(TuiScreen* screen) {
     ::llmfun::tui::tuiShutdown(screen->screen);
     screen->screen = nullptr; /* prevent accidental reuse */
     delete screen;
+    backendInitialized = false;
 }
 
 TuiState* tuiCreateState(void) {
+    ::llmfun::tui::TuiState* inner = nullptr;
     try {
-        TuiState* state = new TuiState{nullptr};
-        state->inner = new ::llmfun::tui::TuiState();
+        inner = new ::llmfun::tui::TuiState();
+        TuiState* state = new TuiState{inner};
         return state;
     } catch (const std::bad_alloc&) {
+        delete inner;
         setLastError("Failed to allocate TUI state (out of memory)");
         return nullptr;
     }
@@ -154,12 +167,20 @@ void tuiDestroyState(TuiState* state) {
 /* ---- Backend frame / render (main-thread only) ---- */
 
 void tuiBackendNewFrame(void) {
+    if (!backendInitialized) {
+        setLastError("Backend not initialized. Call tuiInit() first.");
+        return;
+    }
     ImTui_ImplNcurses_NewFrame();
     ImTui_ImplText_NewFrame();
     ImGui::NewFrame();
 }
 
 void tuiBackendRender(TuiScreen* screen) {
+    if (!backendInitialized) {
+        setLastError("Backend not initialized. Call tuiInit() first.");
+        return;
+    }
     if (!screen)
         return;
     ImGui::Render();
