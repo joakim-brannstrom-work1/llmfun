@@ -3,6 +3,8 @@
 #include "imtui/imtui-impl-ncurses.h"
 #include "imtui/imtui-impl-text.h"
 
+#include <cstdio>
+
 // All functions below acquire state.outputMutex for thread safety.
 // outputMutex protects: outputLines, statusText, inputBuf, submitReady.
 
@@ -77,15 +79,18 @@ static void applyTheme() {
 }
 
 // ─── Init / Shutdown ─────────────────────────────────────────────────────────
-
 bool tuiInit(ImTui::TScreen** screen) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     applyTheme();
 
-    *screen = ImTui_ImplNcurses_Init(true);
-    if (!*screen)
+    // mouseSupport=true, fps_active=60.0, fps_idle=3.0 (save CPU when idle)
+    *screen = ImTui_ImplNcurses_Init(true, 60.0f, 3.0f);
+    if (!*screen) {
+        std::fprintf(stderr, "Failed to initialize ncurses terminal. Aborting.\n");
+        ImGui::DestroyContext(); // clean up context on failure
         return false;
+    }
 
     ImTui_ImplText_Init();
     return true;
@@ -95,7 +100,7 @@ void tuiShutdown(ImTui::TScreen* screen) {
     // Note: ImTui_ImplNcurses_Shutdown() is global and does not take a screen
     // parameter (see imtui-impl-ncurses.h). The TScreen object is owned by the
     // ncurses backend and will be freed internally during shutdown.
-    (void)screen;
+    (void)screen; // Owned by ncurses backend; freed during ImTui_ImplNcurses_Shutdown()
     ImTui_ImplText_Shutdown();
     ImTui_ImplNcurses_Shutdown();
     ImGui::DestroyContext();
