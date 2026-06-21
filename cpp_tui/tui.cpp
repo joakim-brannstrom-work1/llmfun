@@ -142,13 +142,24 @@ bool tuiRender(TuiState& state) {
         state.autoScroll = true;
     }
 
+    // ── Parent Window (fullscreen, invisible) ─────────────────────────────────
+    // Required: BeginChild calls must be nested inside a Begin/End block.
+    // Without a parent window, BeginChild creates an implicit window whose
+    // auto-positioning offsets the layout, making the TUI unusable.
+    ImGuiWindowFlags parentFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                                   ImGuiWindowFlags_NoScrollWithMouse |
+                                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground;
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(DisplaySize, ImGuiCond_Always);
+    ImGui::Begin("##TuiRoot", nullptr, parentFlags);
+
     // ── Output Area ──────────────────────────────────────────────────────────
     // Clamp height to avoid negative values on very small terminals
     ImVec2 outPos(0, 0);
     ImVec2 outSize(DisplaySize.x, std::max(1.0f, DisplaySize.y - 3));
 
-    ImGui::SetNextWindowPos(outPos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(outSize, ImGuiCond_Always);
+    ImGui::SetCursorPos(outPos);
 
     ImGuiWindowFlags outFlags = ImGuiWindowFlags_HorizontalScrollbar;
     ImGui::BeginChild("output", outSize, false, outFlags);
@@ -185,21 +196,13 @@ bool tuiRender(TuiState& state) {
     ImVec2 inputPos(0, DisplaySize.y - 3);
     ImVec2 inputSize(DisplaySize.x, 2);
 
-    ImGui::SetNextWindowPos(inputPos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(inputSize, ImGuiCond_Always);
+    ImGui::SetCursorPos(inputPos);
 
     ImGuiWindowFlags inputFlags = ImGuiWindowFlags_None;
     ImGui::BeginChild("input", inputSize, false, inputFlags);
 
     ImGuiInputTextFlags flags =
         ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_EnterReturnsTrue;
-
-    // Ensure buffer is non-empty before passing to InputTextMultiline to avoid
-    // potential buffer over-read/write when ImGui accesses the buffer before
-    // the resize callback fires.
-    if (state.inputBuf.empty()) {
-        state.inputBuf = "";
-    }
 
     // Standard ImGui pattern: pass current buffer size + 1 for null terminator.
     // InputResizeCallback handles dynamic resizing via ImGuiInputTextFlags_CallbackResize.
@@ -280,8 +283,7 @@ bool tuiRender(TuiState& state) {
     ImVec2 statusPos(0, DisplaySize.y - 1);
     ImVec2 statusSize(DisplaySize.x, 1);
 
-    ImGui::SetNextWindowPos(statusPos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(statusSize, ImGuiCond_Always);
+    ImGui::SetCursorPos(statusPos);
 
     ImGuiWindowFlags statusFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar |
@@ -298,6 +300,8 @@ bool tuiRender(TuiState& state) {
     }
 
     ImGui::EndChild();
+
+    ImGui::End(); // End parent "##TuiRoot" window
 
     return true;
 }
