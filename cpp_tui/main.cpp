@@ -36,10 +36,9 @@ int main() {
 
         // Check for input submission
         if (tuiIsSubmitReady(state)) {
-            std::string query = tuiGetInput(state);
+            std::string query = tuiGetSubmitQuery(state);
             tuiAddOutputLine(state, "> " + query);
             tuiAddOutputLine(state, "");
-            tuiClearInput(state);
             tuiResetSubmit(state);
         }
 

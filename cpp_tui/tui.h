@@ -70,6 +70,7 @@ std::string tuiGetInput(const TuiState& state);
 
 /// Clear the input buffer.
 /// Thread-safe: acquires outputMutex.
+/// @deprecated Input is now cleared internally by tuiRender() on submission.
 void tuiClearInput(TuiState& state);
 
 /// Check if input is ready to be submitted.

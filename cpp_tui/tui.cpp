@@ -218,6 +218,13 @@ bool tuiRender(TuiState& state) {
     ImGuiInputTextFlags flags =
         ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_EnterReturnsTrue;
 
+    // Default focus on input field so user can type immediately (first frame only)
+    static bool inputFocused = false;
+    if (!inputFocused) {
+        ImGui::SetKeyboardFocusHere();
+        inputFocused = true;
+    }
+
     // Standard ImGui pattern: pass current buffer size + 1 for null terminator.
     // InputResizeCallback handles dynamic resizing via ImGuiInputTextFlags_CallbackResize.
     bool submitted =
@@ -232,6 +239,20 @@ bool tuiRender(TuiState& state) {
         if (submitted) {
             state.submitReady = true;
             state.submitQuery = state.inputBuf;
+
+            // Push to history if non-empty, not whitespace-only, and not in navigation
+            if (!state.inputBuf.empty() && !isWhitespaceOnly(state.inputBuf) &&
+                state.historyPos == -1) {
+                if (state.inputHistory.empty() || state.inputHistory.back() != state.inputBuf) {
+                    state.inputHistory.push_back(state.inputBuf);
+                    if (state.inputHistory.size() > state.MAX_HISTORY) {
+                        state.inputHistory.erase(state.inputHistory.begin());
+                    }
+                }
+            }
+
+            state.historyPos = -1;
+            state.inputBuf.clear(); // Clear immediately for instant visual feedback
         }
 
         // Escape clears the input buffer
@@ -274,24 +295,6 @@ bool tuiRender(TuiState& state) {
                     }
                 }
             }
-        }
-
-        // When submitting, push the input to history if non-empty and not a
-        // duplicate of the most recent entry. Skip if currently in history
-        // navigation (historyPos != -1) to avoid duplicate entries.
-        if (submitted && !state.inputBuf.empty() && !isWhitespaceOnly(state.inputBuf) &&
-            state.historyPos == -1) {
-            if (state.inputHistory.empty() || state.inputHistory.back() != state.inputBuf) {
-                state.inputHistory.push_back(state.inputBuf);
-                if (state.inputHistory.size() > state.MAX_HISTORY) {
-                    state.inputHistory.erase(state.inputHistory.begin());
-                }
-            }
-        }
-
-        if (submitted) {
-            state.historyPos = -1;
-            state.inputBuf.clear(); // Clear immediately for instant visual feedback
         }
     }
 
