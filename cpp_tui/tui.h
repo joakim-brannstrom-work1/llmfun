@@ -8,6 +8,8 @@
 
 #include "imtui/imtui.h"
 
+namespace llmfun::tui {
+
 struct TuiState {
     // Note: This struct is non-copyable and non-movable due to std::mutex.
     // Always pass by reference (TuiState&) to avoid accidental copies.
@@ -25,6 +27,7 @@ struct TuiState {
 
     // Submission flag
     bool submitReady = false;
+    std::string submitQuery;
 
     // Input history
     std::vector<std::string> inputHistory;
@@ -34,8 +37,7 @@ struct TuiState {
     // Status line text
     std::string statusText;
 
-    // Thread safety for all shared mutable state
-    // outputMutex protects: outputLines, statusText, inputBuf, submitReady
+    // outputMutex protects: outputLines, statusText, inputBuf, submitReady, submitQuery
     // Main-thread-only (no lock needed): autoScroll, historyPos, draftBuf, inputHistory
     mutable std::mutex outputMutex;
 };
@@ -77,3 +79,10 @@ bool tuiIsSubmitReady(const TuiState& state);
 /// Reset the submission flag.
 /// Thread-safe: acquires outputMutex.
 void tuiResetSubmit(TuiState& state);
+
+/// Get the last submitted query (set by tuiRender on Enter press).
+/// Returns the captured query text. Thread-safe (mutex-protected).
+/// Distinction: tuiGetInput() returns the current editable buffer;
+/// tuiGetSubmitQuery() returns the last submitted query (read-only snapshot).
+std::string tuiGetSubmitQuery(const TuiState& state);
+} // namespace llmfun::tui

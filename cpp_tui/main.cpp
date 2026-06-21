@@ -5,6 +5,8 @@
 
 #include <cstdio>
 
+using namespace llmfun::tui;
+
 int main() {
     ImTui::TScreen* screen = nullptr;
 

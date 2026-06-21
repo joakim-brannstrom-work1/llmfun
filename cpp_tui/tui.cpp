@@ -8,11 +8,13 @@
 #include <cstdio>
 #include <cstring>
 
+namespace llmfun::tui {
+
 // Named key codes for Ctrl shortcuts (ncurses raw key codes)
 static constexpr int KEY_CTRL_D = 4;  // Ctrl+D exit
 static constexpr int KEY_CTRL_L = 12; // Ctrl+L clear output
 
-// outputMutex protects: outputLines, statusText, inputBuf, submitReady.
+// outputMutex protects: outputLines, statusText, inputBuf, submitReady, submitQuery.
 // Main-thread-only (no lock needed): autoScroll, historyPos, draftBuf, inputHistory.
 
 void tuiAddOutputLine(TuiState& state, const std::string& line) {
@@ -52,6 +54,12 @@ bool tuiIsSubmitReady(const TuiState& state) {
 void tuiResetSubmit(TuiState& state) {
     std::lock_guard<std::mutex> lock(state.outputMutex);
     state.submitReady = false;
+    state.submitQuery.clear();
+}
+
+std::string tuiGetSubmitQuery(const TuiState& state) {
+    std::lock_guard<std::mutex> lock(state.outputMutex);
+    return state.submitQuery;
 }
 
 // ─── Input Resize Callback (static, per-frame reuse) ─────────────────────────
@@ -217,6 +225,7 @@ bool tuiRender(TuiState& state) {
 
         if (submitted) {
             state.submitReady = true;
+            state.submitQuery = state.inputBuf;
         }
 
         // Escape clears the input buffer
@@ -305,3 +314,5 @@ bool tuiRender(TuiState& state) {
 
     return true;
 }
+
+} // namespace llmfun::tui
