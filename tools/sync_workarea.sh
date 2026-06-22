@@ -16,7 +16,7 @@ git add source dub.sdl *.mak vendor
 git commit -m "import source"
 popd
 
-llmfun rag --db llmfun/data/rag.sqlite3 --sync --path source/ -i '.*\.d$'
-llmfun rag --db llmfun/data/rag.sqlite3 --sync --path cpp_tui/ -i '.*\.(h|hpp|c|cpp)$'
-llmfun rag --db llmfun/data/rag.sqlite3 --sync --path vendor/imtui/include --path vendor/imtui/examples -i '.*\.(h|hpp|c|cpp)$'
-llmfun rag --db llmfun/data/rag.sqlite3 --sync --path vendor/imtui/third-party/imgui -i '.*\.(h|hpp|c|cpp)$' -e '.*backend.*' -e '.*examples/libs.*'
+llmfun rag --db llmfun/data/rag.sqlite3 --sync source/ -i '.*\.d$'
+llmfun rag --db llmfun/data/rag.sqlite3 --sync cpp_tui/ -i '.*\.(h|hpp|c|cpp)$'
+llmfun rag --db llmfun/data/rag.sqlite3 --sync vendor/imtui/include vendor/imtui/examples -i '.*\.(h|hpp|c|cpp)$'
+llmfun rag --db llmfun/data/rag.sqlite3 --sync vendor/imtui/third-party/imgui -i '.*\.(h|hpp|c|cpp)$' -e '.*backend.*' -e '.*examples/libs.*'
