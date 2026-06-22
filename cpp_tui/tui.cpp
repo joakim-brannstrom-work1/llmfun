@@ -230,8 +230,9 @@ bool tuiRender(TuiState& state) {
     ImGuiWindowFlags inputFlags = ImGuiWindowFlags_None;
     ImGui::BeginChild("input", inputSize, false, inputFlags);
 
-    ImGuiInputTextFlags flags =
-        ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_EnterReturnsTrue;
+    ImGuiInputTextFlags flags = ImGuiInputTextFlags_CallbackResize |
+                                ImGuiInputTextFlags_EnterReturnsTrue |
+                                ImGuiInputTextFlags_CtrlEnterForNewLine;
 
     // Default focus on input field so user can type immediately (first frame only)
     static bool inputFocused = false;
