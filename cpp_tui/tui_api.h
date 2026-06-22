@@ -126,14 +126,27 @@ String tuiLastError(void);
 
 /*
  * Initialize the TUI terminal backend.
+ *
+ * Sets up the terminal (ncurses), creates the ImGui context, applies the
+ * dark theme, and initializes the ImTui backend. After this call succeeds,
+ * the terminal is in a controlled state and you must call tuiShutdown()
+ * to restore it before the program exits.
+ *
  * Must be called before any other API function (except String_New / String_NewBuf).
- * Returns an opaque TuiScreen* on success, NULL on failure.
- * Main-thread only.
+ * Returns an opaque TuiScreen* on success, NULL on failure (check tuiLastError).
+ *
+ * Main-thread only. Not reentrant — calling this while another instance is
+ * active will likely crash.
  */
 TuiScreen* tuiInit(void);
 
 /*
  * Shutdown the TUI terminal backend and restore terminal state.
+ *
+ * Cleans up the ImTui backend, destroys the ImGui context, and restores
+ * the terminal to its original state (ncurses end). After this call, the
+ * TuiScreen* handle is invalid and must not be used again.
+ *
  * Null-safe: passing NULL is a no-op.
  * Main-thread only.
  */
@@ -141,13 +154,22 @@ void tuiShutdown(TuiScreen* screen);
 
 /*
  * Create a new TUI state object.
+ *
+ * Allocates and initializes a TuiState instance containing empty output,
+ * empty input buffer, disabled submission flag, and default auto-scroll.
+ * The state is independent — you can create multiple states and pass them
+ * to API functions to manage separate TUI sessions.
+ *
  * Returns an opaque TuiState* on success, NULL on failure (e.g. out of memory).
  * Thread-safe: yes.
  */
 TuiState* tuiCreateState(void);
 
 /*
- * Destroy a TUI state object.
+ * Destroy a TUI state object and free all associated memory.
+ *
+ * After this call the TuiState* handle is invalid and must not be used again.
+ *
  * Null-safe: passing NULL is a no-op.
  * Thread-safe: yes.
  */
@@ -157,16 +179,37 @@ void tuiDestroyState(TuiState* state);
 
 /*
  * Process backend input and start a new ImGui frame.
- * Must be called from the main/UI thread before tuiRender().
- * Null-safe: no-op if screen is NULL.
+ *
+ * This function encapsulates the three backend calls required to begin a
+ * frame: reads terminal input (ncurses), initializes the text renderer,
+ * and creates a new ImGui frame. Call this at the start of each iteration
+ * of your main loop, before calling tuiRender().
+ *
+ * Must be called from the main/UI thread. Returns early with an error if
+ * the backend has not been initialized (call tuiInit() first).
+ *
  * Main-thread only.
  */
 void tuiBackendNewFrame(void);
 
 /*
  * Render the current ImGui frame to the terminal screen.
- * Must be called from the main/UI thread after tuiRender().
- * Null-safe: passing NULL for screen is a no-op (sets error).
+ *
+ * This function encapsulates the three backend calls required to end a
+ * frame: renders the ImGui draw list, sends it to the text renderer,
+ * and draws the result to the terminal. Call this at the end of each
+ * iteration of your main loop, after calling tuiRender().
+ *
+ * Typical frame loop:
+ *
+ *   tuiBackendNewFrame();
+ *   if (tuiRender(state) == 0) break;  // user requested exit
+ *   // ... process input, update state ...
+ *   tuiBackendRender(screen);
+ *
+ * Must be called from the main/UI thread. Null-safe: passing NULL for
+ * screen returns early with an error.
+ *
  * Main-thread only.
  */
 void tuiBackendRender(TuiScreen* screen);
@@ -175,7 +218,16 @@ void tuiBackendRender(TuiScreen* screen);
 
 /*
  * Render one TUI frame using the given state.
- * Returns 0 if the user requested exit (e.g. pressed Escape), 1 otherwise.
+ *
+ * Draws the three UI regions: the scrollable output area, the multiline
+ * input field, and the status line. Handles keyboard shortcuts internally
+ * (Ctrl+C/D to exit, Ctrl+L to clear output, End to scroll to bottom,
+ * Escape to clear input, Ctrl+Up/Down for history navigation).
+ *
+ * Returns 0 if the user requested exit (pressed Ctrl+C, Ctrl+D, or Escape
+ * in certain contexts), 1 otherwise. The caller should break the main loop
+ * when this returns 0.
+ *
  * Null-safe: returns 0 if state is NULL.
  * Main-thread only.
  */
@@ -184,14 +236,24 @@ int tuiRender(TuiState* state);
 /* ---- Output ---- */
 
 /*
- * Append a line to the output display. FIFO eviction if bound exceeded.
+ * Append a line to the scrollable output display area.
+ *
+ * The output area has a maximum capacity (10000 lines). When exceeded, the
+ * oldest lines are evicted first (FIFO). The `line` parameter is an inbound
+ * String — its data is copied internally, so the caller's buffer can be
+ * freed or reused immediately after this call returns.
+ *
  * Thread-safe: acquires internal mutex.
  * Null-safe: no-op if state is NULL.
  */
 void tuiAddOutputLine(TuiState* state, String line);
 
 /*
- * Clear all output lines.
+ * Clear all lines from the output display area.
+ *
+ * After this call the output area will be empty. The auto-scroll flag is
+ * unaffected.
+ *
  * Thread-safe: acquires internal mutex.
  * Null-safe: no-op if state is NULL.
  */
@@ -200,7 +262,12 @@ void tuiClearOutput(TuiState* state);
 /* ---- Status ---- */
 
 /*
- * Set the status line text.
+ * Set the text displayed in the status line at the bottom of the terminal.
+ *
+ * The status line is a single row below the input area, typically used for
+ * context information (token counts, model name, status messages). The
+ * `text` parameter is an inbound String — its data is copied internally.
+ *
  * Thread-safe: acquires internal mutex.
  * Null-safe: no-op if state is NULL.
  */
@@ -209,15 +276,24 @@ void tuiSetStatusText(TuiState* state, String text);
 /* ---- Input ---- */
 
 /*
- * Get the current input buffer content as an owned String.
+ * Get the current content of the user's input buffer as an owned String.
+ *
+ * This returns whatever the user has typed into the input area so far,
+ * regardless of whether they have pressed Enter. Use tuiIsSubmitReady()
+ * and tuiGetSubmitQuery() to retrieve the query after submission instead.
+ *
+ * Returns an owned String — caller must free the result with String_Free().
  * Thread-safe: acquires internal mutex.
  * Null-safe: returns {NULL, 0} if state is NULL.
- * Caller must free the result with String_Free().
  */
 String tuiGetInput(TuiState* state);
 
 /*
- * Clear the input buffer.
+ * Clear the user's input buffer.
+ *
+ * Empties the multiline input field. This does not affect the submission
+ * flag or the stored submit query.
+ *
  * Thread-safe: acquires internal mutex.
  * Null-safe: no-op if state is NULL.
  */
@@ -227,6 +303,12 @@ void tuiClearInput(TuiState* state);
 
 /*
  * Check if the user has submitted input (pressed Enter).
+ *
+ * When the user presses Enter in the input area, the submission flag is set
+ * and the current input text is captured into the submit query. This function
+ * returns 1 if the flag is set, 0 otherwise. After processing the query,
+ * call tuiResetSubmit() to acknowledge and clear the flag.
+ *
  * Returns 1 if ready, 0 otherwise.
  * Thread-safe: acquires internal mutex.
  * Null-safe: returns 0 if state is NULL.
@@ -260,6 +342,11 @@ void tuiResetSubmit(TuiState* state);
 
 /*
  * Get the last submitted query text as an owned String.
+ *
+ * Returns a snapshot of the input text at the moment the user pressed Enter.
+ * This is a read-only copy — modifying it does not affect the TUI state.
+ * The query persists until tuiResetSubmit() is called.
+ *
  * Thread-safe: acquires internal mutex.
  * Null-safe: returns {NULL, 0} if state is NULL.
  * Caller must free the result with String_Free().
@@ -270,7 +357,11 @@ String tuiGetSubmitQuery(TuiState* state);
 
 /*
  * Get the current auto-scroll setting.
- * Returns 1 if enabled, 0 if disabled.
+ *
+ * When auto-scroll is enabled, the output area automatically follows new
+ * content as it is appended. Manual scrolling up disables auto-scroll.
+ * Pressing the End key re-enables it. Returns 1 if enabled, 0 if disabled.
+ *
  * Null-safe: returns 0 if state is NULL.
  * Main-thread only (no mutex protection).
  */
@@ -278,7 +369,11 @@ int tuiGetAutoScroll(TuiState* state);
 
 /*
  * Set the auto-scroll flag.
- * Pass 1 to enable, 0 to disable.
+ *
+ * Pass 1 to enable, 0 to disable. When enabled, the output area automatically
+ * scrolls to the bottom whenever new lines are appended via tuiAddOutputLine().
+ * When disabled, the user's current scroll position is preserved.
+ *
  * Null-safe: no-op if state is NULL.
  * Main-thread only (no mutex protection).
  */
