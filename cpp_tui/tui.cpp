@@ -242,9 +242,15 @@ bool tuiRender(TuiState& state) {
 
     // Standard ImGui pattern: pass current buffer size + 1 for null terminator.
     // InputResizeCallback handles dynamic resizing via ImGuiInputTextFlags_CallbackResize.
-    bool submitted =
-        ImGui::InputTextMultiline("##input", state.inputBuf.data(), state.inputBuf.size() + 1,
-                                  ImVec2(-FLT_MIN, 0), flags, InputResizeCallback, &state.inputBuf);
+    ImGui::InputTextMultiline("##input", state.inputBuf.data(), state.inputBuf.size() + 1,
+                              ImVec2(-FLT_MIN, 0), flags, InputResizeCallback, &state.inputBuf);
+
+    // Detect Ctrl+Enter via raw ncurses key code (code 0).
+    // imtui never reports io.KeyCtrl, so ImGui's CtrlEnterForNewLine flag
+    // cannot work. We check keysDown[0] directly — same pattern as
+    // KEY_CTRL_D and KEY_CTRL_L.
+
+    bool submitted = ImGui::IsItemActive() && ImGui::IsKeyPressed(KEY_CTRL_ENTER);
 
     // All input state modifications are protected by outputMutex to prevent
     // data races with worker threads calling tuiGetInput/tuiClearInput etc.
@@ -252,14 +258,13 @@ bool tuiRender(TuiState& state) {
         std::lock_guard<std::mutex> lock(state.outputMutex);
 
         if (submitted) {
+            std::string query = state.inputBuf;
             state.submitReady = true;
-            state.submitQuery = state.inputBuf;
+            state.submitQuery = query;
 
-            // Push to history if non-empty, not whitespace-only, and not in navigation
-            if (!state.inputBuf.empty() && !isWhitespaceOnly(state.inputBuf) &&
-                state.historyPos == -1) {
-                if (state.inputHistory.empty() || state.inputHistory.back() != state.inputBuf) {
-                    state.inputHistory.push_back(state.inputBuf);
+            if (!isWhitespaceOnly(query) && state.historyPos == -1) {
+                if (state.inputHistory.empty() || state.inputHistory.back() != query) {
+                    state.inputHistory.push_back(query);
                     if (state.inputHistory.size() > state.MAX_HISTORY) {
                         state.inputHistory.erase(state.inputHistory.begin());
                     }
