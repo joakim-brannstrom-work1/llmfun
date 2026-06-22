@@ -12,8 +12,9 @@
 namespace llmfun::tui {
 
 // Named key codes for Ctrl shortcuts (ncurses raw key codes)
-static constexpr int KEY_CTRL_D = 4;  // Ctrl+D exit
-static constexpr int KEY_CTRL_L = 12; // Ctrl+L clear output
+static constexpr int KEY_CTRL_D = 4;     // Ctrl+D exit
+static constexpr int KEY_CTRL_L = 12;    // Ctrl+L clear output
+static constexpr int KEY_CTRL_ENTER = 0; // Ctrl+Enter (ncurses encodes Ctrl+J as 0)
 
 // Helper: check if string is whitespace-only
 static bool isWhitespaceOnly(const std::string& s) {
@@ -230,9 +231,7 @@ bool tuiRender(TuiState& state) {
     ImGuiWindowFlags inputFlags = ImGuiWindowFlags_None;
     ImGui::BeginChild("input", inputSize, false, inputFlags);
 
-    ImGuiInputTextFlags flags = ImGuiInputTextFlags_CallbackResize |
-                                ImGuiInputTextFlags_EnterReturnsTrue |
-                                ImGuiInputTextFlags_CtrlEnterForNewLine;
+    ImGuiInputTextFlags flags = ImGuiInputTextFlags_CallbackResize;
 
     // Default focus on input field so user can type immediately (first frame only)
     static bool inputFocused = false;
