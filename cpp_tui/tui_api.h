@@ -234,7 +234,25 @@ void tuiClearInput(TuiState* state);
 int tuiIsSubmitReady(TuiState* state);
 
 /*
- * Reset the submission flag after processing.
+ * Reset the submission flag after processing a user's query.
+ *
+ * Submission occurs when the user presses Enter in the input area. This sets
+ * the submission flag (checkable via tuiIsSubmitReady) and captures the
+ * current input text into the submit query (retrievable via tuiGetSubmitQuery).
+ *
+ * After you have processed the query, call this function to reset the flag
+ * so that the next Enter press will be detected. This also clears the
+ * stored submit query text.
+ *
+ * Typical usage pattern:
+ *
+ *   if (tuiIsSubmitReady(state)) {
+ *       String query = tuiGetSubmitQuery(state);
+ *       // ... process query ...
+ *       String_Free(query);
+ *       tuiResetSubmit(state);   // acknowledge and clear for next input
+ *   }
+ *
  * Thread-safe: acquires internal mutex.
  * Null-safe: no-op if state is NULL.
  */
