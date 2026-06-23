@@ -14,7 +14,7 @@ namespace llmfun::tui {
 // Named key codes for Ctrl shortcuts (ncurses raw key codes)
 static constexpr int KEY_CTRL_D = 4;     // Ctrl+D exit
 static constexpr int KEY_CTRL_L = 12;    // Ctrl+L clear output
-static constexpr int KEY_CTRL_ENTER = 0; // Ctrl+Enter (ncurses encodes Ctrl+J as 0)
+static constexpr int KEY_CTRL_ENTER = 0; // Raw key code 0 (Ctrl+Enter / Ctrl+J in ncurses raw mode)
 
 // Helper: check if string is whitespace-only
 static bool isWhitespaceOnly(const std::string& s) {
@@ -155,8 +155,8 @@ bool tuiRender(TuiState& state) {
     }
 
     // Keyboard shortcuts (ImGui v1.81 compatible)
-    // Ctrl+C uses ImGuiKey_C via GetKeyIndex; Ctrl+D and Ctrl+L use raw ncurses key codes
     ImGuiIO& io = ImGui::GetIO();
+    // Exit on Ctrl+C (ImGui key index) or Ctrl+D (raw ncurses code)
     if (io.KeyCtrl &&
         (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_C)) || ImGui::IsKeyPressed(KEY_CTRL_D))) {
         return false;
@@ -259,6 +259,10 @@ bool tuiRender(TuiState& state) {
 
         if (submitted) {
             std::string query = state.inputBuf;
+            // Strip trailing newline if present (ImGui inserts it before we detect Ctrl+Enter)
+            if (!query.empty() && query.back() == '\n') {
+                query.pop_back();
+            }
             state.submitReady = true;
             state.submitQuery = query;
 
