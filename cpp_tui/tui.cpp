@@ -8,20 +8,17 @@
 #include <cfloat>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace llmfun::tui {
 
 // Named key codes for Ctrl shortcuts (ncurses raw key codes)
-static constexpr int KEY_CTRL_D = 4;     // Ctrl+D exit
-static constexpr int KEY_CTRL_L = 12;    // Ctrl+L clear output
-static constexpr int KEY_CTRL_ENTER = 0; // Raw key code 0 (Ctrl+Enter / Ctrl+J in ncurses raw mod
-static constexpr int KEY_TAB = 9;
-// static constexpr int KEY_SHIFT_ENTER = 343; //
-
-// Helper: check if string is whitespace-only
-static bool isWhitespaceOnly(const std::string& s) {
+static constexpr int KEY_CTRL_D = 4; // Ctrl+D exit
+bool isWhitespaceOnly(const std::string& s) {
     return std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isspace(c); });
 }
+
+size_t countNewLines(const std::string& str) { return std::count(str.begin(), str.end(), '\n'); }
 
 // outputMutex protects: outputLines, statusText, inputBuf, submitReady, submitQuery.
 // Main-thread-only (no lock needed): autoScroll, historyPos, draftBuf, inputHistory.
@@ -230,10 +227,6 @@ bool tuiRender(TuiState& state) {
                                   ImVec2(inputWidth, inputHeight),
                                   ImGuiInputTextFlags_CallbackResize, InputResizeCallback,
                                   &state.inputBuf);
-        // Manual Tab navigation because ImTui doesn't map Tab to ImGuiKey_Tab
-        if (ImGui::IsItemActive() && ImGui::IsKeyPressed(KEY_TAB) && !ImGui::GetIO().KeyShift) {
-            std::fprintf(logFile, "tab detected? yes\n");
-        }
 
         ImGui::SameLine();
         static std::string buttonText("Send");
@@ -281,8 +274,6 @@ bool tuiRender(TuiState& state) {
     }
 
     ImGui::End();
-
-    state.outputLines.push_back("hello\n");
 
     fclose(logFile);
 
