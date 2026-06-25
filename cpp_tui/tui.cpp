@@ -162,6 +162,9 @@ bool tuiRender(TuiState& state) {
     if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         state.inputBuf.clear();
     }
+    if (ImGui::IsKeyPressed(ImGuiKey_End)) {
+        state.autoScroll = true;
+    }
 
     auto logFile = fopen("log.txt", "a");
 
@@ -191,6 +194,19 @@ bool tuiRender(TuiState& state) {
         std::vector<std::string> linesCopy(state.outputLines.begin(), state.outputLines.end());
         for (const auto& line : linesCopy) {
             ImGui::TextUnformatted(line.c_str());
+        }
+
+        // Auto-scroll management (must stay inside child scope)
+        if (state.autoScroll) {
+            ImGui::SetScrollHereY(1.0f);
+        }
+
+        // Auto-scroll detection: capture scroll state BEFORE EndChild
+        // so we read the "output" child's actual scroll values.
+        const float scrollY = ImGui::GetScrollY();
+        const float scrollMax = ImGui::GetScrollMaxY();
+        if (scrollMax > 0.0f) {
+            state.autoScroll = (scrollY >= scrollMax - 1.0f);
         }
 
         ImGui::EndChild();
