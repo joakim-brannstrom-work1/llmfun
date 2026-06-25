@@ -27,6 +27,7 @@ struct TuiState {
 
     // Submission flag
     bool submitReady = false;
+    bool isSubmitted = true;
     std::string submitQuery;
 
     // Input history

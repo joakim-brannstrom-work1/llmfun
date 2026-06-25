@@ -14,7 +14,9 @@ namespace llmfun::tui {
 // Named key codes for Ctrl shortcuts (ncurses raw key codes)
 static constexpr int KEY_CTRL_D = 4;     // Ctrl+D exit
 static constexpr int KEY_CTRL_L = 12;    // Ctrl+L clear output
-static constexpr int KEY_CTRL_ENTER = 0; // Raw key code 0 (Ctrl+Enter / Ctrl+J in ncurses raw mode)
+static constexpr int KEY_CTRL_ENTER = 0; // Raw key code 0 (Ctrl+Enter / Ctrl+J in ncurses raw mod
+static constexpr int KEY_TAB = 9;
+// static constexpr int KEY_SHIFT_ENTER = 343; //
 
 // Helper: check if string is whitespace-only
 static bool isWhitespaceOnly(const std::string& s) {
@@ -27,7 +29,6 @@ static bool isWhitespaceOnly(const std::string& s) {
 void tuiAddOutputLine(TuiState& state, const std::string& line) {
     std::lock_guard<std::mutex> lock(state.outputMutex);
     state.outputLines.push_back(line);
-    // Since we add exactly one line, an if suffices.
     if (state.outputLines.size() > state.MAX_OUTPUT_LINES) {
         state.outputLines.pop_front(); // O(1) with deque
     }
@@ -143,7 +144,6 @@ void tuiRenderFrame(ImTui::TScreen* screen) {
 bool tuiRender(TuiState& state) {
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
 
-    /* Minimum terminal size check */
     static constexpr float MIN_TERMINAL_WIDTH = 40.0f;
     static constexpr float MIN_TERMINAL_HEIGHT = 15.0f;
 
@@ -154,25 +154,18 @@ bool tuiRender(TuiState& state) {
         return true;
     }
 
-    // Keyboard shortcuts (ImGui v1.81 compatible)
     ImGuiIO& io = ImGui::GetIO();
-    // Exit on Ctrl+C (ImGui key index) or Ctrl+D (raw ncurses code)
+
     if (io.KeyCtrl &&
         (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_C)) || ImGui::IsKeyPressed(KEY_CTRL_D))) {
         return false;
     }
-    if (io.KeyCtrl && ImGui::IsKeyPressed(KEY_CTRL_L)) {
-        if (!ImGui::IsAnyItemActive()) { // Only clear if no widget has focus
-            tuiClearOutput(state);
-        }
+    if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        state.inputBuf.clear();
     }
 
-    // End key: scroll output to bottom and re-enable auto-scroll
-    if (ImGui::IsKeyPressed(ImGuiKey_End)) {
-        state.autoScroll = true;
-    }
+    auto logFile = fopen("log.txt", "a");
 
-    // ── Parent Window (fullscreen, invisible) ─────────────────────────────────
     // Required: BeginChild calls must be nested inside a Begin/End block.
     // Without a parent window, BeginChild creates an implicit window whose
     // auto-positioning offsets the layout, making the TUI unusable.
@@ -184,173 +177,110 @@ bool tuiRender(TuiState& state) {
     ImGui::SetNextWindowSize(DisplaySize, ImGuiCond_Always);
     ImGui::Begin("##TuiRoot", nullptr, parentFlags);
 
-    // ── Output Area ──────────────────────────────────────────────────────────
-    // Clamp height to avoid negative values on very small terminals
-    ImVec2 outPos(0, 0);
-    ImVec2 outSize(DisplaySize.x, std::max(1.0f, DisplaySize.y - 3));
+    { // Output Area
+        // Clamp height to avoid negative values on very small terminals
+        ImVec2 outPos(0, 0);
+        ImVec2 outSize(DisplaySize.x, std::max(1.0f, DisplaySize.y - 3));
+        ImGui::SetCursorPos(outPos);
+        ImGuiWindowFlags outFlags = ImGuiWindowFlags_HorizontalScrollbar;
 
-    ImGui::SetCursorPos(outPos);
+        ImGui::BeginChild("llm_output", outSize, false, outFlags);
 
-    ImGuiWindowFlags outFlags = ImGuiWindowFlags_HorizontalScrollbar;
-    ImGui::BeginChild("output", outSize, false, outFlags);
-
-    // Copy lines under lock, then render without holding the mutex.
-    // This minimizes lock duration and eliminates deadlock risk from
-    // ImGui internals calling back into the TUI API.
-    std::vector<std::string> linesCopy;
-    {
-        std::lock_guard<std::mutex> lock(state.outputMutex);
-        linesCopy = std::vector<std::string>(state.outputLines.begin(), state.outputLines.end());
-    }
-
-    for (const auto& line : linesCopy) {
-        ImGui::TextUnformatted(line.c_str());
-    }
-
-    // Auto-scroll management (must stay inside child scope)
-    if (state.autoScroll) {
-        ImGui::SetScrollHereY(1.0f);
-    }
-
-    // Auto-scroll detection: capture scroll state BEFORE EndChild
-    // so we read the "output" child's actual scroll values.
-    float scrollY = ImGui::GetScrollY();
-    float scrollMax = ImGui::GetScrollMaxY();
-    if (scrollMax > 0.0f) {
-        state.autoScroll = (scrollY >= scrollMax - 1.0f);
-    }
-
-    ImGui::EndChild();
-
-    // ── Task 6: Input Area ───────────────────────────────────────────────────────
-    ImVec2 inputPos(0, DisplaySize.y - 3);
-    ImVec2 inputSize(DisplaySize.x, 2);
-
-    ImGui::SetCursorPos(inputPos);
-
-    ImGuiWindowFlags inputFlags = ImGuiWindowFlags_None;
-    ImGui::BeginChild("input", inputSize, false, inputFlags);
-
-    ImGuiInputTextFlags flags = ImGuiInputTextFlags_CallbackResize;
-
-    // Default focus on input field so user can type immediately (first frame only)
-    static bool inputFocused = false;
-    if (!inputFocused) {
-        ImGui::SetKeyboardFocusHere();
-        inputFocused = true;
-    }
-
-    // Standard ImGui pattern: pass current buffer size + 1 for null terminator.
-    // InputResizeCallback handles dynamic resizing via ImGuiInputTextFlags_CallbackResize.
-    ImGui::InputTextMultiline("##input", state.inputBuf.data(), state.inputBuf.size() + 1,
-                              ImVec2(-FLT_MIN, 0), flags, InputResizeCallback, &state.inputBuf);
-
-    // Detect Ctrl+Enter via raw ncurses key code (code 0).
-    // imtui never reports io.KeyCtrl, so ImGui's CtrlEnterForNewLine flag
-    // cannot work. We check keysDown[0] directly — same pattern as
-    // KEY_CTRL_D and KEY_CTRL_L.
-
-    bool submitted = ImGui::IsItemActive() && ImGui::IsKeyPressed(KEY_CTRL_ENTER);
-
-    // All input state modifications are protected by outputMutex to prevent
-    // data races with worker threads calling tuiGetInput/tuiClearInput etc.
-    {
-        std::lock_guard<std::mutex> lock(state.outputMutex);
-
-        if (submitted) {
-            std::string query = state.inputBuf;
-            // Strip trailing newline if present (ImGui inserts it before we detect Ctrl+Enter)
-            if (!query.empty() && query.back() == '\n') {
-                query.pop_back();
-            }
-            state.submitReady = true;
-            state.submitQuery = query;
-
-            if (!isWhitespaceOnly(query) && state.historyPos == -1) {
-                if (state.inputHistory.empty() || state.inputHistory.back() != query) {
-                    state.inputHistory.push_back(query);
-                    if (state.inputHistory.size() > state.MAX_HISTORY) {
-                        state.inputHistory.erase(state.inputHistory.begin());
-                    }
-                }
-            }
-
-            state.historyPos = -1;
-            state.inputBuf.clear(); // Clear immediately for instant visual feedback
+        std::vector<std::string> linesCopy(state.outputLines.begin(), state.outputLines.end());
+        for (const auto& line : linesCopy) {
+            ImGui::TextUnformatted(line.c_str());
         }
 
-        // Escape clears the input buffer
-        if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::EndChild();
+    }
+
+    { // Input Area
+        ImVec2 inputPos(0, DisplaySize.y - 3);
+        ImVec2 inputSize(DisplaySize.x, 2);
+        ImGui::SetCursorPos(inputPos);
+        ImGuiWindowFlags inputFlags = ImGuiWindowFlags_None;
+
+        ImGui::BeginChild("user_input", inputSize, false, inputFlags);
+
+        // Compute available width in the current window/content region
+        float availWidth = ImGui::GetContentRegionAvail().x;
+
+        // Estimate button width (text + padding)
+        float buttonWidth =
+            ImGui::CalcTextSize("Send   ").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        float spacing = ImGui::GetStyle().ItemSpacing.x;
+
+        // Input field width = remaining space
+        float inputWidth = availWidth - buttonWidth - spacing;
+        if (inputWidth < 0.0f)
+            inputWidth = 0.0f;
+
+        // Height for exactly two lines of text (including frame padding)
+        float lineHeight = ImGui::GetTextLineHeight();
+        float framePaddingY = ImGui::GetStyle().FramePadding.y;
+        float inputHeight = lineHeight * 2.0f + framePaddingY * 2.0f;
+
+        if (state.isSubmitted) {
+            ImGui::SetKeyboardFocusHere();
+            state.isSubmitted = false;
+        }
+        ImGui::InputTextMultiline("##user_input", state.inputBuf.data(), state.inputBuf.size() + 1,
+                                  ImVec2(inputWidth, inputHeight),
+                                  ImGuiInputTextFlags_CallbackResize, InputResizeCallback,
+                                  &state.inputBuf);
+        // Manual Tab navigation because ImTui doesn't map Tab to ImGuiKey_Tab
+        if (ImGui::IsItemActive() && ImGui::IsKeyPressed(KEY_TAB) && !ImGui::GetIO().KeyShift) {
+            std::fprintf(logFile, "tab detected? yes\n");
+        }
+
+        ImGui::SameLine();
+        state.isSubmitted =
+            ImGui::InputText("llm_send", "Send", 4,
+                             ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_EnterReturnsTrue);
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::Text("Press enter to send the query to the LLM for processing");
+            ImGui::EndTooltip();
+        }
+
+        if (state.isSubmitted) {
+            std::string query = state.inputBuf;
+            state.submitReady = true;
+            state.submitQuery = query;
             state.inputBuf.clear();
         }
 
-        // History navigation: Ctrl+Up/Ctrl+Down to avoid conflict with
-        // InputTextMultiline's internal cursor movement.
-        if (ImGui::IsItemActive() && ImGui::GetIO().KeyCtrl) {
-            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
-                // Navigate backward in history
-                if (state.historyPos == -1) {
-                    // First press: save draft and push current input to history.
-                    state.draftBuf = state.inputBuf;
-                    if (state.inputHistory.empty() || state.inputHistory.back() != state.inputBuf) {
-                        state.inputHistory.push_back(state.inputBuf);
-                        if (state.inputHistory.size() > state.MAX_HISTORY) {
-                            state.inputHistory.erase(state.inputHistory.begin());
-                        }
-                    }
-                    /* Fix: bounds check to prevent underflow if history has 0 or 1 elements.
-                       After push above, size >= 1. If size == 1, historyPos = -1 (no history to
-                       navigate). */
-                    int histSize = static_cast<int>(state.inputHistory.size());
-                    state.historyPos = (histSize > 1) ? histSize - 2 : -1;
+        ImGui::EndChild();
+    }
 
-                } else if (state.historyPos > 0) {
-                    state.historyPos--;
-                }
-                if (state.historyPos >= 0) {
-                    state.inputBuf = state.inputHistory[state.historyPos];
-                }
-            } else if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
-                // Navigate forward in history
-                if (state.historyPos >= 0) {
-                    state.historyPos++;
-                    if (static_cast<size_t>(state.historyPos) < state.inputHistory.size()) {
-                        state.inputBuf = state.inputHistory[state.historyPos];
-                    } else {
-                        // Past the end: restore the saved draft and reset.
-                        state.inputBuf = state.draftBuf;
-                        state.historyPos = -1;
-                    }
-                }
-            }
+    { // Status line
+        ImVec2 statusPos(0, DisplaySize.y - 1);
+        ImVec2 statusSize(DisplaySize.x, 1);
+        ImGui::SetCursorPos(statusPos);
+        ImGuiWindowFlags statusFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                                       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar |
+                                       ImGuiWindowFlags_NoScrollbar |
+                                       ImGuiWindowFlags_NoScrollWithMouse;
+
+        ImGui::BeginChild("status", statusSize, false, statusFlags);
+
+        static constexpr std::string_view defaultStatus =
+            "Context: 0/0 tokens | Model: none | Ready";
+
+        if (state.statusText.empty()) {
+            ImGui::TextUnformatted(defaultStatus.data());
+        } else {
+            ImGui::TextUnformatted(state.statusText.c_str());
         }
+
+        ImGui::EndChild();
     }
 
-    ImGui::EndChild();
+    ImGui::End();
 
-    // ── Task 7: Status Line ──────────────────────────────────────────────────
-    ImVec2 statusPos(0, DisplaySize.y - 1);
-    ImVec2 statusSize(DisplaySize.x, 1);
+    state.outputLines.push_back("hello\n");
 
-    ImGui::SetCursorPos(statusPos);
-
-    ImGuiWindowFlags statusFlags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar |
-                                   ImGuiWindowFlags_NoScrollbar |
-                                   ImGuiWindowFlags_NoScrollWithMouse;
-    ImGui::BeginChild("status", statusSize, false, statusFlags);
-
-    static constexpr std::string_view defaultStatus = "Context: 0/0 tokens | Model: none | Ready";
-
-    if (state.statusText.empty()) {
-        ImGui::TextUnformatted(defaultStatus.data());
-    } else {
-        ImGui::TextUnformatted(state.statusText.c_str());
-    }
-
-    ImGui::EndChild();
-
-    ImGui::End(); // End parent "##TuiRoot" window
+    fclose(logFile);
 
     return true;
 }
