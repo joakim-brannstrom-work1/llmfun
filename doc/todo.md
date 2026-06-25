@@ -38,6 +38,7 @@ FeedbackEngine. When it triggers, such as a tool reaching a high enough threshol
 - each implementation task should be written to its own file with enough information for the task to be finished. The current design force the LLM to read the whole `implementation_plan.md` before it can start on a task.
 - there should be a mode where the pipeline execute all tasks and then optionally ask the user for input
 - there should be something like /plan update, which goes through the pipeline but with other steering prompt such that the LLM understand that it should fix things in the system design and implementation plan.
+- the output from the query functions should contain the database the chunk came from and then this should be part of the Result that the LLM see so it know which database to search further in.
 
 # rag
 - Add a warning when the DB is wiped. Need to add migration in the future.
