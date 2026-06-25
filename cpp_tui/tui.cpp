@@ -174,10 +174,11 @@ bool tuiRender(TuiState& state) {
     ImGuiWindowFlags parentFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                                    ImGuiWindowFlags_NoScrollWithMouse |
-                                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground;
+                                   ImGuiWindowFlags_NoBackground;
+    static bool noClose = true;
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
     ImGui::SetNextWindowSize(DisplaySize, ImGuiCond_Always);
-    ImGui::Begin("##TuiRoot", nullptr, parentFlags);
+    ImGui::Begin("##TuiRoot", &noClose, parentFlags);
 
     const auto inputBufLines =
         std::min(20, std::max(2, static_cast<int>(countNewLines(state.inputBuf))));
