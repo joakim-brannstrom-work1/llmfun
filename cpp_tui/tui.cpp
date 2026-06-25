@@ -176,10 +176,13 @@ bool tuiRender(TuiState& state) {
     ImGui::SetNextWindowSize(DisplaySize, ImGuiCond_Always);
     ImGui::Begin("##TuiRoot", nullptr, parentFlags);
 
+    const auto inputBufLines =
+        std::min(20, std::max(2, static_cast<int>(countNewLines(state.inputBuf))));
+
     { // Output Area
         // Clamp height to avoid negative values on very small terminals
         ImVec2 outPos(0, 0);
-        ImVec2 outSize(DisplaySize.x, std::max(1.0f, DisplaySize.y - 3));
+        ImVec2 outSize(DisplaySize.x, std::max(1.0f, DisplaySize.y - 3 - inputBufLines));
         ImGui::SetCursorPos(outPos);
         ImGuiWindowFlags outFlags = ImGuiWindowFlags_HorizontalScrollbar;
 
@@ -194,8 +197,8 @@ bool tuiRender(TuiState& state) {
     }
 
     { // Input Area
-        ImVec2 inputPos(0, DisplaySize.y - 3);
-        ImVec2 inputSize(DisplaySize.x, 2);
+        ImVec2 inputPos(0, DisplaySize.y - 3 - inputBufLines);
+        ImVec2 inputSize(DisplaySize.x, 2 + inputBufLines);
         ImGui::SetCursorPos(inputPos);
         ImGuiWindowFlags inputFlags = ImGuiWindowFlags_None;
 
@@ -215,13 +218,13 @@ bool tuiRender(TuiState& state) {
             inputWidth = 0.0f;
 
         // Height for exactly two lines of text (including frame padding)
-        float lineHeight = ImGui::GetTextLineHeight();
+        float lineHeight = 1.0f + ImGui::GetTextLineHeight() * inputBufLines;
         float framePaddingY = ImGui::GetStyle().FramePadding.y;
-        float inputHeight = lineHeight * 2.0f + framePaddingY * 2.0f;
+        float inputHeight = lineHeight + framePaddingY * 2.0f;
 
         if (state.isSubmitted) {
-            ImGui::SetKeyboardFocusHere();
             state.isSubmitted = false;
+            ImGui::SetKeyboardFocusHere();
         }
         ImGui::InputTextMultiline("##user_input", state.inputBuf.data(), state.inputBuf.size() + 1,
                                   ImVec2(inputWidth, inputHeight),
