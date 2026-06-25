@@ -116,6 +116,7 @@ bool tuiInit(ImTui::TScreen** screen) {
     }
 
     ImTui_ImplText_Init();
+
     return true;
 }
 
@@ -142,6 +143,7 @@ void tuiRenderFrame(ImTui::TScreen* screen) {
 // ─── Task 5: Render Function — Output Area ───────────────────────────────────
 
 bool tuiRender(TuiState& state) {
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
 
     static constexpr float MIN_TERMINAL_WIDTH = 40.0f;
@@ -234,12 +236,14 @@ bool tuiRender(TuiState& state) {
         }
 
         ImGui::SameLine();
+        static std::string buttonText("Send");
         state.isSubmitted =
-            ImGui::InputText("llm_send", "Send", 4,
+            ImGui::InputText("llm_send", const_cast<char*>(buttonText.c_str()), 4,
                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_EnterReturnsTrue);
+        state.isSubmitted = state.isSubmitted || ImGui::IsItemActive();
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
-            ImGui::Text("Press enter to send the query to the LLM for processing");
+            ImGui::Text("Send the query to the LLM for processing");
             ImGui::EndTooltip();
         }
 
