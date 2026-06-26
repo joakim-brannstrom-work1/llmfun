@@ -29,7 +29,6 @@ int main() {
     }
 
     tuiSetStatusText(state, makeStr("Context: 0/0 tokens | Model: none | Ready"));
-    tuiAddOutputLine(state, makeStr("llmfun TUI - type your query below"));
 
     while (true) {
         tuiBackendNewFrame();
@@ -40,9 +39,10 @@ int main() {
         if (tuiIsSubmitReady(state) != 0) {
             String query = tuiGetSubmitQuery(state);
             if (query.data && query.len > 0) {
-                std::string display("> ");
-                display.append(query.data, query.len);
-                tuiAddOutputLine(state, String{display.c_str(), display.size()});
+                std::string text(query.data, query.len);
+                std::string summary = text.size() > 30 ? text.substr(0, 30) : text;
+                tuiAddChatMessage(state, String{summary.c_str(), summary.size()},
+                                  String{text.c_str(), text.size()});
             }
             String_Free(query);
             tuiResetSubmit(state);

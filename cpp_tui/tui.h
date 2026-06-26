@@ -11,6 +11,7 @@
 namespace llmfun::tui {
 
 struct ChatMessage {
+    std::string summary;
     std::string text;
 };
 

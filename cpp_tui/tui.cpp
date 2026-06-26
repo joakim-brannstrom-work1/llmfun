@@ -170,11 +170,15 @@ void renderTabChat(TuiState& state, FILE* logFile) {
         ImGui::BeginChild("llm_output", outSize, false, outFlags);
 
         std::vector<ChatMessage> messages(state.outputLines.begin(), state.outputLines.end());
-        for (const auto& msg : messages) {
-            ImGui::PushTextWrapPos(0.0f);
-            ImGui::TextUnformatted(msg.text.c_str());
-            ImGui::PopTextWrapPos();
-            ColoredSeparator(IM_COL32(255, 100, 100, 255), 0.0f, 1.0f);
+        // ImGuiTreeNodeFlags_DefaultOpen
+        for (size_t i = 0; i < messages.size(); ++i) {
+            const auto flags = (i == messages.size() - 1) ? ImGuiTreeNodeFlags_DefaultOpen
+                                                          : ImGuiTreeNodeFlags_None;
+            if (ImGui::CollapsingHeader(messages[i].summary.c_str(), flags)) {
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(messages[i].text.c_str());
+                ImGui::PopTextWrapPos();
+            }
         }
 
         // Auto-scroll management (must stay inside child scope)

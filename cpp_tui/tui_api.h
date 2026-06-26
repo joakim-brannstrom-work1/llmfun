@@ -246,7 +246,7 @@ int tuiRender(TuiState* state);
  * Thread-safe: acquires internal mutex.
  * Null-safe: no-op if state is NULL.
  */
-void tuiAddOutputLine(TuiState* state, String line);
+void tuiAddChatMessage(TuiState* state, String summary, String text);
 
 /*
  * Clear all lines from the output display area.
