@@ -14,8 +14,22 @@ namespace llmfun::tui {
 
 // Named key codes for Ctrl shortcuts (ncurses raw key codes)
 static constexpr int KEY_CTRL_D = 4; // Ctrl+D exit
+
+template <typename... Args> void log(FILE* logFile, std::string format, Args&&... args) {
+    if (logFile != nullptr) {
+        std::fprintf(logFile, format.c_str(), std::forward<Args>(args)...);
+    }
+}
+
 bool isWhitespaceOnly(const std::string& s) {
-    return std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isspace(c); });
+    if (s.empty())
+        return true;
+
+    bool allTrue = true;
+    for (auto c : s) {
+        allTrue = allTrue && (std::isspace(c) || c == '\0');
+    }
+    return allTrue;
 }
 
 size_t countNewLines(const std::string& str) { return std::count(str.begin(), str.end(), '\n'); }
@@ -23,11 +37,11 @@ size_t countNewLines(const std::string& str) { return std::count(str.begin(), st
 // outputMutex protects: outputLines, statusText, inputBuf, submitReady, submitQuery.
 // Main-thread-only (no lock needed): autoScroll, historyPos, draftBuf, inputHistory.
 
-void tuiAddOutputLine(TuiState& state, const std::string& line) {
+void tuiAddOutputLine(TuiState& state, const ChatMessage& msg) {
     std::lock_guard<std::mutex> lock(state.outputMutex);
-    state.outputLines.push_back(line);
+    state.outputLines.push_back(msg);
     if (state.outputLines.size() > state.MAX_OUTPUT_LINES) {
-        state.outputLines.pop_front(); // O(1) with deque
+        state.outputLines.pop_front();
     }
 }
 
@@ -67,8 +81,6 @@ std::string tuiGetSubmitQuery(const TuiState& state) {
     return state.submitQuery;
 }
 
-// ─── Input Resize Callback (static, per-frame reuse) ─────────────────────────
-// Fix: Extracted from lambda to avoid per-frame recreation. Matches imgui_stdlib pattern.
 static int InputResizeCallback(ImGuiInputTextCallbackData* data) {
     if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
         std::string* str = reinterpret_cast<std::string*>(data->UserData);
@@ -78,9 +90,15 @@ static int InputResizeCallback(ImGuiInputTextCallbackData* data) {
     return 0;
 }
 
-// ─── Task 4: Theme Application ───────────────────────────────────────────────
+void ColoredSeparator(ImU32 color, float thickness = 1.0f, float spacing = 4.0f) {
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    ImVec2 start = ImGui::GetCursorScreenPos();
+    ImVec2 end = ImVec2(start.x + ImGui::GetContentRegionAvail().x, start.y);
+    draw_list->AddLine(start, end, color, thickness);
+    ImGui::Dummy(ImVec2(0, spacing));
+}
 
-static void applyTheme() {
+void applyTheme() {
     // Start with StyleColorsDark as a consistent base for all ~35 color slots,
     // then override the specific colors that differ from the defaults.
     ImGui::StyleColorsDark();
@@ -139,7 +157,7 @@ void tuiRenderFrame(ImTui::TScreen* screen) {
 
 // ─── Task 5: Render Function — Output Area ───────────────────────────────────
 
-void renderTabChat(TuiState& state) {
+void renderTabChat(TuiState& state, FILE* logFile) {
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
 
     const auto inputBufLines =
@@ -147,16 +165,23 @@ void renderTabChat(TuiState& state) {
 
     { // Output Area
         // Clamp height to avoid negative values on very small terminals
-        ImVec2 outPos(0, 0);
+        ImVec2 outPos(0, 1.0f);
         ImVec2 outSize(DisplaySize.x, std::max(1.0f, DisplaySize.y - 3 - inputBufLines));
         ImGui::SetCursorPos(outPos);
         ImGuiWindowFlags outFlags = ImGuiWindowFlags_HorizontalScrollbar;
 
         ImGui::BeginChild("llm_output", outSize, false, outFlags);
 
-        std::vector<std::string> linesCopy(state.outputLines.begin(), state.outputLines.end());
-        for (const auto& line : linesCopy) {
-            ImGui::TextUnformatted(line.c_str());
+        std::vector<ChatMessage> messages(state.outputLines.begin(), state.outputLines.end());
+        bool isFirst = true;
+        for (const auto& msg : messages) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(msg.text.c_str());
+            ImGui::PopTextWrapPos();
+            if (!isFirst) {
+                ColoredSeparator(IM_COL32(255, 100, 100, 255), 0.0f, 1.0f);
+            }
+            isFirst = false;
         }
 
         // Auto-scroll management (must stay inside child scope)
@@ -224,8 +249,19 @@ void renderTabChat(TuiState& state) {
 
         if (state.isSubmitted) {
             std::string query = state.inputBuf;
-            state.submitReady = true;
-            state.submitQuery = query;
+            // Strip trailing newline if present (ImGui inserts it before we detect Ctrl+Enter)
+            if (!query.empty() && query.back() == '\n') {
+                query.pop_back();
+            }
+            log(logFile, "query: %s isWhitespace:%d\n", query.c_str(), isWhitespaceOnly(query));
+            if (!isWhitespaceOnly(query)) {
+                for (auto c : query) {
+                    log(logFile, "%d ", (unsigned int)c);
+                }
+                log(logFile, "\n", 42);
+                state.submitReady = true;
+                state.submitQuery = query;
+            }
             state.inputBuf.clear();
         }
 
@@ -256,9 +292,9 @@ void renderTabChat(TuiState& state) {
     }
 }
 
-void renderTabLog(TuiState& state) {}
+void renderTabLog(TuiState& state, FILE* logFile) {}
 
-void renderMainWindow(TuiState& state) {
+void renderMainWindow(TuiState& state, FILE* logFile) {
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
 
     static int activeTab = 0;
@@ -282,10 +318,10 @@ void renderMainWindow(TuiState& state) {
 
     switch (activeTab) {
     case 0:
-        renderTabChat(state);
+        renderTabChat(state, logFile);
         break;
     case 1:
-        renderTabLog(state);
+        renderTabLog(state, logFile);
         break;
     }
 }
@@ -331,7 +367,7 @@ bool tuiRender(TuiState& state) {
     ImGui::SetNextWindowSize(DisplaySize, ImGuiCond_Always);
     ImGui::Begin("##TuiRoot", &noClose, parentFlags);
 
-    renderMainWindow(state);
+    renderMainWindow(state, logFile);
 
     ImGui::End();
 

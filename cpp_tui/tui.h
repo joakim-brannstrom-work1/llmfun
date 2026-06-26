@@ -10,12 +10,14 @@
 
 namespace llmfun::tui {
 
-struct TuiState {
-    // Note: This struct is non-copyable and non-movable due to std::mutex.
-    // Always pass by reference (TuiState&) to avoid accidental copies.
+struct ChatMessage {
+    std::string text;
+};
 
-    // Bounded output display (deque for O(1) FIFO eviction)
-    std::deque<std::string> outputLines;
+// Note: This struct is non-copyable and non-movable due to std::mutex.
+// Always pass by reference (TuiState&) to avoid accidental copies.
+struct TuiState {
+    std::deque<ChatMessage> outputLines;
     static constexpr size_t MAX_OUTPUT_LINES = 10000;
 
     // Auto-scroll flag
@@ -23,7 +25,6 @@ struct TuiState {
 
     // Dynamic input buffer
     std::string inputBuf;
-    std::string draftBuf; // saves current input when entering history navigation
 
     // Submission flag
     bool submitReady = false;
@@ -61,7 +62,7 @@ bool tuiRender(TuiState& state);
 
 /// Add an output line with FIFO eviction if bound exceeded.
 /// Thread-safe: acquires outputMutex.
-void tuiAddOutputLine(TuiState& state, const std::string& line);
+void tuiAddOutputLine(TuiState& state, const ChatMessage& msg);
 
 /// Clear all output lines.
 /// Thread-safe: acquires outputMutex.
