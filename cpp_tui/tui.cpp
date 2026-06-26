@@ -139,46 +139,8 @@ void tuiRenderFrame(ImTui::TScreen* screen) {
 
 // ─── Task 5: Render Function — Output Area ───────────────────────────────────
 
-bool tuiRender(TuiState& state) {
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+void renderTabChat(TuiState& state) {
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
-
-    static constexpr float MIN_TERMINAL_WIDTH = 40.0f;
-    static constexpr float MIN_TERMINAL_HEIGHT = 15.0f;
-
-    if (DisplaySize.x < MIN_TERMINAL_WIDTH || DisplaySize.y < MIN_TERMINAL_HEIGHT) {
-        ImGui::Begin("Error");
-        ImGui::Text("Terminal too small! Minimum size: 40x15");
-        ImGui::End();
-        return true;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-
-    if (io.KeyCtrl &&
-        (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_C)) || ImGui::IsKeyPressed(KEY_CTRL_D))) {
-        return false;
-    }
-    if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        state.inputBuf.clear();
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_End)) {
-        state.autoScroll = true;
-    }
-
-    auto logFile = fopen("log.txt", "a");
-
-    // Required: BeginChild calls must be nested inside a Begin/End block.
-    // Without a parent window, BeginChild creates an implicit window whose
-    // auto-positioning offsets the layout, making the TUI unusable.
-    ImGuiWindowFlags parentFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                                   ImGuiWindowFlags_NoScrollWithMouse |
-                                   ImGuiWindowFlags_NoBackground;
-    static bool noClose = true;
-    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(DisplaySize, ImGuiCond_Always);
-    ImGui::Begin("##TuiRoot", &noClose, parentFlags);
 
     const auto inputBufLines =
         std::min(20, std::max(2, static_cast<int>(countNewLines(state.inputBuf))));
@@ -292,6 +254,84 @@ bool tuiRender(TuiState& state) {
 
         ImGui::EndChild();
     }
+}
+
+void renderTabLog(TuiState& state) {}
+
+void renderMainWindow(TuiState& state) {
+    ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
+
+    static int activeTab = 0;
+
+    bool showChat{false};
+    bool showLog{false};
+    if (ImGui::BeginMenuBar()) {
+        if (ImGui::BeginMenu("Tab")) {
+            ImGui::MenuItem("Chat", nullptr, &showChat);
+            ImGui::MenuItem("Log", nullptr, &showLog);
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenuBar();
+    }
+    if (showChat) {
+        activeTab = 0;
+    }
+    if (showLog) {
+        activeTab = 1;
+    }
+
+    switch (activeTab) {
+    case 0:
+        renderTabChat(state);
+        break;
+    case 1:
+        renderTabLog(state);
+        break;
+    }
+}
+
+bool tuiRender(TuiState& state) {
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
+
+    static constexpr float MIN_TERMINAL_WIDTH = 40.0f;
+    static constexpr float MIN_TERMINAL_HEIGHT = 15.0f;
+
+    if (DisplaySize.x < MIN_TERMINAL_WIDTH || DisplaySize.y < MIN_TERMINAL_HEIGHT) {
+        ImGui::Begin("Error");
+        ImGui::Text("Terminal too small! Minimum size: 40x15");
+        ImGui::End();
+        return true;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+
+    if (io.KeyCtrl &&
+        (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_C)) || ImGui::IsKeyPressed(KEY_CTRL_D))) {
+        return false;
+    }
+    if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        state.inputBuf.clear();
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_End)) {
+        state.autoScroll = true;
+    }
+
+    auto logFile = fopen("log.txt", "a");
+
+    // Required: BeginChild calls must be nested inside a Begin/End block.
+    // Without a parent window, BeginChild creates an implicit window whose
+    // auto-positioning offsets the layout, making the TUI unusable.
+    ImGuiWindowFlags parentFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar |
+                                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                                   ImGuiWindowFlags_NoScrollWithMouse |
+                                   ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_MenuBar;
+    static bool noClose = true;
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(DisplaySize, ImGuiCond_Always);
+    ImGui::Begin("##TuiRoot", &noClose, parentFlags);
+
+    renderMainWindow(state);
 
     ImGui::End();
 
