@@ -34,9 +34,6 @@ bool isWhitespaceOnly(const std::string& s) {
 
 size_t countNewLines(const std::string& str) { return std::count(str.begin(), str.end(), '\n'); }
 
-// outputMutex protects: outputLines, statusText, inputBuf, submitReady, submitQuery.
-// Main-thread-only (no lock needed): autoScroll, historyPos, draftBuf, inputHistory.
-
 void tuiAddOutputLine(TuiState& state, const ChatMessage& msg) {
     std::lock_guard<std::mutex> lock(state.outputMutex);
     state.outputLines.push_back(msg);
@@ -173,15 +170,11 @@ void renderTabChat(TuiState& state, FILE* logFile) {
         ImGui::BeginChild("llm_output", outSize, false, outFlags);
 
         std::vector<ChatMessage> messages(state.outputLines.begin(), state.outputLines.end());
-        bool isFirst = true;
         for (const auto& msg : messages) {
             ImGui::PushTextWrapPos(0.0f);
             ImGui::TextUnformatted(msg.text.c_str());
             ImGui::PopTextWrapPos();
-            if (!isFirst) {
-                ColoredSeparator(IM_COL32(255, 100, 100, 255), 0.0f, 1.0f);
-            }
-            isFirst = false;
+            ColoredSeparator(IM_COL32(255, 100, 100, 255), 0.0f, 1.0f);
         }
 
         // Auto-scroll management (must stay inside child scope)

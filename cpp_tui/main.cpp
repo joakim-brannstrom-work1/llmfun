@@ -30,7 +30,6 @@ int main() {
 
     tuiSetStatusText(state, makeStr("Context: 0/0 tokens | Model: none | Ready"));
     tuiAddOutputLine(state, makeStr("llmfun TUI - type your query below"));
-    tuiAddOutputLine(state, String{"", 0});
 
     while (true) {
         tuiBackendNewFrame();
@@ -45,7 +44,6 @@ int main() {
                 display.append(query.data, query.len);
                 tuiAddOutputLine(state, String{display.c_str(), display.size()});
             }
-            tuiAddOutputLine(state, String{"", 0});
             String_Free(query);
             tuiResetSubmit(state);
         }
