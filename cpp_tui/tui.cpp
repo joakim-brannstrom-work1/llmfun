@@ -58,28 +58,28 @@ void tuiSetStatusText(TuiState& state, const std::string& text) {
 
 std::string tuiGetInput(const TuiState& state) {
     std::lock_guard<std::mutex> lock(state.outputMutex);
-    return state.inputBuf;
+    return state.userQuery.inputBuf;
 }
 
 void tuiClearInput(TuiState& state) {
     std::lock_guard<std::mutex> lock(state.outputMutex);
-    state.inputBuf.clear();
+    state.userQuery.inputBuf.clear();
 }
 
 bool tuiIsSubmitReady(const TuiState& state) {
     std::lock_guard<std::mutex> lock(state.outputMutex);
-    return state.submitReady;
+    return state.userQuery.submitReady;
 }
 
 void tuiResetSubmit(TuiState& state) {
     std::lock_guard<std::mutex> lock(state.outputMutex);
-    state.submitReady = false;
-    state.submitQuery.clear();
+    state.userQuery.submitReady = false;
+    state.userQuery.submitQuery.clear();
 }
 
 std::string tuiGetSubmitQuery(const TuiState& state) {
     std::lock_guard<std::mutex> lock(state.outputMutex);
-    return state.submitQuery;
+    return state.userQuery.submitQuery;
 }
 
 static int InputResizeCallback(ImGuiInputTextCallbackData* data) {
@@ -160,7 +160,7 @@ void renderTabChat(TuiState& state, Log& log) {
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
 
     const auto inputBufLines =
-        std::min(20, std::max(2, static_cast<int>(countNewLines(state.inputBuf))));
+        std::min(20, std::max(2, static_cast<int>(countNewLines(state.userQuery.inputBuf))));
 
     { // Output Area
         // Clamp height to avoid negative values on very small terminals
@@ -224,38 +224,38 @@ void renderTabChat(TuiState& state, Log& log) {
         float framePaddingY = ImGui::GetStyle().FramePadding.y;
         float inputHeight = lineHeight + framePaddingY * 2.0f;
 
-        if (state.isSubmitted) {
-            state.isSubmitted = false;
+        if (state.userQuery.isSubmitted) {
+            state.userQuery.isSubmitted = false;
             ImGui::SetKeyboardFocusHere();
         }
-        ImGui::InputTextMultiline("##user_input", state.inputBuf.data(), state.inputBuf.size() + 1,
-                                  ImVec2(inputWidth, inputHeight),
-                                  ImGuiInputTextFlags_CallbackResize, InputResizeCallback,
-                                  &state.inputBuf);
+        ImGui::InputTextMultiline(
+            "##user_input", state.userQuery.inputBuf.data(), state.userQuery.inputBuf.size() + 1,
+            ImVec2(inputWidth, inputHeight), ImGuiInputTextFlags_CallbackResize,
+            InputResizeCallback, &state.userQuery.inputBuf);
 
         ImGui::SameLine();
         static std::string buttonText("Send");
-        state.isSubmitted =
+        state.userQuery.isSubmitted =
             ImGui::InputText("llm_send", const_cast<char*>(buttonText.c_str()), 4,
                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_EnterReturnsTrue);
-        state.isSubmitted = state.isSubmitted || ImGui::IsItemActive();
+        state.userQuery.isSubmitted = state.userQuery.isSubmitted || ImGui::IsItemActive();
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
             ImGui::Text("Send the query to the LLM for processing");
             ImGui::EndTooltip();
         }
 
-        if (state.isSubmitted) {
-            std::string query = state.inputBuf;
+        if (state.userQuery.isSubmitted) {
+            std::string query = state.userQuery.inputBuf;
             // Strip trailing newline if present (ImGui inserts it before we detect Ctrl+Enter)
             if (!query.empty() && query.back() == '\n') {
                 query.pop_back();
             }
             if (!isWhitespaceOnly(query)) {
-                state.submitReady = true;
-                state.submitQuery = query;
+                state.userQuery.submitReady = true;
+                state.userQuery.submitQuery = query;
             }
-            state.inputBuf.clear();
+            state.userQuery.inputBuf.clear();
         }
 
         ImGui::EndChild();
@@ -340,7 +340,7 @@ bool tuiRender(TuiState& state) {
         return false;
     }
     if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        state.inputBuf.clear();
+        state.userQuery.inputBuf.clear();
     }
     if (ImGui::IsKeyPressed(ImGuiKey_End)) {
         state.autoScroll = true;

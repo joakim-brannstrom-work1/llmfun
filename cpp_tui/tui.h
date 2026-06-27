@@ -15,15 +15,7 @@ struct ChatMessage {
     std::string text;
 };
 
-// Note: This struct is non-copyable and non-movable due to std::mutex.
-// Always pass by reference (TuiState&) to avoid accidental copies.
-struct TuiState {
-    std::deque<ChatMessage> outputLines;
-    static constexpr size_t MAX_OUTPUT_LINES = 10000;
-
-    // Auto-scroll flag
-    bool autoScroll = true;
-
+struct UserQueryState {
     // Dynamic input buffer
     std::string inputBuf;
 
@@ -36,6 +28,18 @@ struct TuiState {
     std::vector<std::string> inputHistory;
     int historyPos = -1;
     static constexpr size_t MAX_HISTORY = 500;
+};
+
+// Note: This struct is non-copyable and non-movable due to std::mutex.
+// Always pass by reference (TuiState&) to avoid accidental copies.
+struct TuiState {
+    std::deque<ChatMessage> outputLines;
+    static constexpr size_t MAX_OUTPUT_LINES = 10000;
+
+    // Auto-scroll flag
+    bool autoScroll = true;
+
+    UserQueryState userQuery;
 
     // Status line text
     std::string statusText;
