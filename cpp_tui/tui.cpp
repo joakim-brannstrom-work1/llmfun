@@ -117,7 +117,6 @@ void applyTheme() {
     colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.34f, 0.34f, 0.34f, 0.54f);
 }
 
-// ─── Init / Shutdown ─────────────────────────────────────────────────────────
 bool tuiInit(ImTui::TScreen** screen) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -200,24 +199,19 @@ void renderTabChat(TuiState& state, Log& log) {
         ImVec2 inputPos(0, DisplaySize.y - 3 - inputBufLines);
         ImVec2 inputSize(DisplaySize.x, 2 + inputBufLines);
         ImGui::SetCursorPos(inputPos);
-        ImGuiWindowFlags inputFlags = ImGuiWindowFlags_None;
 
-        ImGui::BeginChild("user_input", inputSize, false, inputFlags);
+        ImGui::BeginChild("user_input", inputSize, false, ImGuiWindowFlags_None);
 
-        // Compute available width in the current window/content region
-        float availWidth = ImGui::GetContentRegionAvail().x;
-
-        // Estimate button width (text + padding)
+        // Estimate "button" width (text + padding)
         float buttonWidth =
             ImGui::CalcTextSize("Send   ").x + ImGui::GetStyle().FramePadding.x * 2.0f;
-        float spacing = ImGui::GetStyle().ItemSpacing.x;
 
         // Input field width = remaining space
-        float inputWidth = availWidth - buttonWidth - spacing;
-        if (inputWidth < 0.0f)
-            inputWidth = 0.0f;
+        float inputWidth =
+            ImGui::GetContentRegionAvail().x - buttonWidth - ImGui::GetStyle().ItemSpacing.x;
+        inputWidth = std::max(0.0f, inputWidth);
 
-        // Height for exactly two lines of text (including frame padding)
+        // Height for text (including frame padding)
         float lineHeight = 1.0f + ImGui::GetTextLineHeight() * inputBufLines;
         float framePaddingY = ImGui::GetStyle().FramePadding.y;
         float inputHeight = lineHeight + framePaddingY * 2.0f;
@@ -233,6 +227,8 @@ void renderTabChat(TuiState& state, Log& log) {
 
         ImGui::SameLine();
         static std::string buttonText("Send");
+        // using an InputText field to simulate a button because otherwise
+        // moving to the widget do not work with tab in imtui
         state.userQuery.isSubmitted =
             ImGui::InputText("llm_send", const_cast<char*>(buttonText.c_str()), 4,
                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_EnterReturnsTrue);
@@ -245,7 +241,7 @@ void renderTabChat(TuiState& state, Log& log) {
 
         if (state.userQuery.isSubmitted) {
             std::string query = state.userQuery.inputBuf;
-            // Strip trailing newline if present (ImGui inserts it before we detect Ctrl+Enter)
+            // ImGui may insert a trailing for example when ctrl+enter.
             if (!query.empty() && query.back() == '\n') {
                 query.pop_back();
             }
