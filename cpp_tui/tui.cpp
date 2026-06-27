@@ -15,11 +15,15 @@ namespace llmfun::tui {
 // Named key codes for Ctrl shortcuts (ncurses raw key codes)
 static constexpr int KEY_CTRL_D = 4; // Ctrl+D exit
 
-template <typename... Args> void log(FILE* logFile, std::string format, Args&&... args) {
-    if (logFile != nullptr) {
-        std::fprintf(logFile, format.c_str(), std::forward<Args>(args)...);
+struct Log {
+    FILE* logFile;
+
+    template <typename... Args> void operator()(std::string format, Args&&... args) {
+        if (logFile != nullptr) {
+            std::fprintf(logFile, format.c_str(), std::forward<Args>(args)...);
+        }
     }
-}
+};
 
 bool isWhitespaceOnly(const std::string& s) {
     if (s.empty())
@@ -152,9 +156,7 @@ void tuiRenderFrame(ImTui::TScreen* screen) {
     ImTui_ImplNcurses_DrawScreen();
 }
 
-// ─── Task 5: Render Function — Output Area ───────────────────────────────────
-
-void renderTabChat(TuiState& state, FILE* logFile) {
+void renderTabChat(TuiState& state, Log& log) {
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
 
     const auto inputBufLines =
@@ -170,7 +172,6 @@ void renderTabChat(TuiState& state, FILE* logFile) {
         ImGui::BeginChild("llm_output", outSize, false, outFlags);
 
         std::vector<ChatMessage> messages(state.outputLines.begin(), state.outputLines.end());
-        // ImGuiTreeNodeFlags_DefaultOpen
         for (size_t i = 0; i < messages.size(); ++i) {
             const auto flags = (i == messages.size() - 1) ? ImGuiTreeNodeFlags_DefaultOpen
                                                           : ImGuiTreeNodeFlags_None;
@@ -250,12 +251,7 @@ void renderTabChat(TuiState& state, FILE* logFile) {
             if (!query.empty() && query.back() == '\n') {
                 query.pop_back();
             }
-            log(logFile, "query: %s isWhitespace:%d\n", query.c_str(), isWhitespaceOnly(query));
             if (!isWhitespaceOnly(query)) {
-                for (auto c : query) {
-                    log(logFile, "%d ", (unsigned int)c);
-                }
-                log(logFile, "\n", 42);
                 state.submitReady = true;
                 state.submitQuery = query;
             }
@@ -289,9 +285,9 @@ void renderTabChat(TuiState& state, FILE* logFile) {
     }
 }
 
-void renderTabLog(TuiState& state, FILE* logFile) {}
+void renderTabLog(TuiState& state, Log& log) {}
 
-void renderMainWindow(TuiState& state, FILE* logFile) {
+void renderMainWindow(TuiState& state, Log& log) {
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
 
     static int activeTab = 0;
@@ -315,10 +311,10 @@ void renderMainWindow(TuiState& state, FILE* logFile) {
 
     switch (activeTab) {
     case 0:
-        renderTabChat(state, logFile);
+        renderTabChat(state, log);
         break;
     case 1:
-        renderTabLog(state, logFile);
+        renderTabLog(state, log);
         break;
     }
 }
@@ -351,6 +347,7 @@ bool tuiRender(TuiState& state) {
     }
 
     auto logFile = fopen("log.txt", "a");
+    Log log{logFile};
 
     // Required: BeginChild calls must be nested inside a Begin/End block.
     // Without a parent window, BeginChild creates an implicit window whose
@@ -364,7 +361,7 @@ bool tuiRender(TuiState& state) {
     ImGui::SetNextWindowSize(DisplaySize, ImGuiCond_Always);
     ImGui::Begin("##TuiRoot", &noClose, parentFlags);
 
-    renderMainWindow(state, logFile);
+    renderMainWindow(state, log);
 
     ImGui::End();
 
