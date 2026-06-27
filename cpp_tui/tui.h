@@ -18,6 +18,7 @@ struct ChatMessage {
 struct UserQueryState {
     // Dynamic input buffer
     std::string inputBuf;
+    std::string draftBuf;
 
     // Submission flag
     bool submitReady = false;

@@ -195,7 +195,45 @@ void renderTabChat(TuiState& state, Log& log) {
         ImGui::EndChild();
     };
 
-    auto inputArea = [&state, &inputBufLines, &DisplaySize]() {
+    auto inputHistory = [&state = state.userQuery, &log]() {
+        log("smurf %d %d %d\n", ImGui::IsItemActive(), ImGui::GetIO().KeyCtrl,
+            ImGui::IsKeyPressed(ImGuiKey_UpArrow));
+        // History navigation: Ctrl+Up/Ctrl+Down to avoid conflict with
+        // InputTextMultiline's internal cursor movement.
+        if (!(ImGui::IsItemActive() && ImGui::GetIO().KeyCtrl) || state.inputHistory.empty()) {
+            return;
+        }
+        log("inputHistory: pos:%d len:%d\n", state.historyPos, state.inputHistory.size());
+
+        bool setInput = false;
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+            if (state.historyPos == -1) {
+                // First press: save draft and push current input to history.
+                state.draftBuf = state.inputBuf;
+            }
+            state.historyPos =
+                std::min(state.historyPos + 1, static_cast<int>(state.inputHistory.size()) - 1);
+            setInput = true;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && state.historyPos >= 0) {
+            state.historyPos--;
+            if (state.historyPos >= 0 && state.historyPos < state.inputHistory.size()) {
+                setInput = true;
+            } else {
+                state.inputBuf = state.draftBuf;
+            }
+        }
+        if (setInput) {
+            state.inputBuf = state.inputHistory[state.inputHistory.size() - state.historyPos];
+        }
+
+        if (state.inputHistory.size() > state.MAX_HISTORY) {
+            state.inputHistory.erase(state.inputHistory.begin());
+        }
+
+        log("inputHistory: pos:%s\n", state.historyPos);
+    };
+
+    auto inputArea = [&state, &inputBufLines, &DisplaySize, &inputHistory]() {
         ImVec2 inputPos(0, DisplaySize.y - 3 - inputBufLines);
         ImVec2 inputSize(DisplaySize.x, 2 + inputBufLines);
         ImGui::SetCursorPos(inputPos);
@@ -225,6 +263,8 @@ void renderTabChat(TuiState& state, Log& log) {
             ImVec2(inputWidth, inputHeight), ImGuiInputTextFlags_CallbackResize,
             InputResizeCallback, &state.userQuery.inputBuf);
 
+        inputHistory();
+
         ImGui::SameLine();
         static std::string buttonText("Send");
         // using an InputText field to simulate a button because otherwise
@@ -248,8 +288,10 @@ void renderTabChat(TuiState& state, Log& log) {
             if (!isWhitespaceOnly(query)) {
                 state.userQuery.submitReady = true;
                 state.userQuery.submitQuery = query;
+                state.userQuery.inputHistory.push_back(query);
             }
             state.userQuery.inputBuf.clear();
+            state.userQuery.historyPos = -1;
         }
 
         ImGui::EndChild();
