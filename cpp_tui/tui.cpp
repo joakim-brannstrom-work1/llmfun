@@ -182,13 +182,12 @@ void renderTabChat(TuiState& state, Log& log) {
             }
         }
 
-        // Auto-scroll management (must stay inside child scope)
         if (state.autoScroll) {
             ImGui::SetScrollHereY(1.0f);
         }
 
-        // Auto-scroll detection: capture scroll state BEFORE EndChild
-        // so we read the "output" child's actual scroll values.
+        // Auto-scroll detection: capture scroll state BEFORE EndChild so we
+        // read the "output" child's actual scroll values.
         const float scrollY = ImGui::GetScrollY();
         const float scrollMax = ImGui::GetScrollMaxY();
         if (scrollMax > 0.0f) {
@@ -346,7 +345,11 @@ bool tuiRender(TuiState& state) {
         state.autoScroll = true;
     }
 
-    auto logFile = fopen("log.txt", "a");
+    auto logFile = [&state]() {
+        if (state.isLogActive)
+            return fopen("llmfun_ui_log.txt", "a");
+        return static_cast<FILE*>(nullptr);
+    }();
     Log log{logFile};
 
     // Required: BeginChild calls must be nested inside a Begin/End block.
@@ -365,7 +368,8 @@ bool tuiRender(TuiState& state) {
 
     ImGui::End();
 
-    fclose(logFile);
+    if (logFile != nullptr)
+        fclose(logFile);
 
     return true;
 }

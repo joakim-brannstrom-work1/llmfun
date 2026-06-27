@@ -33,6 +33,8 @@ struct UserQueryState {
 // Note: This struct is non-copyable and non-movable due to std::mutex.
 // Always pass by reference (TuiState&) to avoid accidental copies.
 struct TuiState {
+    bool isLogActive{true};
+
     std::deque<ChatMessage> outputLines;
     static constexpr size_t MAX_OUTPUT_LINES = 10000;
 
