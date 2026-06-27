@@ -158,11 +158,10 @@ void tuiRenderFrame(ImTui::TScreen* screen) {
 
 void renderTabChat(TuiState& state, Log& log) {
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
-
     const auto inputBufLines =
         std::min(20, std::max(2, static_cast<int>(countNewLines(state.userQuery.inputBuf))));
 
-    { // Output Area
+    auto outputArea = [&state, &inputBufLines, &DisplaySize]() {
         // Clamp height to avoid negative values on very small terminals
         ImVec2 outPos(0, 1.0f);
         ImVec2 outSize(DisplaySize.x, std::max(1.0f, DisplaySize.y - 3 - inputBufLines));
@@ -195,9 +194,9 @@ void renderTabChat(TuiState& state, Log& log) {
         }
 
         ImGui::EndChild();
-    }
+    };
 
-    { // Input Area
+    auto inputArea = [&state, &inputBufLines, &DisplaySize]() {
         ImVec2 inputPos(0, DisplaySize.y - 3 - inputBufLines);
         ImVec2 inputSize(DisplaySize.x, 2 + inputBufLines);
         ImGui::SetCursorPos(inputPos);
@@ -258,9 +257,9 @@ void renderTabChat(TuiState& state, Log& log) {
         }
 
         ImGui::EndChild();
-    }
+    };
 
-    { // Status line
+    auto statusLine = [&state, &DisplaySize]() {
         ImVec2 statusPos(0, DisplaySize.y - 1);
         ImVec2 statusSize(DisplaySize.x, 1);
         ImGui::SetCursorPos(statusPos);
@@ -281,7 +280,11 @@ void renderTabChat(TuiState& state, Log& log) {
         }
 
         ImGui::EndChild();
-    }
+    };
+
+    outputArea();
+    inputArea();
+    statusLine();
 }
 
 void renderTabLog(TuiState& state, Log& log) {}
