@@ -4,6 +4,7 @@ import logger = std.logger;
 import std.algorithm : map, filter, startsWith, count, joiner, endsWith;
 import std.array : empty, appender, array;
 import std.conv : to;
+import std.datetime : SysTime;
 import std.file : readText, exists, mkdirRecurse, getSize, remove, dirEntries, SpanMode;
 import std.format : format, formattedWrite;
 import std.json : JSONValue;
@@ -52,11 +53,11 @@ private string location(Document doc) {
             (Path a) => a.toString);
 }
 
-private string toResult(string database, Document[] docs) {
-    return docs.enumerate.map!(doc => format("--- Result %s (%s in database:'%s' line %s-%s chars %s-%s) ---\n%s",
-            doc.index + 1, location(doc.value), database, doc.value.line.begin,
-            doc.value.line.end, doc.value.offset.begin, doc.value.offset.end, doc.value.data)).join(
-            "\n\n");
+private string toResult(Document[] docs) {
+    return docs.enumerate.map!(doc => format("--- Result %s ('%s' in database '%s' line %s-%s chars %s-%s) ---\n%s",
+            doc.index + 1, location(doc.value), doc.value.databaseName,
+            doc.value.line.begin, doc.value.line.end, doc.value.offset.begin,
+            doc.value.offset.end, doc.value.data)).join("\n\n");
 }
 
 ExecuteFuncResult queryFunc(alias searchFunc)(Context baseCtx, string textQuery,
@@ -90,7 +91,7 @@ ExecuteFuncResult queryFunc(alias searchFunc)(Context baseCtx, string textQuery,
             return ExecuteFuncResult(format!"error: search completed but no results found for %s"(query),
                     success: false);
         }
-        return ExecuteFuncResult(toResult(database, docs), success: true);
+        return ExecuteFuncResult(toResult(docs), success: true);
     } catch (Exception e) {
         return ExecuteFuncResult(format!"error: database error during search: %s"(e.msg),
                 success: false);
@@ -286,10 +287,11 @@ ExecuteFuncResult queryReadFile(Context baseCtx, string filePath, long lineNumbe
             string originStr = match.origin.match!((Topic a) => format!"topic: '%s'"(a.name),
                     (Url a) => a.value, (Path a) => a.toString);
 
-            string text = applyAppendLoc(match.text, match.line.begin, appendLoc);
+            string text = applyAppendLoc(match.data, match.line.begin, appendLoc);
 
-            resultBlocks ~= format("--- Result %d (%s line %s-%s chars %s-%s) ---\n%s", i + 1, originStr,
-                    match.line.begin, match.line.end, match.offset.begin, match.offset.end, text);
+            resultBlocks ~= format("--- Result %s ('%s' in database '%s' line %s-%s chars %s-%s) ---\n%s", i + 1,
+                    originStr, match.databaseName, match.line.begin,
+                    match.line.end, match.offset.begin, match.offset.end, text);
         }
 
         return ExecuteFuncResult(resultBlocks.join("\n\n"), success: true);

@@ -17,6 +17,7 @@ module llm.rag.rag;
 import logger = std.logger;
 import std.algorithm : map, filter, joiner, sort, cache, swap, count;
 import std.array : array, empty, appender;
+import std.datetime : SysTime;
 import std.digest.murmurhash : MurmurHash3;
 import std.digest;
 import std.path : baseName, stripExtension;
@@ -73,6 +74,14 @@ struct Document {
     string data;
     Offset offset;
     Line line;
+    SysTime added;
+    string databaseName;
+}
+
+private struct IndexedMatch {
+    SourceMatch match;
+    size_t dbIndex;
+    alias match this; // Implicit conversion to SourceMatch for .rank access
 }
 
 private struct ParallelQueryTask {
@@ -89,10 +98,16 @@ private SourceMatch[] executeParallelQuery(ParallelQueryTask qt) {
     }
 }
 
-private SourceMatch[] parallelQuery(size_t[] indices, SourceMatch[]delegate(size_t) queryFn) {
+private IndexedMatch[] parallelQuery(size_t[] indices, SourceMatch[]delegate(size_t) queryFn) {
     auto tasks = indices.map!((i) => ParallelQueryTask(i, queryFn)).array;
     auto perDbResults = taskPool.amap!executeParallelQuery(tasks).array;
-    auto results = perDbResults.joiner.array;
+    auto app = appender!(IndexedMatch[])();
+    foreach (i, matches; perDbResults.enumerate) {
+        foreach (m; matches) {
+            app.put(IndexedMatch(m, indices[i]));
+        }
+    }
+    auto results = app[];
     if (results.empty && indices.length > 0) {
         logger.tracef("parallelQuery: all %s database queries failed", indices.length);
     }
@@ -201,8 +216,9 @@ class RAG {
         Document[] runMatch(float[] embed) {
             return parallelQuery(indices,
                     (size_t i) => spinSql!(() => dbs[i].querySemantic(Search(embed), getTopK))).randomizeRanks()
-                .sort!((a, b) => a.rank > b.rank).take(getTopK)
-                .array.map!(a => Document(a.origin, a.text, a.offset, a.line)).array;
+                .sort!((a, b) => a.rank > b.rank).take(getTopK).map!(a => Document(origin: a.origin,
+                    data: a.text, offset: a.offset, line: a.line, added: a.added,
+                    databaseName: databases[a.dbIndex].name)).array;
         }
 
         return embedder.embed(query).match!((float[] a) => runMatch(a), (HttpError e) {
@@ -218,8 +234,9 @@ class RAG {
 
         return parallelQuery(indices,
                 (size_t i) => spinSql!(() => dbs[i].queryTextSearch(query, getTopK))).randomizeRanks()
-            .sort!((a, b) => a.rank < b.rank).take(getTopK)
-            .map!(a => Document(a.origin, a.text, a.offset, a.line)).array;
+            .sort!((a, b) => a.rank < b.rank).take(getTopK).map!(a => Document(origin: a.origin, data: a.text, offset: a
+                .offset, line: a.line, added: a.added, databaseName: databases[a.dbIndex].name))
+            .array;
     }
 
     Document[] queryBestMatch(string textQuery, string vectorQuery, long getTopK, string database) {
@@ -231,8 +248,9 @@ class RAG {
             return parallelQuery(indices,
                     (size_t i) => spinSql!(() => dbs[i].queryCombineSemanticText(Search(embed),
                         textQuery, getTopK))).randomizeRanks().sort!((a,
-                    b) => a.rank > b.rank).take(getTopK)
-                .map!(a => Document(a.origin, a.text, a.offset, a.line)).array;
+                    b) => a.rank > b.rank).take(getTopK).map!(a => Document(origin: a.origin, data: a.text, offset: a
+                    .offset, line: a.line,
+                    added: a.added, databaseName: databases[a.dbIndex].name)).array;
         }
 
         return embedder.embed(vectorQuery).match!((float[] embed) {
@@ -250,13 +268,15 @@ class RAG {
         });
     }
 
-    SourceMatch[] queryReadFile(Path filePath, long lineNumber, string database) {
+    Document[] queryReadFile(Path filePath, long lineNumber, string database) {
         size_t[] indices;
         if (!validateDatabase(database, indices))
             return null;
 
         auto results = parallelQuery(indices,
-                (size_t i) => spinSql!(() => dbs[i].queryByPathAndLine(filePath, lineNumber)));
+                (size_t i) => spinSql!(() => dbs[i].queryByPathAndLine(filePath, lineNumber))).map!(
+                a => Document(origin: a.origin, data: a.text, offset: a.offset,
+                line: a.line, added: a.added, databaseName: databases[a.dbIndex].name)).array;
 
         logger.tracef("Hits %s for %s line %s", results.length, filePath, lineNumber);
         return results;
@@ -444,10 +464,8 @@ size_t countLines(Grapheme[] graphemes) {
     return graphemes.filter!(a => a == newline).count;
 }
 
-/// Fisher-Yates shuffle on a copy of the result array, before sorting by rank.
 /// Eliminates database-order bias among results with identical ranks.
-/// Returns a new array; does not mutate the input.
-SourceMatch[] randomizeRanks(SourceMatch[] results) {
+T[] randomizeRanks(T)(T[] results) {
     import std.random : randomShuffle, rndGen;
 
     return results.randomShuffle(rndGen);
@@ -455,7 +473,7 @@ SourceMatch[] randomizeRanks(SourceMatch[] results) {
 
 // Helper to create a SourceMatch with a given rank
 SourceMatch makeMatch(double rank) {
-    return SourceMatch(Origin(Topic("")), Offset(0, 0), Line(0, 0), "", rank);
+    return SourceMatch(Origin(Topic("")), Offset(0, 0), Line(0, 0), "", rank, SysTime.init);
 }
 
 unittest {
