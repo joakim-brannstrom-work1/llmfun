@@ -15,6 +15,11 @@ struct ChatMessage {
     std::string text;
 };
 
+struct LogMessage {
+    std::string summary;
+    std::string text;
+};
+
 struct UserQueryState {
     // Dynamic input buffer
     std::string inputBuf;
@@ -38,7 +43,10 @@ struct TuiState {
     bool isLogActive{true};
 
     std::deque<ChatMessage> outputLines;
-    static constexpr size_t MAX_OUTPUT_LINES = 10000;
+    static constexpr size_t MaxChatMessages = 10000;
+
+    std::deque<LogMessage> logMessages;
+    static constexpr size_t MaxLogMessages = 10000;
 
     // Auto-scroll flag
     bool autoScroll = true;
@@ -47,10 +55,6 @@ struct TuiState {
 
     // Status line text
     std::string statusText;
-
-    // outputMutex protects: outputLines, statusText, inputBuf, submitReady, submitQuery
-    // Main-thread-only (no lock needed): autoScroll, historyPos, draftBuf, inputHistory
-    mutable std::mutex outputMutex;
 };
 
 /// Initialize terminal and create TScreen.

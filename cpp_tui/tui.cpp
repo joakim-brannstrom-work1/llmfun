@@ -39,48 +39,28 @@ bool isWhitespaceOnly(const std::string& s) {
 size_t countNewLines(const std::string& str) { return std::count(str.begin(), str.end(), '\n'); }
 
 void tuiAddOutputLine(TuiState& state, const ChatMessage& msg) {
-    std::lock_guard<std::mutex> lock(state.outputMutex);
     state.outputLines.push_back(msg);
-    if (state.outputLines.size() > state.MAX_OUTPUT_LINES) {
+    if (state.outputLines.size() > state.MaxChatMessages) {
         state.outputLines.pop_front();
     }
 }
 
-void tuiClearOutput(TuiState& state) {
-    std::lock_guard<std::mutex> lock(state.outputMutex);
-    state.outputLines.clear();
-}
+void tuiClearOutput(TuiState& state) { state.outputLines.clear(); }
 
-void tuiSetStatusText(TuiState& state, const std::string& text) {
-    std::lock_guard<std::mutex> lock(state.outputMutex);
-    state.statusText = text;
-}
+void tuiSetStatusText(TuiState& state, const std::string& text) { state.statusText = text; }
 
-std::string tuiGetInput(const TuiState& state) {
-    std::lock_guard<std::mutex> lock(state.outputMutex);
-    return state.userQuery.inputBuf;
-}
+std::string tuiGetInput(const TuiState& state) { return state.userQuery.inputBuf; }
 
-void tuiClearInput(TuiState& state) {
-    std::lock_guard<std::mutex> lock(state.outputMutex);
-    state.userQuery.inputBuf.clear();
-}
+void tuiClearInput(TuiState& state) { state.userQuery.inputBuf.clear(); }
 
-bool tuiIsSubmitReady(const TuiState& state) {
-    std::lock_guard<std::mutex> lock(state.outputMutex);
-    return state.userQuery.submitReady;
-}
+bool tuiIsSubmitReady(const TuiState& state) { return state.userQuery.submitReady; }
 
 void tuiResetSubmit(TuiState& state) {
-    std::lock_guard<std::mutex> lock(state.outputMutex);
     state.userQuery.submitReady = false;
     state.userQuery.submitQuery.clear();
 }
 
-std::string tuiGetSubmitQuery(const TuiState& state) {
-    std::lock_guard<std::mutex> lock(state.outputMutex);
-    return state.userQuery.submitQuery;
-}
+std::string tuiGetSubmitQuery(const TuiState& state) { return state.userQuery.submitQuery; }
 
 void ColoredSeparator(ImU32 color, float thickness = 1.0f, float spacing = 4.0f) {
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
@@ -169,13 +149,12 @@ void renderTabChat(TuiState& state, Log& log) {
 
         ImGui::BeginChild("llm_output", outSize, false, outFlags);
 
-        std::vector<ChatMessage> messages(state.outputLines.begin(), state.outputLines.end());
-        for (size_t i = 0; i < messages.size(); ++i) {
-            const auto flags = (i == messages.size() - 1) ? ImGuiTreeNodeFlags_DefaultOpen
-                                                          : ImGuiTreeNodeFlags_None;
-            if (ImGui::CollapsingHeader(messages[i].summary.c_str(), flags)) {
+        for (size_t i = 0; i < state.outputLines.size(); ++i) {
+            const auto flags = (i == state.outputLines.size() - 1) ? ImGuiTreeNodeFlags_DefaultOpen
+                                                                   : ImGuiTreeNodeFlags_None;
+            if (ImGui::CollapsingHeader(state.outputLines[i].summary.c_str(), flags)) {
                 ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextUnformatted(messages[i].text.c_str());
+                ImGui::TextUnformatted(state.outputLines[i].text.c_str());
                 ImGui::PopTextWrapPos();
             }
         }
@@ -233,11 +212,8 @@ void renderTabChat(TuiState& state, Log& log) {
             }
         }
         if (setInput) {
-            log("query input: pos:%d %d\n", state.historyPos,
-                state.inputHistory.size() - state.historyPos - 1);
             state.newInputBufString =
                 state.inputHistory[state.inputHistory.size() - state.historyPos - 1];
-            log("set query: %s\n", state.newInputBufString.c_str());
         }
 
         if (state.inputHistory.size() > state.MAX_HISTORY) {
@@ -275,8 +251,6 @@ void renderTabChat(TuiState& state, Log& log) {
             ImGui::SetKeyboardFocusHere();
         }
 
-        if (!state.userQuery.inputBuf.empty())
-            log("before query: %s\n", state.userQuery.inputBuf.c_str());
         ImGui::InputTextMultiline(
             "##user_input", state.userQuery.inputBuf.data(), state.userQuery.inputBuf.size() + 1,
             ImVec2(inputWidth, inputHeight), ImGuiInputTextFlags_CallbackResize,
@@ -353,7 +327,39 @@ void renderTabChat(TuiState& state, Log& log) {
     statusLine();
 }
 
-void renderTabLog(TuiState& state, Log& log) {}
+void renderTabLog(TuiState& state, Log& log) {
+    ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
+    ImVec2 childPos(0, 1.0f);
+    ImVec2 childSize(DisplaySize.x, DisplaySize.y);
+    ImGui::SetCursorPos(childPos);
+    ImGuiWindowFlags outFlags = ImGuiWindowFlags_HorizontalScrollbar;
+
+    ImGui::BeginChild("llm_log", childSize, false, outFlags);
+
+    for (size_t i = 0; i < state.logMessages.size(); ++i) {
+        const auto flags = (i == state.logMessages.size() - 1) ? ImGuiTreeNodeFlags_DefaultOpen
+                                                               : ImGuiTreeNodeFlags_None;
+        if (ImGui::CollapsingHeader(state.logMessages[i].summary.c_str(), flags)) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(state.logMessages[i].text.c_str());
+            ImGui::PopTextWrapPos();
+        }
+    }
+
+    if (state.autoScroll) {
+        ImGui::SetScrollHereY(1.0f);
+    }
+
+    // Auto-scroll detection: capture scroll state BEFORE EndChild so we
+    // read the "output" child's actual scroll values.
+    const float scrollY = ImGui::GetScrollY();
+    const float scrollMax = ImGui::GetScrollMaxY();
+    if (scrollMax > 0.0f) {
+        state.autoScroll = (scrollY >= scrollMax - 1.0f);
+    }
+
+    ImGui::EndChild();
+}
 
 void renderMainWindow(TuiState& state, Log& log) {
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
