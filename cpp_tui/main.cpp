@@ -43,6 +43,9 @@ int main() {
                 std::string summary = text.size() > 30 ? text.substr(0, 30) : text;
                 tuiAddChatMessage(state, String{summary.c_str(), summary.size()},
                                   String{text.c_str(), text.size()});
+                std::string log = std::to_string(text.size());
+                tuiAddLogMessage(state, String{summary.c_str(), summary.size()},
+                                 String{log.c_str(), log.size()});
             }
             String_Free(query);
             tuiResetSubmit(state);

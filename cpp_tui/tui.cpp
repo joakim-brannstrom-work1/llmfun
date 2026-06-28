@@ -38,6 +38,13 @@ bool isWhitespaceOnly(const std::string& s) {
 
 size_t countNewLines(const std::string& str) { return std::count(str.begin(), str.end(), '\n'); }
 
+void tuiAddLogMessage(TuiState& state, const LogMessage& msg) {
+    state.logMessages.push_back(msg);
+    if (state.logMessages.size() > state.MaxLogMessages) {
+        state.logMessages.pop_front();
+    }
+}
+
 void tuiAddOutputLine(TuiState& state, const ChatMessage& msg) {
     state.outputLines.push_back(msg);
     if (state.outputLines.size() > state.MaxChatMessages) {

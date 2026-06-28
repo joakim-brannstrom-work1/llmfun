@@ -183,6 +183,14 @@ int tuiRender(TuiState* state) {
     return ::llmfun::tui::tuiRender(*state->inner) ? 1 : 0;
 }
 
+void tuiAddLogMessage(TuiState* state, String summary, String text) {
+    if (!state || !state->inner)
+        return;
+    std::string summary_(summary.data ? summary.data : "", summary.len);
+    std::string text_(text.data ? text.data : "", text.len);
+    ::llmfun::tui::tuiAddLogMessage(*state->inner, ::llmfun::tui::LogMessage{summary_, text_});
+}
+
 void tuiAddChatMessage(TuiState* state, String summary, String text) {
     if (!state || !state->inner)
         return;
