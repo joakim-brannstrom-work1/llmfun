@@ -82,15 +82,6 @@ std::string tuiGetSubmitQuery(const TuiState& state) {
     return state.userQuery.submitQuery;
 }
 
-static int InputResizeCallback(ImGuiInputTextCallbackData* data) {
-    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
-        std::string* str = reinterpret_cast<std::string*>(data->UserData);
-        str->resize(data->BufSize);
-        data->Buf = str->data();
-    }
-    return 0;
-}
-
 void ColoredSeparator(ImU32 color, float thickness = 1.0f, float spacing = 4.0f) {
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     ImVec2 start = ImGui::GetCursorScreenPos();
@@ -155,6 +146,15 @@ void tuiRenderFrame(ImTui::TScreen* screen) {
     ImTui_ImplNcurses_DrawScreen();
 }
 
+int InputResizeCallback(ImGuiInputTextCallbackData* data) {
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
+        std::string* str = reinterpret_cast<std::string*>(data->UserData);
+        str->resize(data->BufSize);
+        data->Buf = str->data();
+    }
+    return 0;
+}
+
 void renderTabChat(TuiState& state, Log& log) {
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
     const auto inputBufLines =
@@ -195,45 +195,57 @@ void renderTabChat(TuiState& state, Log& log) {
         ImGui::EndChild();
     };
 
-    auto inputHistory = [&state = state.userQuery, &log]() {
-        log("smurf %d %d %d\n", ImGui::IsItemActive(), ImGui::GetIO().KeyCtrl,
-            ImGui::IsKeyPressed(ImGuiKey_UpArrow));
-        // History navigation: Ctrl+Up/Ctrl+Down to avoid conflict with
-        // InputTextMultiline's internal cursor movement.
-        if (!(ImGui::IsItemActive() && ImGui::GetIO().KeyCtrl) || state.inputHistory.empty()) {
+    auto inputHistory = [&state = state.userQuery, &log](bool isPageUp, bool isPageDown) {
+        if (state.inputHistory.empty()) {
             return;
         }
-        log("inputHistory: pos:%d len:%d\n", state.historyPos, state.inputHistory.size());
+
+        // this code do not work until ImGui::ImGui::ClearActiveID() is available
+        // if (!ImGui::IsItemActive() || state.inputHistory.empty()) {
+        //     return;
+        // }
+        // auto& io = ImGui::GetIO();
+        // const bool isPageUp = ImGui::IsItemActive() && io.KeysDown[io.KeyMap[ImGuiKey_PageUp]];
+        // const bool isPageDown = ImGui::IsItemActive() &&
+        // io.KeysDown[io.KeyMap[ImGuiKey_PageDown]];
+        if (!(isPageUp || isPageDown)) {
+            return;
+        }
 
         bool setInput = false;
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+        if (isPageUp) {
             if (state.historyPos == -1) {
                 // First press: save draft and push current input to history.
                 state.draftBuf = state.inputBuf;
             }
             state.historyPos =
                 std::min(state.historyPos + 1, static_cast<int>(state.inputHistory.size()) - 1);
-            setInput = true;
-        } else if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && state.historyPos >= 0) {
+            if (state.historyPos >= 0 && state.historyPos < state.inputHistory.size()) {
+                setInput = true;
+            }
+        } else if (isPageDown && state.historyPos >= 0) {
             state.historyPos--;
             if (state.historyPos >= 0 && state.historyPos < state.inputHistory.size()) {
                 setInput = true;
             } else {
-                state.inputBuf = state.draftBuf;
+                state.newInputBufString = state.draftBuf;
+                state.draftBuf.clear();
             }
         }
         if (setInput) {
-            state.inputBuf = state.inputHistory[state.inputHistory.size() - state.historyPos];
+            log("query input: pos:%d %d\n", state.historyPos,
+                state.inputHistory.size() - state.historyPos - 1);
+            state.newInputBufString =
+                state.inputHistory[state.inputHistory.size() - state.historyPos - 1];
+            log("set query: %s\n", state.newInputBufString.c_str());
         }
 
         if (state.inputHistory.size() > state.MAX_HISTORY) {
             state.inputHistory.erase(state.inputHistory.begin());
         }
-
-        log("inputHistory: pos:%s\n", state.historyPos);
     };
 
-    auto inputArea = [&state, &inputBufLines, &DisplaySize, &inputHistory]() {
+    auto inputArea = [&state, &inputBufLines, &DisplaySize, &inputHistory, &log]() {
         ImVec2 inputPos(0, DisplaySize.y - 3 - inputBufLines);
         ImVec2 inputSize(DisplaySize.x, 2 + inputBufLines);
         ImGui::SetCursorPos(inputPos);
@@ -254,23 +266,34 @@ void renderTabChat(TuiState& state, Log& log) {
         float framePaddingY = ImGui::GetStyle().FramePadding.y;
         float inputHeight = lineHeight + framePaddingY * 2.0f;
 
+        if (!state.userQuery.newInputBufString.empty()) {
+            state.userQuery.inputBuf = state.userQuery.newInputBufString;
+        }
+
         if (state.userQuery.isSubmitted) {
             state.userQuery.isSubmitted = false;
             ImGui::SetKeyboardFocusHere();
         }
+
+        if (!state.userQuery.inputBuf.empty())
+            log("before query: %s\n", state.userQuery.inputBuf.c_str());
         ImGui::InputTextMultiline(
             "##user_input", state.userQuery.inputBuf.data(), state.userQuery.inputBuf.size() + 1,
             ImVec2(inputWidth, inputHeight), ImGuiInputTextFlags_CallbackResize,
             InputResizeCallback, &state.userQuery.inputBuf);
+        if (!state.userQuery.newInputBufString.empty()) {
+            state.userQuery.newInputBufString.clear();
+        }
 
-        inputHistory();
+        // inputHistory();
 
         ImGui::SameLine();
+        ImGui::BeginGroup();
         static std::string buttonText("Send");
         // using an InputText field to simulate a button because otherwise
         // moving to the widget do not work with tab in imtui
         state.userQuery.isSubmitted =
-            ImGui::InputText("llm_send", const_cast<char*>(buttonText.c_str()), 4,
+            ImGui::InputText("##llm_send", const_cast<char*>(buttonText.c_str()), 4,
                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_EnterReturnsTrue);
         state.userQuery.isSubmitted = state.userQuery.isSubmitted || ImGui::IsItemActive();
         if (ImGui::IsItemHovered()) {
@@ -278,6 +301,11 @@ void renderTabChat(TuiState& state, Log& log) {
             ImGui::Text("Send the query to the LLM for processing");
             ImGui::EndTooltip();
         }
+        bool historyNext = ImGui::Button("Next");
+        bool historyPrev = ImGui::Button("Prev");
+        ImGui::EndGroup();
+
+        inputHistory(historyNext, historyPrev);
 
         if (state.userQuery.isSubmitted) {
             std::string query = state.userQuery.inputBuf;
