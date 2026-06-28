@@ -9,7 +9,7 @@ import std.file : exists;
 import std.format : format;
 import std.stdio : writeln, writefln;
 import std.sumtype : match;
-import std.string : strip, startsWith;
+import std.string : strip, startsWith, join, toStringz;
 
 import argparse : CLI, NamedArgument, PositionalArgument, ArgumentGroup,
     ansiStylingArgument, Command, Description, Required,
@@ -204,31 +204,42 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     import llm.plan;
     import llm.coder;
     import llm.pipeline : prettyPrint;
+    import llmfun_tui;
 
     bool debugMode = false;
 
+    String toTuiString(string s) {
+        return String(toStringz(s), s.length);
+    }
+
+    string toString(String s) {
+        return s.data[0 .. s.len].idup;
+    }
+
     /// TODO: If help text ever needs externalization (config file, i18n),
     ///       the function signature should accept a content parameter.
-    void printHelp() {
+    string printHelp() {
         import std.process : environment;
 
         if (environment.get("LLMFUN_NO_SPLASH") || !conf.prompt.empty)
-            return;
+            return null;
 
-        writeln("llmfun agent mode — type a query and press Enter to start.");
-        writeln(" Use /commands for special actions:");
-        writeln("");
-        writeln("   (bare query)       Send a message to the agent");
-        writeln("   /help              Show this help message");
-        writeln("   /quit, /q, /exit   Exit the agent");
-        writeln("   /compact           Force compress the chat history");
-        writeln("   /new               Clear history and start a new conversation");
-        writeln("   /model             List available models");
-        writeln("   /model <index>     Select model by index");
-        writeln("   /model <name>      Select model by exact name (case-insensitive)");
-        writeln("   /plan <query>      Run the plan pipeline");
-        writeln("   /code <query>      Run the coder pipeline");
-        writeln("   /debug             Toggle verbose debug output");
+        string[] s;
+        s ~= "llmfun agent mode — type a query and press Enter to start.";
+        s ~= " Use /commands for special actions:";
+        s ~= "";
+        s ~= "   (bare query)       Send a message to the agent";
+        s ~= "   /help              Show this help message";
+        s ~= "   /quit, /q, /exit   Exit the agent";
+        s ~= "   /compact           Force compress the chat history";
+        s ~= "   /new               Clear history and start a new conversation";
+        s ~= "   /model             List available models";
+        s ~= "   /model <index>     Select model by index";
+        s ~= "   /model <name>      Select model by exact name (case-insensitive)";
+        s ~= "   /plan <query>      Run the plan pipeline";
+        s ~= "   /code <query>      Run the coder pipeline";
+        s ~= "   /debug             Toggle verbose debug output";
+        return s.join("\n");
     }
 
     if (conf.setupDirs)
@@ -258,8 +269,12 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     agent.setSystemPrompt(systemPrompt);
     agent.loadHistory(agentHistory);
 
+    auto tuiState = tuiCreateState();
+    scope (exit)
+        tuiDestroyState(tuiState);
+
     void progressCallback(size_t currentChunk, size_t totalChunks, string status) {
-        displayProgress(currentChunk, totalChunks, status);
+        // displayProgress(currentChunk, totalChunks, status);
     };
     void doCompress(ref Agent agent, bool force) {
         if (!agent.needCompression && !force)
@@ -298,102 +313,129 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
         logger.trace(result.status != ProcessResult.Status.ok, result.status);
     }
 
-    printHelp();
+    auto tuiScreen = tuiInit();
+    scope (exit)
+        tuiShutdown(tuiScreen);
 
-    configCatchCtrlC();
     bool running = conf.prompt.empty;
-    string query = conf.prompt;
-    auto linenoiseHistory = llmConf.scratchArea.exists
-        ? llmConf.scratchArea ~ Path("cli_history.txt") : Path.init;
-    configLinenoise(historyFile: linenoiseHistory, len: 50000); // TODO: make history size configurable
     do {
-        if (running) {
-            playNotification;
-            query = multiLineConsole(prompt: format!"[%s/%s %s]$ "(agent.contextUsed,
-                    agent.contextSize, llmConf.activeModelName()), historyFile: linenoiseHistory);
-            clearInterruptSignal();
-            if (query.among("/quit", "/q", "/exit")) {
-                break;
-            } else if (query == "/compact") {
-                doCompress(agent, force: true);
-                continue;
-            } else if (query == "/new") {
-                agent.clearHistory;
-                logger.info("context cleared");
-                continue;
-            } else if (query == "/help") {
-                printHelp();
-                continue;
-            } else if (query == "/debug") {
-                debugMode = !debugMode;
-                logger.globalLogLevel = debugMode ? logger.LogLevel.trace : logger.LogLevel.info;
-                logger.infof("Debug output: %s", debugMode ? "ON" : "OFF");
-                continue;
-            } else if (query == "/model" || query.startsWith("/model ")) {
-                auto arg = query == "/model" ? "" : query["/model ".length .. $].strip();
-                if (arg.empty) {
-                    writeln("Available models:");
-                    foreach (i, model; llmConf.codeModels) {
-                        auto activeMarker = (i == cast(size_t) llmConf.activeCodeModelIndex) ? " [active]"
-                            : "";
-                        writefln("  %s  %s%s", i, model.name, activeMarker);
-                    }
-                    writeln();
-                    writeln("Use /model <index> or /model <name> to switch.");
-                } else {
-                    const oldModel = llmConf.activeCodeModel.name;
-                    // Try to switch model
-                    bool switched;
-                    size_t idx = ifThrown(arg.to!long, -1);
-                    if (idx >= 0) {
-                        switched = llmConf.selectModelByIndex(idx);
-                        if (!switched) {
-                            logger.errorf("Error: Invalid model index '%s'. Valid indices: 0-%s.",
-                                    arg, llmConf.codeModels.length - 1);
-                        }
-                    } else {
-                        auto result = llmConf.selectModelByName(arg);
-                        switched = result.empty;
-                        logger.warningf(!result.empty, "failed to switch model: ", result);
-                    }
-                    if (switched) {
-                        agent.resetModel(llmConf.activeCodeModel());
-                        logger.infof("switched to model: %s", llmConf.activeModelName());
-                        logger.infof("Agent model reset: %s -> %s, context: %s",
-                                oldModel, agent.modelName, agent.modelContextSize);
-                    }
-                }
-                continue;
-            } else if (query.startsWith("/plan ")) {
-                auto q = query["/plan ".length .. $];
-                logger.infof("Running plan pipeline: %s", q);
-                auto result = runPlanPipeline(q, llmConf, rag, monitor, () {
-                    return isInterruptTriggered;
-                }, llmConf.toolFilter.to());
-                writeln(prettyPrint(result));
-                continue;
-            } else if (query.startsWith("/code ")) {
-                auto q = query["/code ".length .. $];
-                logger.infof("Running coder pipeline: %s", q);
-                auto result = runCoderPipeline(q, llmConf, rag, monitor, () {
-                    return isInterruptTriggered;
-                }, llmConf.toolFilter.to());
-                if (result.wasInterrupted) {
-                    writeln("\nPipeline interrupted by user.");
-                    continue;
-                }
-                writeln(prettyPrint(result));
-                continue;
-            } else if (query.empty) {
-                continue;
+        tuiBackendNewFrame();
+
+        if (tuiRender(tuiState) == 0)
+            break;
+
+        if (tuiIsSubmitReady(tuiState) != 0) {
+            String userQuery = tuiGetSubmitQuery(tuiState);
+            string query = toString(userQuery).strip;
+            String_Free(userQuery);
+
+            if (!query.empty) {
+                runAgent(query);
             }
+
+            tuiResetSubmit(tuiState);
         }
-        agent.addUserQuery(query);
-        doCompress(agent, force: false);
-        auto result = agent.runToCompletion(&processResult, compressCallback: &progressCallback,
-                interrupt: () { return isInterruptTriggered; });
+
+        tuiBackendRender(tuiScreen);
     }
     while (running);
+
+    // printHelp();
+    //
+    // configCatchCtrlC();
+    // bool running = conf.prompt.empty;
+    // string query = conf.prompt;
+    // auto linenoiseHistory = llmConf.scratchArea.exists
+    //     ? llmConf.scratchArea ~ Path("cli_history.txt") : Path.init;
+    // configLinenoise(historyFile: linenoiseHistory, len: 50000); // TODO: make history size configurable
+    // do {
+    //     if (running) {
+    //         playNotification;
+    //         query = multiLineConsole(prompt: format!"[%s/%s %s]$ "(agent.contextUsed,
+    //                 agent.contextSize, llmConf.activeModelName()), historyFile: linenoiseHistory);
+    //         clearInterruptSignal();
+    //         if (query.among("/quit", "/q", "/exit")) {
+    //             break;
+    //         } else if (query == "/compact") {
+    //             doCompress(agent, force: true);
+    //             continue;
+    //         } else if (query == "/new") {
+    //             agent.clearHistory;
+    //             logger.info("context cleared");
+    //             continue;
+    //         } else if (query == "/help") {
+    //             printHelp();
+    //             continue;
+    //         } else if (query == "/debug") {
+    //             debugMode = !debugMode;
+    //             logger.globalLogLevel = debugMode ? logger.LogLevel.trace : logger.LogLevel.info;
+    //             logger.infof("Debug output: %s", debugMode ? "ON" : "OFF");
+    //             continue;
+    //         } else if (query == "/model" || query.startsWith("/model ")) {
+    //             auto arg = query == "/model" ? "" : query["/model ".length .. $].strip();
+    //             if (arg.empty) {
+    //                 writeln("Available models:");
+    //                 foreach (i, model; llmConf.codeModels) {
+    //                     auto activeMarker = (i == cast(size_t) llmConf.activeCodeModelIndex) ? " [active]"
+    //                         : "";
+    //                     writefln("  %s  %s%s", i, model.name, activeMarker);
+    //                 }
+    //                 writeln();
+    //                 writeln("Use /model <index> or /model <name> to switch.");
+    //             } else {
+    //                 const oldModel = llmConf.activeCodeModel.name;
+    //                 // Try to switch model
+    //                 bool switched;
+    //                 size_t idx = ifThrown(arg.to!long, -1);
+    //                 if (idx >= 0) {
+    //                     switched = llmConf.selectModelByIndex(idx);
+    //                     if (!switched) {
+    //                         logger.errorf("Error: Invalid model index '%s'. Valid indices: 0-%s.",
+    //                                 arg, llmConf.codeModels.length - 1);
+    //                     }
+    //                 } else {
+    //                     auto result = llmConf.selectModelByName(arg);
+    //                     switched = result.empty;
+    //                     logger.warningf(!result.empty, "failed to switch model: ", result);
+    //                 }
+    //                 if (switched) {
+    //                     agent.resetModel(llmConf.activeCodeModel());
+    //                     logger.infof("switched to model: %s", llmConf.activeModelName());
+    //                     logger.infof("Agent model reset: %s -> %s, context: %s",
+    //                             oldModel, agent.modelName, agent.modelContextSize);
+    //                 }
+    //             }
+    //             continue;
+    //         } else if (query.startsWith("/plan ")) {
+    //             auto q = query["/plan ".length .. $];
+    //             logger.infof("Running plan pipeline: %s", q);
+    //             auto result = runPlanPipeline(q, llmConf, rag, monitor, () {
+    //                 return isInterruptTriggered;
+    //             }, llmConf.toolFilter.to());
+    //             writeln(prettyPrint(result));
+    //             continue;
+    //         } else if (query.startsWith("/code ")) {
+    //             auto q = query["/code ".length .. $];
+    //             logger.infof("Running coder pipeline: %s", q);
+    //             auto result = runCoderPipeline(q, llmConf, rag, monitor, () {
+    //                 return isInterruptTriggered;
+    //             }, llmConf.toolFilter.to());
+    //             if (result.wasInterrupted) {
+    //                 writeln("\nPipeline interrupted by user.");
+    //                 continue;
+    //             }
+    //             writeln(prettyPrint(result));
+    //             continue;
+    //         } else if (query.empty) {
+    //             continue;
+    //         }
+    //     }
+    //     agent.addUserQuery(query);
+    //     doCompress(agent, force: false);
+    //     auto result = agent.runToCompletion(&processResult, compressCallback: &progressCallback,
+    //             interrupt: () { return isInterruptTriggered; });
+    // }
+    // while (running);
 
     return 0;
 }
