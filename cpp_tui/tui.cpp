@@ -458,4 +458,9 @@ bool tuiRender(TuiState& state) {
 
 void tuiSetLogging(TuiState& state, bool onOff) { state.isLogActive = onOff; }
 
+void tuiSetIniFilename(TuiState& state, const std::string& filename) {
+    state.iniFilename = filename;
+    ImGui::GetIO().IniFilename = state.iniFilename.c_str();
+}
+
 } // namespace llmfun::tui

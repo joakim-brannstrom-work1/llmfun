@@ -189,6 +189,13 @@ void tuiSetLogging(TuiState* state, int onOff) {
     ::llmfun::tui::tuiSetLogging(*state->inner, onOff != 0);
 }
 
+void tuiSetIniFilename(TuiState* state, String filename) {
+    if (!state || !state->inner)
+        return;
+    std::string filename_{filename.data ? filename.data : "", filename.len};
+    ::llmfun::tui::tuiSetIniFilename(*state->inner, filename_);
+}
+
 void tuiAddLogMessage(TuiState* state, String summary, String text) {
     if (!state || !state->inner)
         return;

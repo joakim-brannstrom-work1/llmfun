@@ -41,6 +41,7 @@ struct UserQueryState {
 // Always pass by reference (TuiState&) to avoid accidental copies.
 struct TuiState {
     bool isLogActive{false};
+    std::string iniFilename;
 
     std::deque<ChatMessage> outputLines;
     static constexpr size_t MaxChatMessages = 10000;
@@ -76,6 +77,12 @@ bool tuiRender(TuiState& state);
 /// Set the logging to on/off. Must be done before tuiRender is called.
 void tuiSetLogging(TuiState& state, bool onOff);
 
+/// Set the filename that imgui save window settings to.
+/// By default it is in the "$cwd/imgui.ini".
+/// Call this **after** `ImGui::CreateContext()` but **before** your main loop starts calling
+/// `ImGui::NewFrame()`.
+void tuiSetIniFilename(TuiState& state, const std::string& filename);
+
 /// Add a log message with FIFO eviction if bound exceeded.
 void tuiAddLogMessage(TuiState& state, const LogMessage& msg);
 
@@ -106,4 +113,5 @@ void tuiResetSubmit(TuiState& state);
 /// Distinction: tuiGetInput() returns the current editable buffer;
 /// tuiGetSubmitQuery() returns the last submitted query (read-only snapshot).
 std::string tuiGetSubmitQuery(const TuiState& state);
+
 } // namespace llmfun::tui

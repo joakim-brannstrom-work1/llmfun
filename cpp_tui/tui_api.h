@@ -182,6 +182,12 @@ int tuiRender(TuiState* state);
 /* Set the logging to on/off. Must be done before tuiRender is called. */
 void tuiSetLogging(TuiState* state, int onOff);
 
+/* Set the filename that imgui save window settings to.
+    By default it is in the "$cwd/imgui.ini".
+    Call this **after** `tuiInit` but **before** your main loop starts calling `tuiBackendNewFrame`.
+ */
+void tuiSetIniFilename(TuiState* state, String filename);
+
 /* Append a line to the scrollable output display area.
  *
  * The output area has a maximum capacity (10000 lines). When exceeded, the

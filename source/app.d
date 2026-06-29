@@ -209,7 +209,7 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     bool debugMode = false;
 
     String toTuiString(string s) {
-        return String(toStringz(s), s.length);
+        return String(s.ptr, s.length);
     }
 
     string toString(String s) {
@@ -434,9 +434,19 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
         return AgentStatus.active;
     }
 
+    import std.stdio;
+
     auto tuiScreen = tuiInit();
     scope (exit)
         tuiShutdown(tuiScreen);
+    if (llmConf.scratchArea.exists) {
+        auto imguiIni = llmConf.scratchArea ~ "imgui.ini";
+        auto s = toTuiString(imguiIni);
+        tuiSetIniFilename(tuiState, s);
+    } else {
+        auto s = toTuiString(null);
+        tuiSetIniFilename(tuiState, s);
+    }
 
     addChatMessage(printHelp());
 
