@@ -313,6 +313,101 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
         logger.trace(result.status != ProcessResult.Status.ok, result.status);
     }
 
+    enum AgentStatus {
+        active,
+        terminate,
+    }
+
+    AgentStatus runAgent(string query) {
+        if (query.among("/quit", "/q", "/exit")) {
+            return AgentStatus.terminate;
+        } else if (query == "/compact") {
+            doCompress(agent, force: true);
+            return AgentStatus.active;
+        } else if (query == "/new") {
+            agent.clearHistory;
+            logger.info("context cleared");
+            return AgentStatus.active;
+        } else if (query == "/help") {
+            printHelp();
+            return AgentStatus.active;
+        } else if (query == "/debug") {
+            debugMode = !debugMode;
+            logger.globalLogLevel = debugMode ? logger.LogLevel.trace : logger.LogLevel.info;
+            logger.infof("Debug output: %s", debugMode ? "ON" : "OFF");
+            return AgentStatus.active;
+        } else if (query == "/model" || query.startsWith("/model ")) {
+            auto arg = query == "/model" ? "" : query["/model ".length .. $].strip();
+            if (arg.empty) {
+                writeln("Available models:");
+                foreach (i, model; llmConf.codeModels) {
+                    auto activeMarker = (i == cast(size_t) llmConf.activeCodeModelIndex) ? " [active]"
+                        : "";
+                    writefln("  %s  %s%s", i, model.name, activeMarker);
+                }
+                writeln();
+                writeln("Use /model <index> or /model <name> to switch.");
+            } else {
+                const oldModel = llmConf.activeCodeModel.name;
+                // Try to switch model
+                bool switched;
+                size_t idx = ifThrown(arg.to!long, -1);
+                if (idx >= 0) {
+                    switched = llmConf.selectModelByIndex(idx);
+                    if (!switched) {
+                        logger.errorf("Error: Invalid model index '%s'. Valid indices: 0-%s.",
+                                arg, llmConf.codeModels.length - 1);
+                    }
+                } else {
+                    auto result = llmConf.selectModelByName(arg);
+                    switched = result.empty;
+                    logger.warningf(!result.empty, "failed to switch model: ", result);
+                }
+                if (switched) {
+                    agent.resetModel(llmConf.activeCodeModel());
+                    logger.infof("switched to model: %s", llmConf.activeModelName());
+                    logger.infof("Agent model reset: %s -> %s, context: %s",
+                            oldModel, agent.modelName, agent.modelContextSize);
+                }
+            }
+            return AgentStatus.active;
+        } else if (query.startsWith("/plan ")) {
+            auto q = query["/plan ".length .. $];
+            logger.infof("Running plan pipeline: %s", q);
+            auto result = runPlanPipeline(q, llmConf, rag, monitor, () {
+                return isInterruptTriggered;
+            }, llmConf.toolFilter.to());
+            writeln(prettyPrint(result));
+            return AgentStatus.active;
+        } else if (query.startsWith("/code ")) {
+            auto q = query["/code ".length .. $];
+            logger.infof("Running coder pipeline: %s", q);
+            auto result = runCoderPipeline(q, llmConf, rag, monitor, () {
+                return isInterruptTriggered;
+            }, llmConf.toolFilter.to());
+            if (result.wasInterrupted) {
+                writeln("\nPipeline interrupted by user.");
+                return AgentStatus.active;
+            }
+            writeln(prettyPrint(result));
+            return AgentStatus.active;
+        } else if (query.empty) {
+            return AgentStatus.active;
+        }
+        agent.addUserQuery(query);
+        doCompress(agent, force: false);
+        auto result = agent.runToCompletion(&processResult, compressCallback: &progressCallback,
+                interrupt: () { return isInterruptTriggered; });
+        return AgentStatus.active;
+    }
+
+    void addChatMessage(string query) {
+        string summary = query.length < 100 ? query : query[0 .. 100];
+        auto s = String(summary.ptr, summary.length);
+        auto q = String(query.ptr, query.length);
+        tuiAddChatMessage(tuiState, s, q);
+    }
+
     auto tuiScreen = tuiInit();
     scope (exit)
         tuiShutdown(tuiScreen);
@@ -330,7 +425,15 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
             String_Free(userQuery);
 
             if (!query.empty) {
-                runAgent(query);
+                addChatMessage(query);
+
+                final switch (runAgent(query)) {
+                case AgentStatus.active:
+                    break;
+                case AgentStatus.terminate:
+                    running = false;
+                    break;
+                }
             }
 
             tuiResetSubmit(tuiState);
