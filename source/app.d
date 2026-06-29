@@ -451,7 +451,7 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     addChatMessage(printHelp());
 
     void setStatusText() {
-        auto status = format!"[%s/%s %s]$ "(agent.contextUsed,
+        auto status = format!"[Context: %s/%s tokens | Model: '%s']$ "(agent.contextUsed,
                 agent.contextSize, llmConf.activeModelName());
         auto status_ = String(status.ptr, status.length);
         tuiSetStatusText(tuiState, status_);
