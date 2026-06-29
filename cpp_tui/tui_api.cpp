@@ -183,6 +183,12 @@ int tuiRender(TuiState* state) {
     return ::llmfun::tui::tuiRender(*state->inner) ? 1 : 0;
 }
 
+void tuiSetLogging(TuiState* state, int onOff) {
+    if (!state || !state->inner)
+        return;
+    ::llmfun::tui::tuiSetLogging(*state->inner, onOff != 0);
+}
+
 void tuiAddLogMessage(TuiState* state, String summary, String text) {
     if (!state || !state->inner)
         return;
@@ -199,7 +205,7 @@ void tuiAddChatMessage(TuiState* state, String summary, String text) {
     ::llmfun::tui::tuiAddOutputLine(*state->inner, ::llmfun::tui::ChatMessage{summary_, text_});
 }
 
-void tuiClearOutput(TuiState* state) {
+void tuiClearChatMessages(TuiState* state) {
     if (!state || !state->inner)
         return;
     ::llmfun::tui::tuiClearOutput(*state->inner);

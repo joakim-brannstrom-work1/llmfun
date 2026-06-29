@@ -179,6 +179,9 @@ void tuiBackendRender(TuiScreen* screen);
  */
 int tuiRender(TuiState* state);
 
+/* Set the logging to on/off. Must be done before tuiRender is called. */
+void tuiSetLogging(TuiState* state, int onOff);
+
 /* Append a line to the scrollable output display area.
  *
  * The output area has a maximum capacity (10000 lines). When exceeded, the
@@ -208,7 +211,7 @@ void tuiAddChatMessage(TuiState* state, String summary, String text);
  *
  * Null-safe: no-op if state is NULL.
  */
-void tuiClearOutput(TuiState* state);
+void tuiClearChatMessages(TuiState* state);
 
 /* ---- Status ---- */
 

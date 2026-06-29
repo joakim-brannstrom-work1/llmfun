@@ -12,6 +12,7 @@
 - add a specific /code analyze mode to update a plan/code_analysis.md
 - support AGENT.md
 - write a system design review template and an implementation plan review template. The pipeline agents are complaining
+- maybe write the context use as part of the summary in the tree node chat
 
 - createEmbedder must use ModelPool. It is RAII so it ensures that models are deallocated when the pool is destroyed and enable reuse of an already loaded model
 

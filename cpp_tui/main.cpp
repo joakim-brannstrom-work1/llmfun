@@ -28,6 +28,7 @@ int main() {
         return 1;
     }
 
+    tuiSetLogging(state, true);
     tuiSetStatusText(state, makeStr("Context: 0/0 tokens | Model: none | Ready"));
 
     while (true) {

@@ -9,7 +9,7 @@ import std.file : exists;
 import std.format : format;
 import std.stdio : writeln, writefln;
 import std.sumtype : match;
-import std.string : strip, startsWith, join, toStringz;
+import std.string : strip, startsWith, join, toStringz, split;
 
 import argparse : CLI, NamedArgument, PositionalArgument, ArgumentGroup,
     ansiStylingArgument, Command, Description, Required,
@@ -213,7 +213,13 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     }
 
     string toString(String s) {
-        return s.data[0 .. s.len].idup;
+        if (s.len == 0)
+            return null;
+        auto r = s.data[0 .. s.len].idup;
+        while (!r.empty && r[$ - 1] == '\0') {
+            r = r[0 .. $ - 1];
+        }
+        return r;
     }
 
     /// TODO: If help text ever needs externalization (config file, i18n),
@@ -225,7 +231,7 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
             return null;
 
         string[] s;
-        s ~= "llmfun agent mode — type a query and press Enter to start.";
+        s ~= "llmfun agent mode - type a query and press Enter to start.";
         s ~= " Use /commands for special actions:";
         s ~= "";
         s ~= "   (bare query)       Send a message to the agent";
@@ -272,6 +278,29 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     auto tuiState = tuiCreateState();
     scope (exit)
         tuiDestroyState(tuiState);
+    tuiSetLogging(tuiState, false);
+
+    void addChatMessage(Args...)(string msg, Args args) {
+        msg = format(msg, args);
+        string summary = () {
+            auto s = msg;
+            auto tmp = msg.split('\n');
+            if (!tmp.empty)
+                s = tmp[0].strip;
+            return (s.length < 100 ? s : s[0 .. 100]).strip;
+        }();
+        auto s = String(summary.ptr, summary.length);
+        auto q = String(msg.ptr, msg.length);
+        tuiAddChatMessage(tuiState, s, q);
+    }
+
+    void addLogMessage(Args...)(string msg, Args args) {
+        msg = format(msg, args);
+        string summary = msg.length < 100 ? msg : msg[0 .. 100];
+        auto s = String(summary.ptr, summary.length);
+        auto q = String(msg.ptr, msg.length);
+        tuiAddLogMessage(tuiState, s, q);
+    }
 
     void progressCallback(size_t currentChunk, size_t totalChunks, string status) {
         // displayProgress(currentChunk, totalChunks, status);
@@ -279,7 +308,7 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     void doCompress(ref Agent agent, bool force) {
         if (!agent.needCompression && !force)
             return;
-        logger.info("Compressing chat...");
+        addChatMessage("Compressing chat...");
         const ctxUsed = agent.contextUsed;
         auto res = agent.compress(force: force, callback: &progressCallback);
         displayCompressionResult(res.compressed, res.originalLength, res.newLength,
@@ -290,23 +319,23 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
         foreach (m; result.chat) {
             m.match!((Message a) {
                 if (!a.role.among(Role.user, Role.system)) {
-                    writefln("[%s]: %s", a.role, a.content);
+                    addChatMessage("[%s]: %s", a.role, a.content);
                 } else {
                     logger.tracef("[%s]: %s", a.role, a.content);
                 }
             }, (ToolMessage a) {
                 if (!isHiddenToolCall(a.toolCalls)) {
-                    writefln("[%s %s/%s %s", a.role, agent.contextUsed,
+                    addChatMessage("[%s %s/%s %s", a.role, agent.contextUsed,
                         agent.contextSize, summarizeToolCalls(a.role, a.toolCalls));
                 }
             }, (ToolResponse a) {
                 if (!isHiddenToolResponse(a.toolName)) {
-                    writefln("[%s %s/%s tool:%-s]: %s", a.role, agent.contextUsed,
+                    addChatMessage("[%s %s/%s tool:%-s]: %s", a.role, agent.contextUsed,
                         agent.contextSize, a.toolName, a.content.length < 100
                         ? a.content : a.content[0 .. 100]);
                 }
             }, (VisionMessage a) {
-                writefln("[user]: %s (with image)", a.content);
+                addChatMessage("[user]: %s (with image)", a.content);
             });
         }
         agent.saveHistory(agentHistory);
@@ -325,28 +354,31 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
             doCompress(agent, force: true);
             return AgentStatus.active;
         } else if (query == "/new") {
+            logger.info("yeey");
             agent.clearHistory;
-            logger.info("context cleared");
+            tuiClearChatMessages(tuiState);
+            addChatMessage("context cleared");
             return AgentStatus.active;
         } else if (query == "/help") {
-            printHelp();
+            addChatMessage(printHelp());
             return AgentStatus.active;
         } else if (query == "/debug") {
             debugMode = !debugMode;
+            tuiSetLogging(tuiState, debugMode);
             logger.globalLogLevel = debugMode ? logger.LogLevel.trace : logger.LogLevel.info;
-            logger.infof("Debug output: %s", debugMode ? "ON" : "OFF");
+            addChatMessage("Debug output: %s", debugMode ? "ON" : "OFF");
             return AgentStatus.active;
         } else if (query == "/model" || query.startsWith("/model ")) {
             auto arg = query == "/model" ? "" : query["/model ".length .. $].strip();
             if (arg.empty) {
-                writeln("Available models:");
+                auto m = "Available models:";
                 foreach (i, model; llmConf.codeModels) {
                     auto activeMarker = (i == cast(size_t) llmConf.activeCodeModelIndex) ? " [active]"
                         : "";
-                    writefln("  %s  %s%s", i, model.name, activeMarker);
+                    m ~= format("  %s  %s%s\n", i, model.name, activeMarker);
                 }
-                writeln();
-                writeln("Use /model <index> or /model <name> to switch.");
+                m ~= "Use /model <index> or /model <name> to switch.";
+                addChatMessage(m);
             } else {
                 const oldModel = llmConf.activeCodeModel.name;
                 // Try to switch model
@@ -355,41 +387,42 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
                 if (idx >= 0) {
                     switched = llmConf.selectModelByIndex(idx);
                     if (!switched) {
-                        logger.errorf("Error: Invalid model index '%s'. Valid indices: 0-%s.",
+                        addChatMessage("error: Invalid model index '%s'. Valid indices: 0-%s.",
                                 arg, llmConf.codeModels.length - 1);
                     }
                 } else {
                     auto result = llmConf.selectModelByName(arg);
                     switched = result.empty;
-                    logger.warningf(!result.empty, "failed to switch model: ", result);
+                    if (result.empty)
+                        addChatMessage("failed to switch model: %s", result);
                 }
                 if (switched) {
                     agent.resetModel(llmConf.activeCodeModel());
-                    logger.infof("switched to model: %s", llmConf.activeModelName());
-                    logger.infof("Agent model reset: %s -> %s, context: %s",
-                            oldModel, agent.modelName, agent.modelContextSize);
+                    addChatMessage("switched to model: %s\nAgent model reset: %s -> %s, context: %s",
+                            llmConf.activeModelName(), oldModel,
+                            agent.modelName, agent.modelContextSize);
                 }
             }
             return AgentStatus.active;
         } else if (query.startsWith("/plan ")) {
             auto q = query["/plan ".length .. $];
-            logger.infof("Running plan pipeline: %s", q);
+            addChatMessage("Running plan pipeline: %s", q);
             auto result = runPlanPipeline(q, llmConf, rag, monitor, () {
                 return isInterruptTriggered;
             }, llmConf.toolFilter.to());
-            writeln(prettyPrint(result));
+            addChatMessage(prettyPrint(result));
             return AgentStatus.active;
         } else if (query.startsWith("/code ")) {
             auto q = query["/code ".length .. $];
-            logger.infof("Running coder pipeline: %s", q);
+            addChatMessage("Running coder pipeline: %s", q);
             auto result = runCoderPipeline(q, llmConf, rag, monitor, () {
                 return isInterruptTriggered;
             }, llmConf.toolFilter.to());
             if (result.wasInterrupted) {
-                writeln("\nPipeline interrupted by user.");
+                addChatMessage("Pipeline interrupted by user.");
                 return AgentStatus.active;
             }
-            writeln(prettyPrint(result));
+            addChatMessage(prettyPrint(result));
             return AgentStatus.active;
         } else if (query.empty) {
             return AgentStatus.active;
@@ -401,16 +434,18 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
         return AgentStatus.active;
     }
 
-    void addChatMessage(string query) {
-        string summary = query.length < 100 ? query : query[0 .. 100];
-        auto s = String(summary.ptr, summary.length);
-        auto q = String(query.ptr, query.length);
-        tuiAddChatMessage(tuiState, s, q);
-    }
-
     auto tuiScreen = tuiInit();
     scope (exit)
         tuiShutdown(tuiScreen);
+
+    addChatMessage(printHelp());
+
+    void setStatusText() {
+        auto status = format!"[%s/%s %s]$ "(agent.contextUsed,
+                agent.contextSize, llmConf.activeModelName());
+        auto status_ = String(status.ptr, status.length);
+        tuiSetStatusText(tuiState, status_);
+    }
 
     bool running = conf.prompt.empty;
     do {
@@ -418,6 +453,8 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
 
         if (tuiRender(tuiState) == 0)
             break;
+
+        setStatusText();
 
         if (tuiIsSubmitReady(tuiState) != 0) {
             String userQuery = tuiGetSubmitQuery(tuiState);

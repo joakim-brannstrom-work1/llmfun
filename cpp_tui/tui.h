@@ -40,7 +40,7 @@ struct UserQueryState {
 // Note: This struct is non-copyable and non-movable due to std::mutex.
 // Always pass by reference (TuiState&) to avoid accidental copies.
 struct TuiState {
-    bool isLogActive{true};
+    bool isLogActive{false};
 
     std::deque<ChatMessage> outputLines;
     static constexpr size_t MaxChatMessages = 10000;
@@ -72,6 +72,9 @@ void tuiRenderFrame(ImTui::TScreen* screen);
 
 /// Render one frame. Returns false to exit.
 bool tuiRender(TuiState& state);
+
+/// Set the logging to on/off. Must be done before tuiRender is called.
+void tuiSetLogging(TuiState& state, bool onOff);
 
 /// Add a log message with FIFO eviction if bound exceeded.
 void tuiAddLogMessage(TuiState& state, const LogMessage& msg);

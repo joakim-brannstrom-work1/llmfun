@@ -456,4 +456,6 @@ bool tuiRender(TuiState& state) {
     return true;
 }
 
+void tuiSetLogging(TuiState& state, bool onOff) { state.isLogActive = onOff; }
+
 } // namespace llmfun::tui
