@@ -192,35 +192,20 @@ LlmConfigT userToLlmConfig(LlmConfigT, ConfigT)(LlmConfigT llm, ConfigT conf) {
 int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     import std.file : readText;
     import std.stdio : readln, writef, stdout;
-    import llm.rag.embedder : createEmbedder;
     import llm.agent;
     import llm.chat;
-    import llm.config;
-    import llm.query;
-    import llm.rag.rag;
     import llm.cli : configLinenoise, multiLineConsole;
-    import llm.utility;
-    import llm.metric.monitor : MetricMonitor;
-    import llm.plan;
     import llm.coder;
+    import llm.config;
+    import llm.metric.monitor : MetricMonitor;
     import llm.pipeline : prettyPrint;
+    import llm.plan;
+    import llm.query;
+    import llm.rag.embedder : createEmbedder;
+    import llm.rag.rag;
+    import llm.tui;
+    import llm.utility;
     import llmfun_tui;
-
-    bool debugMode = false;
-
-    String toTuiString(string s) {
-        return String(s.ptr, s.length);
-    }
-
-    string toString(String s) {
-        if (s.len == 0)
-            return null;
-        auto r = s.data[0 .. s.len].idup;
-        while (!r.empty && r[$ - 1] == '\0') {
-            r = r[0 .. $ - 1];
-        }
-        return r;
-    }
 
     /// TODO: If help text ever needs externalization (config file, i18n),
     ///       the function signature should accept a content parameter.
@@ -282,24 +267,10 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
 
     void addChatMessage(Args...)(string msg, Args args) {
         msg = format(msg, args);
-        string summary = () {
-            auto s = msg;
-            auto tmp = msg.split('\n');
-            if (!tmp.empty)
-                s = tmp[0].strip;
-            return (s.length < 100 ? s : s[0 .. 100]).strip;
-        }();
+        string summary = shortSummary(msg);
         auto s = String(summary.ptr, summary.length);
         auto q = String(msg.ptr, msg.length);
         tuiAddChatMessage(tuiState, s, q);
-    }
-
-    void addLogMessage(Args...)(string msg, Args args) {
-        msg = format(msg, args);
-        string summary = msg.length < 100 ? msg : msg[0 .. 100];
-        auto s = String(summary.ptr, summary.length);
-        auto q = String(msg.ptr, msg.length);
-        tuiAddLogMessage(tuiState, s, q);
     }
 
     void progressCallback(size_t currentChunk, size_t totalChunks, string status) {
@@ -347,6 +318,8 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
         terminate,
     }
 
+    bool debugMode = false;
+
     AgentStatus runAgent(string query) {
         if (query.among("/quit", "/q", "/exit")) {
             return AgentStatus.terminate;
@@ -354,7 +327,6 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
             doCompress(agent, force: true);
             return AgentStatus.active;
         } else if (query == "/new") {
-            logger.info("yeey");
             agent.clearHistory;
             tuiClearChatMessages(tuiState);
             addChatMessage("context cleared");
@@ -457,6 +429,7 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
         tuiSetStatusText(tuiState, status_);
     }
 
+    auto swapTuiLog = swapToTuiLogger();
     bool running = conf.prompt.empty;
     do {
         tuiBackendNewFrame();
@@ -485,6 +458,8 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
 
             tuiResetSubmit(tuiState);
         }
+
+        tuiLogToTui(swapTuiLog, tuiState);
 
         tuiBackendRender(tuiScreen);
     }

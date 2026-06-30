@@ -30,6 +30,7 @@ int main() {
 
     tuiSetLogging(state, true);
     tuiSetStatusText(state, makeStr("Context: 0/0 tokens | Model: none | Ready"));
+    tuiSetIniFilename(state, makeStr("imgui2.ini"));
 
     while (true) {
         tuiBackendNewFrame();
