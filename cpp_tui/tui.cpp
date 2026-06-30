@@ -13,7 +13,10 @@
 namespace llmfun::tui {
 
 // Named key codes for Ctrl shortcuts (ncurses raw key codes)
-static constexpr int KEY_CTRL_D = 4; // Ctrl+D exit
+static constexpr int KEY_CTRL_D = 4;    // Ctrl+D exit
+static constexpr int KEY_CTRL_1 = 0x11; // Ctrl+1
+static constexpr int KEY_CTRL_2 = 0x12; // Ctrl+2
+static constexpr int KEY_CTRL_3 = 0x13; // Ctrl+3
 
 struct Log {
     FILE* logFile;
@@ -147,7 +150,9 @@ void renderTabChat(TuiState& state, Log& log) {
     const auto inputBufLines =
         std::min(20, std::max(2, static_cast<int>(countNewLines(state.userQuery.inputBuf))));
 
-    auto outputArea = [&state, &inputBufLines, &DisplaySize]() {
+    bool focusInput{false};
+
+    auto outputArea = [&state, &log, &inputBufLines, &DisplaySize, &focusInput]() {
         // Clamp height to avoid negative values on very small terminals
         ImVec2 outPos(0, 1.0f);
         ImVec2 outSize(DisplaySize.x, std::max(1.0f, DisplaySize.y - 3 - inputBufLines));
@@ -231,7 +236,7 @@ void renderTabChat(TuiState& state, Log& log) {
         }
     };
 
-    auto inputArea = [&state, &inputBufLines, &DisplaySize, &inputHistory, &log]() {
+    auto inputArea = [&state, &inputBufLines, &DisplaySize, &inputHistory, &log, &focusInput]() {
         ImVec2 inputPos(0, DisplaySize.y - 3 - inputBufLines);
         ImVec2 inputSize(DisplaySize.x, 2 + inputBufLines);
         ImGui::SetCursorPos(inputPos);
@@ -256,7 +261,7 @@ void renderTabChat(TuiState& state, Log& log) {
             state.userQuery.inputBuf = state.userQuery.newInputBufString;
         }
 
-        if (state.userQuery.isSubmitted) {
+        if (state.userQuery.isSubmitted || focusInput) {
             state.userQuery.isSubmitted = false;
             ImGui::SetKeyboardFocusHere();
         }
@@ -404,6 +409,13 @@ void renderMainWindow(TuiState& state, Log& log) {
 }
 
 bool tuiRender(TuiState& state) {
+    auto logFile = [&state]() {
+        if (state.isLogActive)
+            return fopen("llmfun_ui_log.txt", "a");
+        return static_cast<FILE*>(nullptr);
+    }();
+    Log log{logFile};
+
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImVec2 DisplaySize = ImGui::GetIO().DisplaySize;
 
@@ -419,23 +431,12 @@ bool tuiRender(TuiState& state) {
 
     ImGuiIO& io = ImGui::GetIO();
 
-    if (io.KeyCtrl &&
-        (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_C)) || ImGui::IsKeyPressed(KEY_CTRL_D))) {
+    if (io.KeyCtrl && (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_C)))) {
         return false;
-    }
-    if (ImGui::IsItemActive() && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        state.userQuery.inputBuf.clear();
     }
     if (ImGui::IsKeyPressed(ImGuiKey_End)) {
         state.autoScroll = true;
     }
-
-    auto logFile = [&state]() {
-        if (state.isLogActive)
-            return fopen("llmfun_ui_log.txt", "a");
-        return static_cast<FILE*>(nullptr);
-    }();
-    Log log{logFile};
 
     // Required: BeginChild calls must be nested inside a Begin/End block.
     // Without a parent window, BeginChild creates an implicit window whose
