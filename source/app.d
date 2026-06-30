@@ -286,28 +286,32 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
                 res.keptXCount, res.keptXTokens, ctxUsed, res.newContextSize);
     }
 
+    void processChatMessage(Chat.MessageT m) {
+        m.match!((Message a) {
+            if (!a.role.among(Role.system)) {
+                addChatMessage("[%s]: %s", a.role, a.content);
+            } else {
+                logger.tracef("[%s]: %s", a.role, a.content);
+            }
+        }, (ToolMessage a) {
+            if (!isHiddenToolCall(a.toolCalls)) {
+                addChatMessage("[%s %s/%s %s", a.role, agent.contextUsed,
+                    agent.contextSize, summarizeToolCalls(a.role, a.toolCalls));
+            }
+        }, (ToolResponse a) {
+            if (!isHiddenToolResponse(a.toolName)) {
+                addChatMessage("[%s %s/%s tool:%-s]: %s", a.role, agent.contextUsed,
+                    agent.contextSize, a.toolName, a.content.length < 100
+                    ? a.content : a.content[0 .. 100]);
+            }
+        }, (VisionMessage a) {
+            addChatMessage("[user]: %s (with image)", a.content);
+        });
+    }
+
     void processResult(ProcessResult result) {
         foreach (m; result.chat) {
-            m.match!((Message a) {
-                if (!a.role.among(Role.user, Role.system)) {
-                    addChatMessage("[%s]: %s", a.role, a.content);
-                } else {
-                    logger.tracef("[%s]: %s", a.role, a.content);
-                }
-            }, (ToolMessage a) {
-                if (!isHiddenToolCall(a.toolCalls)) {
-                    addChatMessage("[%s %s/%s %s", a.role, agent.contextUsed,
-                        agent.contextSize, summarizeToolCalls(a.role, a.toolCalls));
-                }
-            }, (ToolResponse a) {
-                if (!isHiddenToolResponse(a.toolName)) {
-                    addChatMessage("[%s %s/%s tool:%-s]: %s", a.role, agent.contextUsed,
-                        agent.contextSize, a.toolName, a.content.length < 100
-                        ? a.content : a.content[0 .. 100]);
-                }
-            }, (VisionMessage a) {
-                addChatMessage("[user]: %s (with image)", a.content);
-            });
+            processChatMessage(m);
         }
         agent.saveHistory(agentHistory);
         logger.trace(result.status != ProcessResult.Status.ok, result.status);
@@ -418,6 +422,10 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     } else {
         auto s = toTuiString(null);
         tuiSetIniFilename(tuiState, s);
+    }
+
+    foreach (m; agent.chat.getMessages()) {
+        processChatMessage(m);
     }
 
     addChatMessage(printHelp());

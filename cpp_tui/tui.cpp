@@ -159,7 +159,10 @@ void renderTabChat(TuiState& state, Log& log) {
         for (size_t i = 0; i < state.outputLines.size(); ++i) {
             const auto flags = (i == state.outputLines.size() - 1) ? ImGuiTreeNodeFlags_DefaultOpen
                                                                    : ImGuiTreeNodeFlags_None;
-            if (ImGui::CollapsingHeader(state.outputLines[i].summary.c_str(), flags)) {
+            auto s = state.outputLines[i].summary;
+            s.append("##");
+            s.append(std::to_string(i));
+            if (ImGui::CollapsingHeader(s.c_str(), flags)) {
                 ImGui::PushTextWrapPos(0.0f);
                 ImGui::TextUnformatted(state.outputLines[i].text.c_str());
                 ImGui::PopTextWrapPos();

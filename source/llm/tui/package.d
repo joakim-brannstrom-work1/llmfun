@@ -1,6 +1,7 @@
 module llm.tui;
 
-import std.array : appender, Appender, empty;
+import std.algorithm : filter;
+import std.array : appender, Appender, empty, array;
 import std.logger;
 
 import llmfun_tui;
@@ -20,12 +21,17 @@ string toString(String s) {
 }
 
 string shortSummary(string msg) {
+    import std.range : take;
     import std.string : split, strip;
+    import std.uni : byCodePoint, byGrapheme, isWhite;
+    import std.uni : isAlphaNum, isWhite;
+    import std.utf : toUTF8;
 
     auto tmp = msg.split('\n');
     if (!tmp.empty)
         msg = tmp[0].strip;
-    return (msg.length < 100 ? msg : msg[0 .. 100]).strip;
+    return msg.byGrapheme.filter!(a => a[0].isAlphaNum || a[0].isWhite)
+        .take(100).byCodePoint.toUTF8.strip;
 }
 
 class TuiLogger : Logger {
