@@ -354,17 +354,64 @@ dub build --config=llmfun_test              # Build test utility (manual testing
 
 ## Testing
 
+The unit test runner is **nusilly** (dub dependency, a fork of `silly`). It replaces the default unittest runner in `dub test`: every argument after `--` is passed to the test binary. Run `dub test -- -h` to see the options.
+
 - **Run all unit tests**: `dub test` (no configuration parameter). This compiles and runs all inline `unittest` blocks across all modules. This is the primary test command.
-- **Build test utility**: `dub build --config=llmfun_test`. This configuration builds a separate test utility binary (`utility_app.d`) for manually testing implementation details. It does NOT run the unit test suite.
-- Entry point for test utility: `source/utility_app.d`.
-- Inline unit tests exist in most modules (e.g., `rag/rag.d`, `llm/tool_call/io/tests.d`).
-- New code should include inline `unittest` blocks.
+- **Build test utility**: `dub build --config=llmfun_test`. This configuration builds a separate test utility binary (`utility_app.d`) for manually testing implementation details. It does NOT run the unit test suite. Entry point: `source/utility_app.d`.
+- Inline unit tests exist in most modules (e.g., `rag/rag.d`, `llm/tool_call/io/tests.d`). New code should include inline `unittest` blocks.
+
+### Runtime
+
+- `dub test` takes about 30 seconds wall clock: recompiling and relinking the test binary plus about 7 seconds to run the ~500 tests. That is the normal cost of the regression gate; **do not avoid `dub test`** because it takes a while. Run it after changes to tested code and treat a green run as the acceptance gate.
+- A failing test makes `dub test` exit non-zero (`Error Program exited with code 1`); a green run ends with `Summary: N passed, 0 failed in X ms`.
+- Tests run multithreaded by default (one worker thread per CPU). If a failure looks dependent on parallel execution, re-run with `-t 1`.
+
+### Filtering options (passed after `dub test --`)
+
+- `--no-colours` - disable colour output (automatically disabled when stdout is not a tty).
+- `-t <n>` / `--threads <n>` - number of worker threads; 0 = auto-detect (default).
+- `-i <regexp>` / `--include <regexp>` - run only the tests whose name matches the regular expression.
+- `-e <regexp>` / `--exclude <regexp>` - skip the tests whose name matches the regular expression.
+- `--fail-fast` - stop executing tests when a test fails. Note: only a failure that throws an `Error` or bare `Throwable` stops the run; a plain `assert` failure (AssertError) or a thrown `Exception` does not.
+- `-v` / `--verbose` - per-test durations, source locations, full stack traces.
+- `-h` / `--help` - print the options and exit without running tests.
+
+The `-i` / `-e` regular expressions (std.regex syntax, unanchored) are matched against the test's fully qualified name and its test name, so both module-wide and per-test filtering work:
+
+```bash
+dub test -- -i '.*llm\.rag.*'        # all unittests in llm.rag modules
+dub test -- -i '.*my_experiment.*'   # the single named test "my_experiment"
+```
+
+Do not use `-i` and `-e` at the same time (results are unexpected).
+
+### Naming tests and the experiment pattern
+
+A string user-defined attribute on a unittest names the test (with multiple string UDAs, the first wins). Unnamed unittests are reported as `<module> __unittest_L<line>_C<col>`; named ones as `<module> <name>`.
+
+A good way of experimenting with llmfun internal code is to add a temporary named `unittest` with the experimental code to any module (remove the `>`):
+
+```d
+> @("my_experiment")
+> unittest {
+>     // experimental code
+> }
+```
+
+and then run only that test:
+
+```bash
+dub test -- -i '.*my_experiment.*'
+```
+
+Remove the temporary unittest when the experiment is done.
 
 ## Agent Rules
 
 - **Always verify facts** using RAG search or memory before asserting them. Internal knowledge is not sufficient for specific names, technical details, or version-specific information.
 - **Read relevant source files** before writing any code. Your changes must blend with the existing codebase.
 - **Run `dub build`** after making changes to verify compilation.
+- **Run `dub test`** after changes to tested code. It takes about 30 seconds; do not avoid it or replace it with partial checks.
 - **Never write PR descriptions, commit messages, or reviewer responses** on behalf of the user.
 - **Never commit or push** without explicit human approval. If committing on behalf of the user, use `Assisted-by:` in the commit message, never `Co-authored-by:`.
 - **Track known gaps** in `doc/todo.md`.
