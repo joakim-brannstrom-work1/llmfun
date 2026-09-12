@@ -716,7 +716,7 @@ Use listRAGDatabases to discover available database names.
 
 Examples:
   test AND code
-  (test OR unittest) AND NOT python
+  (test OR unittest) NOT python
   NEAR(code block, 3)
   ^header AND body*
 
@@ -724,6 +724,9 @@ BNF:
 
   <term>      := [^] string[*]
   <neargroup> := NEAR ( <term> <term> ... [, N] )
+  <query>     := <term>
+  <query>     := <neargroup>
+  <query>     := '(' <query> ')'
   <query>     := <query> AND <query>
   <query>     := <query> OR <query>
   <query>     := <query> NOT <query>
