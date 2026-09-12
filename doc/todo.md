@@ -22,6 +22,7 @@
 - modify imgui_markdown to render code blocks with Text so we get line break in them. That fix the side scrolling issue and ugly rendering on long lines.
 - Each message that is processed should have their processing time recorded and other useful statistics such as tokens/s, total tokens etc.
 - Sometimes the agent stop after a compression. It starts working again with a /c
+- memory consolidation is too slow. It has to be more automated. Maybe something like a configured max number of memories that can be kept? Or that it tells the LLM that it will remove the "10 oldes" so if there is any information worth keeping in them the LLM has to "write one new memory" containing the important facts.
 
 # ui
 - change the background color for the input field to dark grey
