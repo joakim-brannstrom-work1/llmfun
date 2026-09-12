@@ -70,10 +70,10 @@ Example of using `executeCommand`: `executeCommand(environmentTag="llmfun", comm
 ```bash
 cd llmfun
 
-dub test                                     # Run all unit tests
+dub test                                    # Run all unit tests
 dub build --config=application              # Build main app (remote API only)
 dub build --config=application-with-local-model   # Build with llama.cpp support
-dub build --config=llmfun_test              # Build test utility (manual testing)
+dub build --config=llmfun_util              # Build test utility (manual testing)
 ./build/llmfun agent                        # Run interactive agent
 ./build/llmfun rag add <path>               # Add file to RAG index
 ./build/llmfun rag --dialogue               # Report per-session dialogue history databases (read-only)
@@ -357,7 +357,7 @@ dub build --config=llmfun_test              # Build test utility (manual testing
 The unit test runner is **nusilly** (dub dependency, a fork of `silly`). It replaces the default unittest runner in `dub test`: every argument after `--` is passed to the test binary. Run `dub test -- -h` to see the options.
 
 - **Run all unit tests**: `dub test` (no configuration parameter). This compiles and runs all inline `unittest` blocks across all modules. This is the primary test command.
-- **Build test utility**: `dub build --config=llmfun_test`. This configuration builds a separate test utility binary (`utility_app.d`) for manually testing implementation details. It does NOT run the unit test suite. Entry point: `source/utility_app.d`.
+- **Build test utility**: `dub build --config=llmfun_util`. This configuration builds a separate test utility binary (`utility_app.d`) for manually testing implementation details. It does NOT run the unit test suite. Entry point: `source/utility_app.d`.
 - Inline unit tests exist in most modules (e.g., `rag/rag.d`, `llm/tool_call/io/tests.d`). New code should include inline `unittest` blocks.
 
 ### Runtime
