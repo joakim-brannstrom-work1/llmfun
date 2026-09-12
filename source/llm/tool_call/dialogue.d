@@ -227,7 +227,12 @@ version (unittest) {
         }
 
         override int batchSize() {
-            return 64;
+            // The dialogue topic prefix ("Topic: d_<sid>__t<s>_<e>__<epoch> | ")
+            // is 53-55 chars and is reserved out of the batch budget before
+            // chunking. 150 keeps the effective window >= 95 graphemes, above
+            // the longest test episode (85 chars), so single-piece episodes
+            // index as one verbatim chunk.
+            return 150;
         }
     }
 
