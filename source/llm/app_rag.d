@@ -650,6 +650,61 @@ unittest {
 }
 
 unittest {
+    // A file with invalid UTF-8 must be readable (U+FFFD replaces the bad
+    // sequences) and indexable, where readText throws UTFException.
+    import llm.rag.database : Database, openDatabase;
+    import llm.rag.rag : addToDatabase;
+    import my.optional;
+    import my.path : AbsolutePath;
+    import std.file : readText, rmdirRecurse, write;
+    import std.utf : UTFException;
+
+    auto dir = makeScratchDir();
+    scope (exit)
+        rmdirRecurse(dir);
+
+    // Two invalid sequences: C3 28 (lead byte followed by a
+    // non-continuation byte) and FF FE (invalid lead byte). byUTF!dchar
+    // consumes the byte after a bad lead byte, so each yields exactly one
+    // U+FFFD.
+    immutable string data = "bad \xC3( mid \xFF\xFE end\n";
+    auto f = (dir ~ "bad_utf8.md").AbsolutePath;
+    write(f, data);
+
+    // readText still throws on invalid UTF-8 (documents the old behavior).
+    bool threw = false;
+    try {
+        readText(f.toString);
+    } catch (UTFException) {
+        threw = true;
+    }
+    assert(threw);
+
+    // readFileUtf8 recovers: one U+FFFD per invalid sequence.
+    auto recovered = readFileUtf8(f);
+    assert(recovered == "bad \uFFFD mid \uFFFD end\n");
+
+    // The recovered content must be indexable via the real seam.
+    auto emb = new TestEmbedder;
+    auto cfg = RagConfig.init;
+    size_t nBatchCache;
+    auto dbPath = (dir ~ "bad_utf8.db").AbsolutePath;
+    auto dbOpt = openDatabase(dbPath, emb.modelName(), emb.dimensions());
+    assert(hasValue(dbOpt));
+    auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
+    scope (exit)
+        db.destroy();
+    auto doc = Document(Origin(f), recovered);
+    auto res = addToDatabase(db, emb, doc, cfg, nBatchCache);
+    assert(res.chunks > 0);
+
+    // Fast path: a valid file round-trips byte-identical (no U+FFFD).
+    auto f2 = (dir ~ "good_utf8.md").AbsolutePath;
+    write(f2, "valid \xC3\xA9 content\n");
+    assert(readFileUtf8(f2) == "valid \xC3\xA9 content\n");
+}
+
+unittest {
     // Missing dialogue directory: info line, exit 0 (N3).
     import my.path : Path;
 

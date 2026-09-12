@@ -12,6 +12,18 @@ import my.path;
 
 import llm.chat : Role, ToolResponse;
 
+/// Read the file and sanitize its UTF-8: each invalid sequence is
+/// replaced with U+FFFD. Unlike std.file.readText, this never throws
+/// UTFException (unreadable files still throw FileException). Valid files
+/// are returned without copying, so content hashes stay stable across
+/// re-syncs. @trusted: the fast path casts const bytes to `string`
+/// (see sanitizeUtf8).
+string readFileUtf8(Path p) @trusted {
+    import std.file : read;
+
+    return (cast(string) read(p)).sanitizeUtf8;
+}
+
 /// Replaces invalid UTF-8 sequences with U+FFFD (Unicode replacement character).
 /// Fast path: returns s unchanged (same allocation) if it is already valid.
 /// Never throws; idempotent (U+FFFD is itself valid UTF-8).
