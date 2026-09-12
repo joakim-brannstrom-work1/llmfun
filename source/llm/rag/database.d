@@ -579,6 +579,7 @@ struct Database {
     }
 
     SourceMatch[] queryCombineSemanticText(Search embedding, string query, long limit) {
+        // null check at the end so a chunk that matches neither does not get a positive match
         static immutable sql = `
 WITH vec_matches AS (
   SELECT
@@ -605,7 +606,9 @@ SELECT
 FROM TextChunkTbl
 LEFT JOIN vec_matches ON TextChunkTbl.embedId = vec_matches.rowid
 LEFT JOIN fts_matches ON TextChunkTbl.id = fts_matches.rowid
-ORDER BY fusion_score DESC;
+WHERE vec_matches.rowid IS NOT NULL OR fts_matches.rowid IS NOT NULL
+ORDER BY fusion_score DESC
+LIMIT :limit;
 `;
 
         try {
