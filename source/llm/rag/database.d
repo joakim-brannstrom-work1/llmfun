@@ -625,7 +625,8 @@ LIMIT :limit;
             auto stmt = db.prepare(sql);
             stmt.get.bind(":embedding", embedding.embed);
             stmt.get.bind(":text_query", query);
-            stmt.get.bind(":limit", limit);
+            // for RRF fusion to work the pool must be large enough.
+            stmt.get.bind(":limit", limit * 10);
 
             auto results = appender!(Tuple!(long, "id", double, "rank")[])();
             foreach (ref r; stmt.get.execute) {
