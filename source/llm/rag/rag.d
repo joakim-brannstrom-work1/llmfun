@@ -255,6 +255,7 @@ class RAG {
         if (!validateDatabase(database, indices))
             return null;
 
+        // rank: shorter distance is better so lowest is best
         Document[] runMatch(float[] embed) {
             return parallelQuery(indices,
                     (size_t i) => retrySql!(() => dbs[i].querySemantic(Search(embed), getTopK))).randomizeRanks(query)
@@ -274,6 +275,7 @@ class RAG {
         if (!validateDatabase(database, indices))
             return null;
 
+        // rank: bm25 where more negative is better
         return parallelQuery(indices,
                 (size_t i) => retrySql!(() => dbs[i].queryTextSearch(query, getTopK))).randomizeRanks(query).sort!((a,
                 b) => a.rank < b.rank, SwapStrategy.stable).array.takePerSource(getTopK, MaxFromSource)
@@ -287,6 +289,7 @@ class RAG {
             return null;
 
         Document[] runMatch(float[] embed) {
+            // rank: rrf where higher is better
             return parallelQuery(indices,
                     (size_t i) => retrySql!(() => dbs[i].queryCombineSemanticText(Search(embed),
                         textQuery, getTopK))).randomizeRanks(textQuery).sort!((a,
