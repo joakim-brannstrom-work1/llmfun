@@ -5,19 +5,21 @@ import logger = std.logger;
 import std.algorithm;
 import std.array : appender, empty, array;
 import std.conv : to;
-import std.file : exists, readText, isFile, isDir, dirEntries, SpanMode;
+import std.file : exists, isFile, isDir, dirEntries, SpanMode;
 import std.format : format;
 import std.path : extension, baseName, buildNormalizedPath;
 import std.string : strip, startsWith, join, toStringz, split;
 import std.sumtype : match;
 
-import llm.app_config : UserConfig, userToLlmConfig, createRag;
-import llm.config;
-import llm.rag.rag : Origin, Topic, Url, Path, Document, add;
 import miniorm : spinSql;
 import my.filter : ReFilter;
 import my.optional;
 import my.path : AbsolutePath;
+
+import llm.app_config : UserConfig, userToLlmConfig, createRag;
+import llm.config;
+import llm.rag.rag : Origin, Topic, Url, Path, Document, add;
+import llm.utility : readFileUtf8;
 
 int appMain(UserConfig uconf, UserConfig.Rag conf) {
     import llm.subsystem : initLlmfunLocalModel, deinitLlmfunLocalModel;
@@ -128,7 +130,7 @@ int appMain(UserConfig uconf, UserConfig.Rag conf) {
             foreach (f; files) {
                 try {
                     auto result = add(rag, Document(Origin(f),
-                            readText(f.toString)), llmConf.ragConfig);
+                            readFileUtf8(f)), llmConf.ragConfig);
                     if (result.chunks > 0) {
                         logger.infof("  Added/updated: %s (%s chunks)", f, result.chunks);
                     } else {
@@ -295,8 +297,7 @@ int appMain(UserConfig uconf, UserConfig.Rag conf) {
                     logger.infof("  [dry-run] Would add: %s", p);
                     added++;
                 } else {
-                    auto result = rag.add(Document(Origin(p),
-                            readText(p.toString)), llmConf.ragConfig);
+                    auto result = rag.add(Document(Origin(p), readFileUtf8(p)), llmConf.ragConfig);
                     if (result.chunks > 0) {
                         logger.infof("  Added/updated: %s (%s chunks)", p, result.chunks);
                         added++;
