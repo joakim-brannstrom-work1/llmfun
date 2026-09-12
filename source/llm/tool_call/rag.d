@@ -1,31 +1,27 @@
 module llm.tool_call.rag;
 
 import logger = std.logger;
-import std.algorithm : map, filter, startsWith, count, joiner, endsWith;
+import std.algorithm : map, startsWith;
 import std.array : empty, appender, array;
 import std.conv : to, text;
-import std.datetime : SysTime;
-import std.file : readText, exists, mkdirRecurse, getSize, remove, dirEntries, SpanMode;
 import std.format : format;
 import std.json : JSONValue;
 import std.range : enumerate;
 import std.regex : Regex, regex;
 import std.stdio : File;
-import std.string : join, splitLines, indexOf, strip, split, replace;
+import std.string : join, splitLines, strip;
 import std.sumtype : match;
-import std.exception : enforce;
-import std.path : relativePath, buildNormalizedPath;
-import std.process : execute;
 
 import my.path : Path, AbsolutePath;
 import miniorm : spinSql;
 
 import llm.config : ToolLimits, RagConfig;
 import llm.rag.database : cleanFts5;
-import llm.rag.rag;
+import llm.rag.rag : RAG, Document, Topic, Origin, Offset, Url, add;
 import llm.test_util : retrySql;
-import llm.tool_call.utility;
-import llm.tool_call;
+import llm.tool_call : RegisterLlmFunctions, Context, ParamDescription,
+    ParamOptional, ExecuteFuncResult, Function, baseContextToSpecific;
+import llm.tool_call.utility : checkAlphaNumUnderscore, pathToWorkarea;
 
 mixin RegisterLlmFunctions!();
 

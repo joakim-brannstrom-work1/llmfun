@@ -393,7 +393,7 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
 
     auto chunkPrefix = doc.origin.toPrefix;
 
-    void runOnText(ref size_t chunks, ref Appender!(Embedding[]) embeddings) {
+    void runOnText(ref size_t chunks, ref Appender!(Embedding[]) embeddings, string text) {
         import core.memory : GC;
 
         // have to turn off the GC because something in the underlying libraries
@@ -480,7 +480,7 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
         size_t startCharPos;
         size_t startLine = 1;
         Grapheme[] graphemes;
-        foreach (graphem; doc.data.byGrapheme) {
+        foreach (graphem; text.byGrapheme) {
             graphemes ~= graphem;
             if (graphemes.length >= nBatch && graphem[0].isWhite) {
                 addChunk(graphemes, startCharPos, startLine, 0);
@@ -516,7 +516,7 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
         }
     }
 
-    void runOnTokens(ref size_t chunks, ref Appender!(Embedding[]) embeddings) {
+    void runOnTokens(ref size_t chunks, ref Appender!(Embedding[]) embeddings, string text) {
         auto prefixTokens = embedder.tokenize(chunkPrefix);
         const nBatch = embedder.batchSize > prefixTokens.length
             ? embedder.batchSize - prefixTokens.length : embedder.batchSize;
@@ -584,7 +584,7 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
             pinTokenPos = 0;
         }
 
-        foreach (graphem; doc.data.byGrapheme) {
+        foreach (graphem; text.byGrapheme) {
             currentWord ~= graphem;
 
             // assuming that no sane word is larger than 50 characters
@@ -630,9 +630,9 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
     auto embeddings = appender!(Embedding[])();
 
     if (embedder.supportsTokenization) {
-        runOnTokens(chunks, embeddings);
+        runOnTokens(chunks, embeddings, doc.data);
     } else {
-        runOnText(chunks, embeddings);
+        runOnText(chunks, embeddings, doc.data);
     }
 
     retrySql!(() {
