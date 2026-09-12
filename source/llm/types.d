@@ -114,7 +114,8 @@ struct ProcessResult {
         unknownFailure,
         networkFailure,
         needMoreThinking,
-        retryLater
+        retryLater,
+        agentStuckInLoop
     }
 
     Status status;

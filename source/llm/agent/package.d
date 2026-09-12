@@ -250,7 +250,7 @@ Call `requestCompression` now to compress on your own terms. Write a self-contai
         } catch (Exception e) {
             try {
                 logger.trace(e.msg);
-            } catch(Exception e) {
+            } catch (Exception e) {
             }
         }
     }
@@ -478,6 +478,9 @@ Continue your work from where you left off.";
                 this.addKeepReasoning();
                 keepRunning = true;
                 break;
+            case agentStuckInLoop:
+                // dead code because the only place this status can be set is in this function after this switch statement.
+                keepRunning = false;
             }
 
             // Safety check: detect stuck loops
@@ -486,7 +489,7 @@ Continue your work from where you left off.";
                 if (consecutiveSameStatus > MaxConsecutiveSameStatus) {
                     logger.warningf("Agent stuck in loop with status %s after %s iterations, breaking",
                             result.status, consecutiveSameStatus);
-                    result.status = ProcessResult.Status.unknownFailure;
+                    result.status = ProcessResult.Status.agentStuckInLoop;
                     keepRunning = false;
                 }
             } else {
@@ -499,6 +502,7 @@ Continue your work from where you left off.";
                 if (consecutiveNoToolCallOk > MaxConsecutiveNoToolCallOk) {
                     logger.warningf("Agent stuck in continue loop without tool calls after %s iterations, breaking",
                             consecutiveNoToolCallOk);
+                    result.status = ProcessResult.Status.agentStuckInLoop;
                     keepRunning = false;
                 }
             } else {

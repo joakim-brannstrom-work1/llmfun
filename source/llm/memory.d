@@ -49,8 +49,7 @@ void runMemoryConsolidation(LlmConfig llmConf, RAG rag, MetricMonitor monitor,
         consolidationResult = a;
     }, (_) {});
 
-    if (consolidationResult.status == ProcessResult.Status.unknownFailure
-            || !successfulConsolidation) {
+    if (consolidationResult.status != ProcessResult.Status.ok || !successfulConsolidation) {
         logger.warning("Memory consolidation agent failed");
         restoreMemoryFiles(memoryArea);
         sendChatMessage("[system]: Memory consolidation failed: agent error. Restored previous memory state.",

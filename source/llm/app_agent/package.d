@@ -692,11 +692,14 @@ struct AgentApp {
 
         if (runAgentLoop) {
             this.doCompress(false);
-            // the result has already been processed by this.processResult
-            auto ignored = agent_.runToCompletion(&this.processResult,
+            auto result = agent_.runToCompletion(&this.processResult,
                     compressCallback: &this.progressCallback, interrupt: () {
                 return isStopAgentTriggered;
             });
+            if (result.status == ProcessResult.Status.agentStuckInLoop) {
+                this.sendChatMessage("harness: Agent forcefully terminated because it got stuck in a loop.\nYou can restart it with /c.\nIf it gets stuck again then the model is stuck in an internal prediction loop. Clear the context (/clear) and run your query again.",
+                        TuiChatMessageType_System);
+            }
         }
 
         return rval;
