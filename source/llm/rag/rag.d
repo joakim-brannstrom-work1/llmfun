@@ -639,11 +639,19 @@ size_t countLines(string s) {
     return s.filter!(a => a == '\n').count;
 }
 
-/// Eliminates database-order bias among results with identical ranks.
-T[] randomizeRanks(T)(T[] results) {
-    import std.random : randomShuffle, rndGen;
+/* Deterministic shuffle based on the query to eliminate database-order bias
+ * among results with identical ranks.
+ * It is important that it is deterministic because the agent loop is informed
+ * that the same query will give the same result. If it would return different
+ * results it breaks the agentic loop and it would determine that the
+ * database/query functions are unstable.
+ */
+T[] randomizeRanks(T)(T[] results, string query) {
+    import std.random : randomShuffle, Random;
+    import llm.utility : computeContentHash;
 
-    return results.randomShuffle(rndGen);
+    auto rnd = Random(cast(uint) computeContentHash(query));
+    return results.randomShuffle(rnd);
 }
 
 // Helper to create a SourceMatch with a given rank
@@ -853,9 +861,9 @@ unittest {
         makeMatch(5.0)
     ];
     bool gotDifferent = false;
-    auto first = randomizeRanks(input.dup);
+    auto first = randomizeRanks(input.dup, "foo");
     foreach (_; 0 .. 100) {
-        auto current = randomizeRanks(input);
+        auto current = randomizeRanks(input, "foo");
         if (current != first) {
             gotDifferent = true;
             break;
@@ -871,7 +879,7 @@ unittest {
     ];
     long[4] counts;
     foreach (_; 0 .. 10_000) {
-        auto result = randomizeRanks(input.dup);
+        auto result = randomizeRanks(input.dup, "foo");
         double rank = result[0].rank;
         if (rank == 10.0)
             counts[0]++;
