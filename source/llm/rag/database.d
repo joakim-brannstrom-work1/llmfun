@@ -89,6 +89,16 @@ CREATE VIRTUAL TABLE FtsChunksTbl USING fts5(
     tokenize='unicode61'
 )`;
 
+// for RRF fusion to work the pool must be large enough.
+private immutable long RrfPoolMultiplier = 10;
+
+// Sharpens rank sensitivity so rank1 scores ~36% higher than rank 5
+private immutable long RrfK = 10;
+
+// Makes FTS hits count double vs vector hits at the same rank
+private immutable double FtsWeight = 2.0;
+private immutable double VecWeight = 1.0;
+
 Optional!Database openDatabase(AbsolutePath dbFile_, string model,
         long embedDimensions, bool readOnly = false, bool inMemory = false) nothrow {
     import std.file : exists;
