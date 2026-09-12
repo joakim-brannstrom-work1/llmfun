@@ -4,7 +4,7 @@ all: install
 
 build/llama_cpp.stamp:
 	mkdir -p build/llama_cpp
-	cd build/llama_cpp && cmake ../../../vendor/llama.cpp -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_OPENSSL=OFF -DBUILD_SHARED_LIBS=ON -DGGML_NATIVE=ON
+	cd build/llama_cpp && cmake ../../../vendor/llama.cpp -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_OPENSSL=OFF -DBUILD_SHARED_LIBS=ON -DGGML_NATIVE=ON $(LLAMA_CPP_EXTRA_FLAGS)
 	touch build/llama_cpp.stamp
 
 build/llama_cpp: build/llama_cpp.stamp
