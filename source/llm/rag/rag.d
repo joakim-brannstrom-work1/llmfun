@@ -873,50 +873,69 @@ version (unittest) {
     }
 }
 
-// Test 4: Shuffle produces different orderings
-// Probabilistic: 5-element array has 120 permutations;
-// chance of false failure is ~ (1/120)^99 ≈ 0
+// Test 4: randomizeRanks is deterministic per query and seed-sensitive.
+// Same query -> same shuffle (the agent contract); different query ->
+// different seed, so the orderings differ.
 unittest {
+    import std.conv : to;
+
     SourceMatch[] input = [
         makeMatch(1.0), makeMatch(2.0), makeMatch(3.0), makeMatch(4.0),
         makeMatch(5.0)
     ];
-    bool gotDifferent = false;
     auto first = randomizeRanks(input.dup, "foo");
     foreach (_; 0 .. 100) {
-        auto current = randomizeRanks(input, "foo");
-        if (current != first) {
-            gotDifferent = true;
-            break;
+        auto current = randomizeRanks(input.dup, "foo");
+        foreach (i; 0 .. first.length) {
+            assert(current[i].rank == first[i].rank,
+                    "same query must give the same ordering: "
+                    ~ current[i].rank.to!string ~ " vs " ~ first[i].rank.to!string);
         }
     }
-    assert(gotDifferent, "Shuffle should produce different orderings");
+
+    bool differs = false;
+    auto other = randomizeRanks(input.dup, "bar");
+    foreach (i; 0 .. first.length) {
+        if (other[i].rank != first[i].rank)
+            differs = true;
+    }
+    assert(differs, "different queries should shuffle differently (1/120 collision)");
 }
 
-// Test 5: Uniform distribution check
+// Test 5: randomizeRanks is a permutation (rank multiset preserved) and the
+// query seed changes the shuffle.
 unittest {
+    import std.conv : to;
+    import std.algorithm : sort, canFind;
+
     SourceMatch[] input = [
         makeMatch(10.0), makeMatch(20.0), makeMatch(30.0), makeMatch(40.0)
     ];
-    long[4] counts;
-    foreach (_; 0 .. 10_000) {
+    double[] expected = [10.0, 20.0, 30.0, 40.0];
+    foreach (_; 0 .. 100) {
         auto result = randomizeRanks(input.dup, "foo");
-        double rank = result[0].rank;
-        if (rank == 10.0)
-            counts[0]++;
-        else if (rank == 20.0)
-            counts[1]++;
-        else if (rank == 30.0)
-            counts[2]++;
-        else if (rank == 40.0)
-            counts[3]++;
+        double[] got = result.map!(m => m.rank).array;
+        got.sort;
+        assert(got == expected, "result must be a permutation of the input ranks: " ~ got
+                .to!string);
     }
-    foreach (count; counts) {
-        import std.math : abs;
 
-        assert(abs(cast(long)(count - 2500)) < 500,
-                "Distribution should be roughly uniform, got count: " ~ count.stringof);
+    // 20 distinct query seeds: the first position must vary (P(all equal)
+    // = 4 * (1/4)^19 ~= 1e-11 for a uniform shuffle).
+    double[] firstRanks;
+    foreach (i; 0 .. 20) {
+        firstRanks ~= randomizeRanks(input.dup, "query-" ~ i.to!string)[0].rank;
     }
+    size_t distinct = 0;
+    double[] seen;
+    foreach (r; firstRanks) {
+        if (!seen.canFind(r)) {
+            seen ~= r;
+            distinct++;
+        }
+    }
+    assert(distinct > 1,
+            "different queries should shuffle differently, distinct firsts: " ~ distinct.to!string);
 }
 
 // Test 6: addToDatabase indexes a scratch DB; overlap honored; re-add no-op
@@ -968,7 +987,7 @@ unittest {
     nBatchCache = 0;
     immutable cfg0 = RagConfig(windowOverlapPercent: 0);
     auto res0 = addToDatabase(db0, emb, doc, cfg0, nBatchCache);
-    assert(res0.chunks == 2, "0% overlap: expected 2 chunks, got " ~ res0.chunks.to!string);
+    assert(res0.chunks == 3, "0% overlap: expected 3 chunks, got " ~ res0.chunks.to!string);
     auto chunks0 = db0.querySemantic(Search(vec(doc.data)), 100).sort!((a,
             b) => a.offset.begin < b.offset.begin).array;
     assert(chunks0[1].offset.begin >= chunks0[0].offset.end, "0% overlap must not overlap");
@@ -1151,18 +1170,22 @@ unittest {
     }
 
     // stored vectors equal the expected per-chunk vectors: querying with
-    // a chunk's own vector returns that chunk at rank 1 (distance 0)
+    // a chunk's own vector (prefix + text, as embedded) returns that
+    // chunk at rank 1 (distance 0)
     foreach (m; dbA.querySemantic(Search(vecA(doc.data)), 100)) {
-        auto hit = dbA.querySemantic(Search(vecA(m.text)), 10);
+        auto hit = dbA.querySemantic(Search(vecA(toPrefix(m.origin) ~ m.text)), 10);
         assert(hit.length > 0 && hit[0].rank == 1 && hit[0].text == m.text,
                 "chunk must self-locate: " ~ m.text);
     }
 }
 
 // Test 9: token path, 10% overlap — uniform token-based steps (F1).
-// 100 one-letter words (200 graphemes); 1 token/word; nBatch 50 →
-// advance 45. Expected windows (1-based word idx): [1..50], [47..96],
-// [93..100] → grapheme offsets (0,100), (92,192), (184,200).
+// 100 one-letter words (200 graphemes); 1 token/word; the 3-token topic
+// prefix is reserved out of the 50-token budget → nBatch 47, advance 42.
+// The stored text is the full window; the step advances to the pin, so the
+// next window starts 4 words back (the overlap). Expected windows (1-based
+// word idx): [1..47], [44..90], [87..100] → offsets (0,94), (86,180),
+// (172,200); embedded tokens 50+50+17 (window + 3 prefix tokens).
 unittest {
     import std.conv : to;
     import llm.rag.database : openDatabase, Search;
@@ -1185,8 +1208,8 @@ unittest {
     auto res = addToDatabase(db, emb, doc, cfg, nBatchCache);
     assert(res.chunks == 3, "10% token overlap: expected 3 chunks, got " ~ res.chunks.to!string);
     assert(emb.embedCalls == 3, "expected 3 embedDocument calls");
-    assert(emb.embedTokens == 108,
-            "expected 50+50+8 embedded tokens, got " ~ emb.embedTokens.to!string);
+    assert(emb.embedTokens == 117,
+            "expected 50+50+17 embedded tokens, got " ~ emb.embedTokens.to!string);
 
     auto chunks = db.querySemantic(Search(emb.embedDocument(text)
             .match!((float[] v) => v, (EmbedError e) {
@@ -1194,27 +1217,28 @@ unittest {
                 return null;
             })), 100).sort!((a, b) => a.offset.begin < b.offset.begin).array;
     assert(chunks.length == 3);
-    assert(chunks[0].offset.begin == 0 && chunks[0].offset.end == 100, "chunk 0 offset");
-    assert(chunks[1].offset.begin == 92 && chunks[1].offset.end == 192, "chunk 1 offset");
-    assert(chunks[2].offset.begin == 184 && chunks[2].offset.end == 200, "chunk 2 offset");
-    assert(chunks[0].text == wordsRange(1, 50), "chunk 0 text");
-    assert(chunks[1].text == wordsRange(47, 96), "chunk 1 text");
-    assert(chunks[2].text == wordsRange(93, 100), "chunk 2 text");
+    assert(chunks[0].offset.begin == 0 && chunks[0].offset.end == 94, "chunk 0 offset");
+    assert(chunks[1].offset.begin == 86 && chunks[1].offset.end == 180, "chunk 1 offset");
+    assert(chunks[2].offset.begin == 172 && chunks[2].offset.end == 200, "chunk 2 offset");
+    assert(chunks[0].text == wordsRange(1, 47), "chunk 0 text");
+    assert(chunks[1].text == wordsRange(44, 90), "chunk 1 text");
+    assert(chunks[2].text == wordsRange(87, 100), "chunk 2 text");
 
     // F1: every chunk-start advance in [advance, advance + W_max]
-    // words; here W_max == 1 (one token per word), advance == 45.
+    // words; here W_max == 1 (one token per word), advance == 42.
     foreach (i; 0 .. 2) {
         long stepWords = (cast(long) chunks[i + 1].offset.begin - cast(long) chunks[i].offset.begin) / 2;
-        assert(stepWords >= 45 && stepWords <= 46,
+        assert(stepWords >= 42 && stepWords <= 43,
                 "step uniformity violated: " ~ stepWords.to!string);
     }
     db.destroy;
 }
 
 // Test 10: token path, 0% overlap — contiguous, non-overlapping (F3).
-// BEHAVIOR CHANGE: the old grapheme pin left ~47-49% effective overlap
-// here (3 chunks); advance == nBatch so the pin never fires and the D2
-// whole-window step yields exactly 2 contiguous chunks.
+// advance == nBatch (47 after the 3-token prefix reservation) so the pin
+// never fires and the D2 whole-window step yields contiguous,
+// non-overlapping chunks: [1..47], [48..94], [95..100] → offsets (0,94),
+// (94,188), (188,200); embedded tokens 50+50+9 (window + 3 prefix).
 unittest {
     import std.conv : to;
     import llm.rag.database : openDatabase, Search;
@@ -1235,21 +1259,24 @@ unittest {
     size_t nBatchCache = 0;
     immutable cfg0 = RagConfig(windowOverlapPercent: 0);
     auto res0 = addToDatabase(db, emb, doc, cfg0, nBatchCache);
-    assert(res0.chunks == 2, "0% token overlap: expected 2 chunks, got " ~ res0.chunks.to!string);
-    assert(emb.embedTokens == 100,
-            "expected 50+50 embedded tokens, got " ~ emb.embedTokens.to!string);
+    assert(res0.chunks == 3, "0% token overlap: expected 3 chunks, got " ~ res0.chunks.to!string);
+    assert(emb.embedTokens == 109,
+            "expected 50+50+9 embedded tokens, got " ~ emb.embedTokens.to!string);
 
     auto chunks0 = db.querySemantic(Search(emb.embedDocument(text)
             .match!((float[] v) => v, (EmbedError e) {
                 assert(false, "TokenizingTestEmbedder failed: " ~ e.errorMsg);
                 return null;
             })), 100).sort!((a, b) => a.offset.begin < b.offset.begin).array;
-    assert(chunks0.length == 2);
-    assert(chunks0[0].offset.begin == 0 && chunks0[0].offset.end == 100, "chunk 0 offset");
-    assert(chunks0[1].offset.begin == 100 && chunks0[1].offset.end == 200, "chunk 1 offset");
-    assert(chunks0[0].text == wordsRange(1, 50), "chunk 0 text");
-    assert(chunks0[1].text == wordsRange(51, 100), "chunk 1 text");
-    assert(chunks0[1].offset.begin >= chunks0[0].offset.end, "0% overlap must not overlap");
+    assert(chunks0.length == 3);
+    assert(chunks0[0].offset.begin == 0 && chunks0[0].offset.end == 94, "chunk 0 offset");
+    assert(chunks0[1].offset.begin == 94 && chunks0[1].offset.end == 188, "chunk 1 offset");
+    assert(chunks0[2].offset.begin == 188 && chunks0[2].offset.end == 200, "chunk 2 offset");
+    assert(chunks0[0].text == wordsRange(1, 47), "chunk 0 text");
+    assert(chunks0[1].text == wordsRange(48, 94), "chunk 1 text");
+    assert(chunks0[2].text == wordsRange(95, 100), "chunk 2 text");
+    foreach (i; 0 .. 2)
+        assert(chunks0[i + 1].offset.begin >= chunks0[i].offset.end, "0% overlap must not overlap");
     db.destroy;
 }
 
