@@ -610,8 +610,8 @@ fts_matches AS (
 SELECT
   id,
   (
-    1.0 / (60 + coalesce(vec_matches.rank_number, 1000))
-    + 1.0 / (60 + coalesce(fts_matches.rank_number, 1000))
+    :vec_weight * (1.0 / (:rrf_k + coalesce(vec_matches.rank_number, 1000)))
+    + :fts_weight * (1.0 / (:rrf_k + coalesce(fts_matches.rank_number, 1000)))
   ) AS fusion_score
 FROM TextChunkTbl
 LEFT JOIN vec_matches ON TextChunkTbl.embedId = vec_matches.rowid
@@ -625,8 +625,10 @@ LIMIT :limit;
             auto stmt = db.prepare(sql);
             stmt.get.bind(":embedding", embedding.embed);
             stmt.get.bind(":text_query", query);
-            // for RRF fusion to work the pool must be large enough.
-            stmt.get.bind(":limit", limit * 10);
+            stmt.get.bind(":rrf_k", RrfK);
+            stmt.get.bind(":vec_weight", VecWeight);
+            stmt.get.bind(":fts_weight", FtsWeight);
+            stmt.get.bind(":limit", limit * RrfPoolMultiplier);
 
             auto results = appender!(Tuple!(long, "id", double, "rank")[])();
             foreach (ref r; stmt.get.execute) {
