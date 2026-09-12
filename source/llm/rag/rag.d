@@ -9,23 +9,23 @@
 /// would always be taken from whichever database returned them first.
 ///
 /// How it works: a Fisher-Yates shuffle is applied to a copy of the `SourceMatch[]`
-/// array, then the shuffled copy is sorted by rank and truncated to top-K. The
+/// array, then the shuffled copy is sorted (stable) by rank and truncated to top-K. The
 /// original array is never mutated.
 
 module llm.rag.rag;
 
 import logger = std.logger;
-import std.algorithm : map, filter, joiner, sort, cache, swap, count;
+import std.algorithm : map, filter, joiner, sort, cache, count, SwapStrategy;
 import std.array : array, empty, appender;
+import std.conv : text;
 import std.datetime : SysTime;
+import std.parallelism;
 import std.path : baseName, stripExtension;
-import std.random : uniform;
-import std.range : take, enumerate, iota;
+import std.range : enumerate, iota;
 import std.stdio : File;
 import std.string : strip;
 import std.sumtype;
 import std.uni : Grapheme;
-import std.parallelism;
 
 import miniorm : spinSql;
 import llm.test_util : retrySql;
@@ -77,6 +77,8 @@ struct Document {
     string databaseName;
 }
 
+private immutable size_t MaxFromSource = 2;
+
 private struct IndexedMatch {
     SourceMatch match;
     size_t dbIndex;
@@ -111,6 +113,37 @@ private IndexedMatch[] parallelQuery(size_t[] indices, SourceMatch[]delegate(siz
         logger.tracef("parallelQuery: all %s database queries failed", indices.length);
     }
     return results;
+}
+
+// takePerSource: round-robin over the (rank-sorted) matches. Each pass picks
+// at most maxTakeFromSource entries per database, so the result interleaves
+// each database's best, next best, ... instead of taking everything from a
+// single database. NOT strict global rank order. topK bounds the total picks.
+private IndexedMatch[] takePerSource(IndexedMatch[] matches, const size_t topK,
+        const size_t maxTakeFromSource)
+in (maxTakeFromSource > 0) {
+    auto rval = appender!(IndexedMatch[])();
+    auto input = matches;
+    auto output = appender!(IndexedMatch[])();
+    output.reserve(input.length);
+
+    while (rval.length < topK && !input.empty) {
+        int[size_t] picked;
+        foreach (item; input) {
+            if (rval.length >= topK)
+                return rval[];
+            if (picked.get(item.dbIndex, 0) >= maxTakeFromSource) {
+                output.put(item);
+            } else {
+                picked.update(item.dbIndex, () => 1, (ref int v) { ++v; });
+                rval.put(item);
+            }
+        }
+        input = output[];
+        output.clear;
+    }
+
+    return rval[];
 }
 
 class RAG {
@@ -219,10 +252,10 @@ class RAG {
 
         Document[] runMatch(float[] embed) {
             return parallelQuery(indices,
-                    (size_t i) => retrySql!(() => dbs[i].querySemantic(Search(embed), getTopK))).randomizeRanks()
-                .sort!((a, b) => a.rank > b.rank).take(getTopK).map!(a => Document(origin: a.origin,
-                    data: a.text, offset: a.offset, line: a.line, added: a.added,
-                    databaseName: databases[a.dbIndex].name)).array;
+                    (size_t i) => retrySql!(() => dbs[i].querySemantic(Search(embed), getTopK))).randomizeRanks(query)
+                .sort!((a, b) => a.rank < b.rank, SwapStrategy.stable).array.takePerSource(getTopK, MaxFromSource)
+                .map!(a => Document(origin: a.origin, data: a.text, offset: a.offset, line: a.line,
+                        added: a.added, databaseName: databases[a.dbIndex].name)).array;
         }
 
         return embedder.embedQuery(query).match!((float[] a) => runMatch(a), (EmbedError e) {
@@ -237,10 +270,10 @@ class RAG {
             return null;
 
         return parallelQuery(indices,
-                (size_t i) => retrySql!(() => dbs[i].queryTextSearch(query, getTopK))).randomizeRanks()
-            .sort!((a, b) => a.rank < b.rank).take(getTopK).map!(a => Document(origin: a.origin, data: a.text, offset: a
-                .offset, line: a.line, added: a.added, databaseName: databases[a.dbIndex].name))
-            .array;
+                (size_t i) => retrySql!(() => dbs[i].queryTextSearch(query, getTopK))).randomizeRanks(query).sort!((a,
+                b) => a.rank < b.rank, SwapStrategy.stable).array.takePerSource(getTopK, MaxFromSource)
+            .map!(a => Document(origin: a.origin, data: a.text, offset: a.offset,
+                    line: a.line, added: a.added, databaseName: databases[a.dbIndex].name)).array;
     }
 
     Document[] queryBestMatch(string textQuery, string vectorQuery, long getTopK, string database) {
@@ -251,10 +284,10 @@ class RAG {
         Document[] runMatch(float[] embed) {
             return parallelQuery(indices,
                     (size_t i) => retrySql!(() => dbs[i].queryCombineSemanticText(Search(embed),
-                        textQuery, getTopK))).randomizeRanks().sort!((a,
-                    b) => a.rank > b.rank).take(getTopK).map!(a => Document(origin: a.origin, data: a.text, offset: a
-                    .offset, line: a.line,
-                    added: a.added, databaseName: databases[a.dbIndex].name)).array;
+                        textQuery, getTopK))).randomizeRanks(textQuery).sort!((a,
+                    b) => a.rank > b.rank, SwapStrategy.stable).array.takePerSource(getTopK, MaxFromSource)
+                .map!(a => Document(origin: a.origin, data: a.text, offset: a.offset, line: a.line,
+                        added: a.added, databaseName: databases[a.dbIndex].name)).array;
         }
 
         return embedder.embedQuery(vectorQuery).match!((float[] embed) {
