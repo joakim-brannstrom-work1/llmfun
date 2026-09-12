@@ -77,6 +77,11 @@ struct Document {
     string databaseName;
 }
 
+private string toPrefix(Origin origin) {
+    return origin.match!((Topic a) => i"Topic: $(a.name)".text,
+            (Url a) => i"Url: $(a.value)".text, (Path a) => i"File: $(a.toString)".text) ~ " | ";
+}
+
 private immutable size_t MaxFromSource = 2;
 
 private struct IndexedMatch {
@@ -383,6 +388,8 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
         return RagAddResult(doc.data.length, 0);
     }
 
+    auto chunkPrefix = doc.origin.toPrefix;
+
     void runOnText(ref size_t chunks, ref Appender!(Embedding[]) embeddings) {
         import core.memory : GC;
 
@@ -398,7 +405,12 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
 
         immutable nBatchStep = 128;
         immutable MaxIterations = 8;
-        size_t nBatch = nBatchCache;
+        // The chunk prefix is prepended to every chunk before embedding, so it
+        // eats into the batch budget. If the prefix alone fills the budget,
+        // reserve nothing: the halving fallback below covers models that still
+        // reject the prefix + chunk text.
+        size_t nBatch = nBatchCache > chunkPrefix.length
+            ? nBatchCache - chunkPrefix.length : nBatchCache;
 
         // used to detect if the fallback mode where nBatch is halfed always used.
         // If it has been used for 5 consecutive turns the nBatch is probably just
@@ -410,7 +422,9 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
             auto data = graphemes.byCodePoint.toUTF8;
 
             float[] emb;
-            embedder.embedDocument(data).match!((float[] embed) { emb = embed; }, (EmbedError e) {
+            embedder.embedDocument(chunkPrefix ~ data).match!((float[] embed) {
+                emb = embed;
+            }, (EmbedError e) {
                 logger.tracef("Failed to generate embedding '%s' (len:%s): %s",
                     e.errorMsg, graphemes.length, data);
                 try {
@@ -500,7 +514,9 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
     }
 
     void runOnTokens(ref size_t chunks, ref Appender!(Embedding[]) embeddings) {
-        const nBatch = embedder.batchSize;
+        auto prefixTokens = embedder.tokenize(chunkPrefix);
+        const nBatch = embedder.batchSize > prefixTokens.length
+            ? embedder.batchSize - prefixTokens.length : embedder.batchSize;
         const size_t advance = max(cast(size_t) 1,
                 cast(size_t)(nBatch * (100.0 - config.windowOverlapPercent) / 100.0));
 
@@ -534,7 +550,9 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
             const lines = countLines(textChunk);
 
             float[] emb;
-            embedder.embedDocument(tokens).match!((float[] embed) { emb = embed; }, (EmbedError e) {
+            embedder.embedDocument(prefixTokens ~ tokens).match!((float[] embed) {
+                emb = embed;
+            }, (EmbedError e) {
                 logger.tracef("Failed to generate embedding '%s' (toks:%s text:%s): %s",
                     e.errorMsg, tokens.length, text.length, text);
             });
