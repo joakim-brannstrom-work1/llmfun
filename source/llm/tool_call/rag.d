@@ -236,6 +236,9 @@ struct LoadFileToRAGParams {
 
 @Function("Load file content into RAG index")
 ExecuteFuncResult loadFileToRAG(Context baseCtx, LoadFileToRAGParams params) {
+    import std.path : relativePath, buildNormalizedPath;
+    import llm.utility : readFileUtf8;
+
     mixin(baseContextToSpecific!RAGContext);
 
     if (ctx.getRAG() is null) {
@@ -247,7 +250,7 @@ ExecuteFuncResult loadFileToRAG(Context baseCtx, LoadFileToRAGParams params) {
     }
 
     try {
-        auto data = readText(path_);
+        auto data = readFileUtf8(path_);
         auto relPath = relativePath(path_.toString, ctx.workArea.toString);
         auto normalizedPath = buildNormalizedPath(relPath);
         auto result = ctx.getRAG().add(Document(Origin(Path(normalizedPath)),
