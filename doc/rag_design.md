@@ -42,8 +42,15 @@ The system exposes five core tools to the LLM. All search tools support a `datab
 | **`listRAGDatabases`** | Discovers available DB names. | **Discovery.** Called once per objective to map the terrain. | Must be called before scoping searches. |
 | **`queryBestMatch`** | RRF (Reciprocal Rank Fusion) merging FTS5 + Vector. | **The 80% Default.** Balances keyword matching with conceptual meaning. Handles poorly crafted queries gracefully. | Returns a mixed bag; can be noisy on wide scopes (`"*"`). |
 | **`querySemantic`** | Vector/Embedding search. | **Conceptual broad strokes.** Use when objective lacks specific nouns, or when FTS5 fails. | Fast, but misses exact function names. |
-| **`queryTextSearch`** | FTS5 (Full-Text Search) with implicit `AND`. | **Precision.** Use only when you possess a highly unique, non-generic keyword (e.g., `authenticate_user_v2`). | **Warning:** Generic terms (e.g., "user", "login") cause implicit `AND` to return zero or flood results. |
+| **`queryTextSearch`** | FTS5 full-text search. Words are implicit `AND`; also `AND`/`OR`/`NOT` (NOT is binary: `x NOT y`), `( )` groups, prefix `term*`, `^term`, `NEAR(t1 t2, N)` (see `doc/database.md`). | **Precision.** Use only when you possess a highly unique, non-generic keyword (e.g., `authenticate_user_v2`). | **Warning:** Generic terms (e.g., "user", "login") cause implicit `AND` to return zero or flood results. |
 | **`queryReadFile`** | Exact line lookup in the index. | **Chunk Chasing.** Grabs the exact raw text of a specific line. | **Only takes a single `lineNumber`.** No ranges. |
+
+### 3.1 Source-Aware Chunk Embedding
+
+Every chunk is embedded with its source prepended as a prefix — `Topic: <name> | `, `Url: <url> | ` or `File: <path> | ` — before it is sent to the embedder. Only the *embedding* carries the prefix; the stored chunk text (and therefore the FTS5 index) does not.
+
+- **Why:** the embedder model can "see" which source a chunk came from, so semantic queries about the source itself work — e.g. *"what does file X say about retries"* matches that file's chunks even though no chunk text mentions the file name.
+- **Chunk budget:** the prefix eats into the embedder's batch budget, so the chunk window is `batchSize - prefixLength` (in both the grapheme-based and token-based chunkers). If the prefix alone fills the budget, nothing is reserved — the per-chunk halving fallback still protects against models that reject the input.
 
 ---
 
@@ -70,6 +77,18 @@ The protocol explicitly warns the LLM **not** to use `queryTextSearch` for gener
 Instead of allowing the LLM to cycle through `queryTextSearch` → `querySemantic` → `queryBestMatch` in a blind loop, the protocol forces a **diagnosis** of the failure before pivoting.
 
 - **Rationale:** Empirical observation showed that LLMs often switch tools without understanding *why* the previous tool failed. This leads to "random walk" behavior—wasting calls on irrelevant searches. By categorizing failures as (A) Noise, (B) FTS5 Trap, or (C) Pure Concept, the LLM is forced to match the specific symptom to the correct countermeasure. This turns a chaotic guessing game into a structured, binary-search-like narrowing of the information space.
+
+### E. Deterministic Results (Code-Enforced)
+
+The same query always returns the same results. After the per-database results are collected, the tie-breaking shuffle (`randomizeRanks`) is seeded with a content hash of the query itself, and the rank sort is stable — so repeated identical queries reproduce the identical top-K, while different queries still get different permutations (which is what actually breaks database-order bias among equal-ranked results).
+
+- **Rationale:** the agent is told the database is a stable function of the query. If identical queries returned different top-K sets at the boundary, the agent would conclude the index is unstable and waste calls re-probing. Determinism also makes retrieval bugs reproducible.
+
+### F. Per-Database Interleaving (Code-Enforced)
+
+When several databases are searched (`"*"` scope), the merged top-K cannot be swept by a single database. `takePerSource` truncates the rank-sorted, shuffled result with a round-robin that takes at most 2 matches per database per pass, so the final list interleaves each database's best, next best, ... (it is deliberately NOT strict global rank order).
+
+- **Rationale:** one large database would otherwise dominate every top-K and starve smaller, more specialised ones (e.g. a dedicated design-doc or config database). The 2-per-pass cap guarantees cross-database coverage at the top-K boundary. A database that is the only one with matches can still fill the whole top-K.
 
 ---
 
