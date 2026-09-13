@@ -11,13 +11,14 @@ import std.path : extension, baseName, buildNormalizedPath;
 import std.string : strip, startsWith, join, toStringz, split;
 import std.sumtype : match;
 
-import miniorm : spinSql;
+import miniorm : spinSql, SpinSqlTimeout;
 import my.filter : ReFilter;
 import my.optional;
 import my.path : AbsolutePath;
 
 import llm.app_config : UserConfig, userToLlmConfig, createRag;
 import llm.config;
+import llm.rag.database : timeout;
 import llm.rag.rag : Origin, Topic, Url, Path, Document, add;
 import llm.utility : readFileUtf8;
 
@@ -290,7 +291,15 @@ int appMain(UserConfig uconf, UserConfig.Rag conf) {
 
         // Phase 1: Scan and add
         logger.warningf(invalidPaths > 0, "Skipped %s invalid path(s)", invalidPaths);
+        // Circuit-break: once the database has proven unrecoverable (SpinSqlTimeout
+        // after the retry budget), skip the remaining files instead of paying the
+        // full timeout again for each of them.
+        bool dbBroken = false;
         foreach (p; allFiles) {
+            if (dbBroken) {
+                failed++;
+                continue;
+            }
             syncedOrigins.add(p);
             try {
                 if (conf.dryRun) {
@@ -306,6 +315,12 @@ int appMain(UserConfig uconf, UserConfig.Rag conf) {
                         skipped++;
                     }
                 }
+            } catch (SpinSqlTimeout) {
+                dbBroken = true;
+                failed++;
+                logger.errorf(
+                        "Failed to process '%s': database unrecoverable after %s of retries; skipping remaining file(s)",
+                        p, timeout);
             } catch (Exception e) {
                 logger.warningf("Failed to process '%s': %s", p, e.msg);
                 failed++;
@@ -326,42 +341,64 @@ int appMain(UserConfig uconf, UserConfig.Rag conf) {
             return false;
         }
 
-        foreach (src; rag.getSources.map!(a => a.sources).joiner) {
-            src.origin.match!((Topic a) { return; }, (Path a) {
-                auto normPath = a.toString.buildNormalizedPath;
-                if (isUnderManagedPath(normPath) && !syncedOrigins.contains(normPath)) {
-                    auto reason = exists(a) ? "excluded by filter" : "deleted from filesystem";
-                    try {
-                        if (conf.dryRun) {
-                            logger.infof("  [dry-run] Would remove: %s (%s)", a, reason);
-                        } else {
-                            logger.infof("  Removing: %s (%s)", a, reason);
-                            rag.removeSource(Origin(a.Path));
+        if (dbBroken) {
+            logger.warning("Skipping stale-source removal: database unrecoverable");
+        } else {
+            foreach (src; rag.getSources.map!(a => a.sources).joiner) {
+                src.origin.match!((Topic a) {}, (Path a) {
+                    auto normPath = a.toString.buildNormalizedPath;
+                    if (isUnderManagedPath(normPath) && !syncedOrigins.contains(normPath)) {
+                        auto reason = exists(a) ? "excluded by filter" : "deleted from filesystem";
+                        try {
+                            if (conf.dryRun) {
+                                logger.infof("  [dry-run] Would remove: %s (%s)", a, reason);
+                            } else {
+                                logger.infof("  Removing: %s (%s)", a, reason);
+                                rag.removeSource(Origin(a.Path));
+                            }
+                            removed++;
+                        } catch (Exception e) {
+                            logger.warningf("  Failed to remove '%s': %s", a, e.msg);
+                            removeFailed++;
                         }
-                        removed++;
-                    } catch (Exception e) {
-                        logger.warningf("  Failed to remove '%s': %s", a, e.msg);
-                        removeFailed++;
                     }
-                }
-            }, (Url a) { return; });
+                }, (Url a) {});
+            }
         }
 
         logger.infof("Sync complete: %s added/updated, %s skipped, %s removed, %s failed",
                 added, skipped, removed, failed + removeFailed);
         if (!conf.dryRun && (added > 0 || removed > 0)) {
-            spinSql!(() { rag.fts5Rebuild; });
+            try {
+                spinSql!(() { rag.fts5Rebuild; })(timeout);
+            } catch (SpinSqlTimeout) {
+                logger.errorf("FTS5 rebuild still failing after %s of retries - giving up (is the disk full, or is the database damaged?)",
+                        timeout);
+                return 1;
+            }
         }
         return failed + removeFailed;
     }
 
     if (conf.add) {
         long failed = addData();
-        spinSql!(() { rag.vacuum; rag.fts5Rebuild; });
+        try {
+            spinSql!(() { rag.vacuum; rag.fts5Rebuild; })(timeout);
+        } catch (SpinSqlTimeout) {
+            logger.errorf("vacuum/FTS5 rebuild still failing after %s of retries - giving up (is the disk full, or is the database damaged?)",
+                    timeout);
+            return 1;
+        }
         return failed != 0 ? 1 : 0;
     } else if (conf.rm) {
         long failed = removeData();
-        spinSql!(() { rag.vacuum; rag.fts5Rebuild; });
+        try {
+            spinSql!(() { rag.vacuum; rag.fts5Rebuild; })(timeout);
+        } catch (SpinSqlTimeout) {
+            logger.errorf("vacuum/FTS5 rebuild still failing after %s of retries - giving up (is the disk full, or is the database damaged?)",
+                    timeout);
+            return 1;
+        }
         return failed != 0 ? 1 : 0;
     } else if (conf.sync) {
         return syncData() != 0 ? 1 : 0;

@@ -635,15 +635,27 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
         runOnText(chunks, embeddings, doc.data);
     }
 
+    // Explicit begin/commit instead of miniorm's Transaction: a rollback that
+    // fails on an already-broken database must be catchable here, not escape
+    // the RAII struct's nothrow destructor and abort the process.
     retrySql!(() {
-        auto trans = db.transaction;
-        // try to remove the source before adding to ensure old cruft isn't left
-        db.removeSource(doc.origin);
-        auto srcId = db.addSource(Source(doc.origin, SourceChecksum(dataHash)));
-        foreach (ref e; embeddings[]) {
-            db.addEmbedding(srcId, e);
+        db.begin;
+        try {
+            // try to remove the source before adding to ensure old cruft isn't left
+            db.removeSource(doc.origin);
+            auto srcId = db.addSource(Source(doc.origin, SourceChecksum(dataHash)));
+            foreach (ref e; embeddings[]) {
+                db.addEmbedding(srcId, e);
+            }
+            db.commit;
+        } catch (Exception e) {
+            try {
+                db.rollback;
+            } catch (Exception re) {
+                logger.warningf("RAG add: rollback failed while handling '%s': %s", e.msg, re.msg);
+            }
+            throw e;
         }
-        trans.commit;
     });
 
     return RagAddResult(doc.data.length, chunks);

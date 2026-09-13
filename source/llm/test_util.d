@@ -1,22 +1,8 @@
-/// Test-suite utilities: collision-proof per-test temp dirs, a startup sweep
-/// of stale test artifacts, and a bounded SQL retry for tests.
+/// Test-suite utilities: collision-proof per-test temp dirs and a bounded SQL retry for tests.
 ///
-/// Background: under the parallel test runner (nusilly default), tests that
-/// share fixed-name fixture dirs race: one test's cleanup deletes a sibling
-/// test's live SQLite dir, whose writes then fail with
-/// "error 8: attempt to write a readonly database" and - with miniorm's
-/// unbounded spinSql - retry forever, hanging the whole suite (plan/failing.md
-/// F1-F4).
-///
-/// This module removes both root causes at the foundation level:
-///
-///  * `freshDir` gives every caller a process-unique directory under the
-///    per-run base (`runBaseDir`), so parallel tests can never collide and a
-///    test only ever deletes what it created itself.
-///  * `retrySql` bounds miniorm's spinSql under `version(unittest)` so a
-///    broken DB fails a test in ~10 s instead of hanging the suite.
-///  * the module static constructor sweeps `llmfun_test/` at test-binary
-///    start, so leftovers from a killed run never leak into the next one.
+///  * `retrySql` bounds miniorm's spinSql: ~10 s under `version(unittest)`,
+///    `llm.rag.database.timeout` (30 s) in production, so a broken DB fails
+///    fast instead of hanging the suite or the process.
 module llm.test_util;
 
 import core.atomic : atomicFetchAdd;
@@ -30,8 +16,10 @@ import std.format : format;
 import std.path : buildPath;
 import std.string : indexOf, split;
 
+import llm.rag.database : timeout;
+
 version (unittest) {
-    /// Root of this test binary's temp dirs: llmfun_test/run_<millis>_<pid>.
+    /// Root of this test binary's temp dirs
     private immutable TestBaseDir = "llmfun_test";
 
     /// Per-test fixture: the unique directory this unittest owns, created
@@ -95,13 +83,15 @@ version (unittest) {
     }
 }
 
-/// Bounded spinSql for tests.
+/// Bounded spinSql.
 ///
 /// Under `version(unittest)` a broken DB (e.g. its directory was deleted
 /// mid-test) makes the query fail after ~10 s - miniorm's SpinSqlTimeout
 /// propagates and the unittest reports it - instead of retrying forever and
-/// hanging the whole suite. Production keeps miniorm's unbounded retry
-/// (no behavior change).
+/// hanging the whole suite. Production is bounded to
+/// `llm.rag.database.timeout` (30 s) as well, so an unrecoverable database
+/// (e.g. "attempt to write a readonly database" from a full disk) fails fast
+/// with SpinSqlTimeout instead of hanging the process.
 ///
 /// Call sites stay byte-identical to the old `spinSql!(lambda)` form: the
 /// instantiated zero-arg function is called the same way (D's
@@ -112,7 +102,7 @@ template retrySql(alias query) {
         return spinSql!(query)(10.seconds, 50.msecs, 150.msecs);
     } else
         auto retrySql() {
-        return spinSql!(query)();
+        return spinSql!(query)(timeout, 50.msecs, 150.msecs);
     }
 }
 
