@@ -653,12 +653,31 @@ static void renderTabChat(TuiState& state, bool focusInput_, Log& log) {
             ImGui::SetKeyboardFocusHere();
         }
 
+        // Capture before InputTextMultiline: on the Escape frame the
+        // widget's own cancel_edit (imgui_widgets.cpp:4253-4268) has
+        // already cleared g.ActiveId by the time we check after the call.
+        const ImGuiID userInputId = ImGui::GetID("##user_input");
+        const bool inputActive = (ImGui::GetActiveID() == userInputId);
+
         ImGui::InputTextMultiline(
             "##user_input", state.userQuery.inputBuf.data(), state.userQuery.inputBuf.size() + 1,
             ImVec2(inputWidth, inputHeight), ImGuiInputTextFlags_CallbackResize,
             InputResizeCallback, &state.userQuery);
         if (!state.userQuery.newInputBufString.empty()) {
             state.userQuery.newInputBufString.clear();
+        }
+
+        // Escape clears the input (design doc keybinding). ImGui 1.81's
+        // InputText treats Escape as cancel_edit: it restores the buffer to
+        // the value at activation (InitialTextA, imgui_widgets.cpp:4253-4268),
+        // which only looks like a clear when the field was empty at
+        // activation (e.g. after a Prev-button history recall). Override here,
+        // AFTER the widget call so this clear wins over the cancel_edit
+        // restore: clear the field and leave history navigation.
+        if (inputActive && ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape), false)) {
+            state.userQuery.inputBuf.clear();
+            state.userQuery.historyPos = -1;
+            state.userQuery.draftBuf.clear();
         }
 
         ImGui::SameLine();
