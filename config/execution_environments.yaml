@@ -88,4 +88,3 @@ environments:
         PATH: "/usr/local/bin:/usr/bin:/bin"
       options:
         00_shell: ["sh", "-c"]
-      allowedCommandPrefixes: ["ls", "cat", "echo", "pwd"]

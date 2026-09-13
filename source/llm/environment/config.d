@@ -68,9 +68,6 @@ struct HostConfig {
 
     /// Environment variables for the subprocess (supports magic and magic word substitution in values).
     string[string] envVars;
-
-    /// Restrict commands to these specific prefixes.
-    string[] allowedCommandPrefixes;
 }
 
 /// Union type for environment configuration — either container or host.
@@ -382,17 +379,7 @@ EnvironmentBackend[] loadExecutionBackends(Path filePath,
                     }
                 }
 
-                string[] allowedCommandPrefixes;
-                if ("allowedCommandPrefixes" in configJson) {
-                    allowedCommandPrefixes = getValue(configJson,
-                            (v) => v["allowedCommandPrefixes"].array, null).filter!(
-                            a => a.type == JSONType.STRING)
-                        .map!(a => a.str)
-                        .array;
-                }
-
-                config = EnvironmentConfig(HostConfig(options, workingDir,
-                        envVars, allowedCommandPrefixes));
+                config = EnvironmentConfig(HostConfig(options, workingDir, envVars));
             } else {
                 logger.warningf("Unknown configuration in file '%s': %s", filePath, entry);
                 continue;
@@ -1105,7 +1092,6 @@ unittest {
             assert(h.workingDir == "@{llmfun_workarea}");
             assert(h.envVars["PATH"] == "/usr/local/bin:/usr/bin:/bin");
             assert(h.options["00_shell"] == ["sh", "-c"]);
-            assert(h.allowedCommandPrefixes == ["ls", "cat", "echo", "pwd"]);
             return true;
         }));
 }

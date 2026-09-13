@@ -223,7 +223,6 @@ unittest {
 
     string[][string] emptyOptions;
     string[string] emptyEnvVars;
-    string[] emptyPrefixes;
     auto ctx = new MockEnvironmentContext();
     ctx.envs = [
         EnvironmentBackend(tag: "sandbox", description: "Test sandbox",
@@ -233,8 +232,7 @@ unittest {
         EnvironmentBackend(tag: "native", description: "Host execution", capabilities: [
             "host"
         ], isIsolated: false,
-        config: EnvironmentConfig(HostConfig(options: emptyOptions, workingDir: "", envVars: emptyEnvVars,
-                allowedCommandPrefixes: emptyPrefixes)),
+        config: EnvironmentConfig(HostConfig(options: emptyOptions, workingDir: "", envVars: emptyEnvVars)),
         commandJoinMode: CommandJoinMode.append, timeout: 30.dur!"seconds"),
     ];
 
@@ -270,7 +268,6 @@ unittest {
 
     string[][string] emptyOptions;
     string[string] emptyEnvVars;
-    string[] emptyPrefixes;
     auto ctx = new MockEnvironmentContext();
     ctx.envs = [
         EnvironmentBackend(tag: "sandbox", description: "Test sandbox",
@@ -280,8 +277,7 @@ unittest {
         EnvironmentBackend(tag: "native", description: "Host execution", capabilities: [
             "host"
         ], isIsolated: false,
-        config: EnvironmentConfig(HostConfig(options: emptyOptions, workingDir: "", envVars: emptyEnvVars,
-                allowedCommandPrefixes: emptyPrefixes)),
+        config: EnvironmentConfig(HostConfig(options: emptyOptions, workingDir: "", envVars: emptyEnvVars)),
         commandJoinMode: CommandJoinMode.append, timeout: 30.dur!"seconds"),
     ];
 
@@ -462,15 +458,13 @@ unittest {
 
     string[][string] emptyOptions;
     string[string] emptyEnvVars;
-    string[] emptyPrefixes;
     auto ctx = new MockEnvironmentContext();
     ctx.workAreaPath = AbsolutePath("/workarea");
     ctx.envs = [
         EnvironmentBackend(tag: "native", description: "Host execution", capabilities: [
             "host"
         ], isIsolated: false,
-        config: EnvironmentConfig(HostConfig(options: emptyOptions,
-                workingDir: "", envVars: emptyEnvVars, allowedCommandPrefixes: emptyPrefixes)),
+        config: EnvironmentConfig(HostConfig(options: emptyOptions, workingDir: "", envVars: emptyEnvVars)),
         commandJoinMode: CommandJoinMode.whitespace, timeout: 30.dur!"seconds")
     ];
 
