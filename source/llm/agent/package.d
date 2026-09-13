@@ -260,6 +260,10 @@ Call `requestCompression` now to compress on your own terms. Write a self-contai
         import llm.query : HttpResult, HttpError, canRetry;
 
         ProcessResult rval;
+        // Failure and interrupt paths report the previous stat (not a zero
+        // one): the discarded partial message did not grow the context, so
+        // the last known context size is still the best estimate.
+        rval.stat = prevStat;
 
         ServerStat useOrApproxStatistic(ServerStat stat) {
             if (stat.startContext == prevStat.startContext) {
@@ -335,9 +339,15 @@ Call `requestCompression` now to compress on your own terms. Write a self-contai
                     rval.hasToolCall = rval.chat[$ - 1].match!((ToolMessage _) => true,
                             (ToolResponse _) => true, (_) => false);
                 }
+                // Advance context bookkeeping only when the turn completed and
+                // its messages were committed to the chat. On interrupts
+                // (/stop) and request failures the partial message is thrown
+                // away, so the previous context size stays valid as-is.
+                // Re-estimating here (chars / ApproxTokenSize, a pessimistic
+                // value) would inflate prevStat and could trigger a spurious
+                // compression on the next query.
+                prevStat = useOrApproxStatistic(sp.stat).newTurn;
             }
-
-            prevStat = useOrApproxStatistic(sp.stat).newTurn;
         } catch (Exception e) {
             logger.trace(e.msg).collectException;
             rval.status = ProcessResult.Status.unknownFailure;
