@@ -214,12 +214,14 @@ struct AgentApp {
 
     private void processChatMessage(Chat.MessageT m, bool printUser) {
         m.match!((Message a) {
-            if (!a.role.among(Role.user, Role.system) || (printUser && a.role != Role.system)) {
+            const bool show = !a.role.among(Role.user, Role.system)
+                || (a.role == Role.user && printUser && a.isUserQuery);
+            if (show) {
                 auto msgType = a.role == Role.user ? TuiChatMessageType_User
                     : TuiChatMessageType_Assistant;
                 this.sendChatThinkMessage("%s: %s", a.thinking, msgType, a.role, a.content);
             } else {
-                logger.tracef("[%s]: %s", a.role, a.content);
+                logger.tracef("%s: %s", a.role, a.content);
             }
         }, (ToolMessage a) {
             auto calls = summarizeToolCalls(a.toolCalls, 1000);
@@ -234,7 +236,9 @@ struct AgentApp {
                     a.success ? "✅" : "❌", a.toolName, summarizeToolResponse(a, 1000));
             }
         }, (VisionMessage a) {
-            this.sendChatMessage("user: %s (with image)", TuiChatMessageType_User, a.content);
+            // the user never directly use an API function which produce a
+            // vision message. It is the LLM that make the call.
+            this.sendChatMessage("user: %s (with image)", TuiChatMessageType_Assistant, a.content);
         });
     }
 
