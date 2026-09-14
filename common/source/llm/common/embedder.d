@@ -37,7 +37,7 @@ interface Embedder {
     EmbedResult embedDocument(int[] tokens);
 
     /// Only available if supportsTokenization is true.
-    int[] tokenize(string text);
+    int[] tokenize(string text, bool addSpecial);
 
     /// Only available if supportsTokenization is true.
     string detokenize(int[] tokens);

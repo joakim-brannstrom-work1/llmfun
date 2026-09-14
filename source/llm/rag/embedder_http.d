@@ -133,7 +133,7 @@ class RemoteEmbedder : Embedder {
         return false;
     }
 
-    override int[] tokenize(string txt) @safe {
+    override int[] tokenize(string txt, bool addSpecial) @safe {
         return null;
     }
 

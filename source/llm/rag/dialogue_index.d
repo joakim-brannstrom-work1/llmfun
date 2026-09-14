@@ -577,7 +577,7 @@ version (unittest) {
             return EmbedResult(EmbedError("no tokens"));
         }
 
-        override int[] tokenize(string text) {
+        override int[] tokenize(string text, bool addSpecial) {
             return null;
         }
 
@@ -1196,7 +1196,7 @@ version (unittest) {
             return EmbedResult(EmbedError("no tokens"));
         }
 
-        override int[] tokenize(string text) {
+        override int[] tokenize(string text, bool addSpecial) {
             return null;
         }
 
@@ -1257,7 +1257,7 @@ version (unittest) {
             return EmbedResult(EmbedError("test embed failure"));
         }
 
-        override int[] tokenize(string text) {
+        override int[] tokenize(string text, bool addSpecial) {
             return null;
         }
 

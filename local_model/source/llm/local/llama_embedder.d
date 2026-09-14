@@ -68,6 +68,16 @@ class LlamaEmbedder : Embedder {
 
         int[] cacheQueryPrefix;
         int[] cacheDocumentPrefix;
+
+        /// Number of special tokens added when add_special is true
+        size_t specialCount;
+
+        /// BOS/EOS token IDs the model prepends/appends when
+        /// add_special=true (-1 = LLAMA_TOKEN_NULL, i.e. not added).
+        /// Used by the int[] embed overloads to wrap pre-tokenized
+        /// input identically to the string path.
+        llama_token bosToken = -1;
+        llama_token eosToken = -1;
     }
 
     /**
@@ -145,9 +155,20 @@ class LlamaEmbedder : Embedder {
         this.detokenizeBuf = new char[256];
 
         if (!cfg.queryPrefix.empty)
-            cacheQueryPrefix = tokenize(cfg.queryPrefix);
+            cacheQueryPrefix = tokenize(cfg.queryPrefix, addSpecial: false);
         if (!cfg.documentPrefix.empty)
-            cacheDocumentPrefix = tokenize(cfg.documentPrefix);
+            cacheDocumentPrefix = tokenize(cfg.documentPrefix, addSpecial: false);
+        // assuming that the null string is not OK to pass but that "a" only
+        // add 1-2 tokens thus this is a good enough approximation of the
+        // number of special tokens added when addSpecial is true
+        specialCount = max(1, tokenize("a", addSpecial: true).length) - 1;
+        // Cache the special tokens llama_tokenize(add_special: true) would
+        // add so the int[] overloads can wrap pre-tokenized input in the
+        // same layout as the string path: [BOS, prefix, content, EOS].
+        if (llama_vocab_get_add_bos(model.vocab))
+            bosToken = llama_vocab_bos(model.vocab);
+        if (llama_vocab_get_add_eos(model.vocab))
+            eosToken = llama_vocab_eos(model.vocab);
 
         // see llama documentation for why the pooling is important. It affects
         // the return value of llama_get_embeddings_seq.
@@ -187,8 +208,16 @@ class LlamaEmbedder : Embedder {
     override int batchSize() {
         if (_destroyed)
             return 0;
-        return cast(int) cfg.chunkSize - cast(int) max(cacheDocumentPrefix.length,
-                cacheQueryPrefix.length);
+        // Never exceed the actual batch capacity (llama n_batch of the
+        // context): with chunkSize configured larger than n_batch every
+        // over-capacity embed would fail and the chunker would drop chunks
+        // silently. Capping here keeps the chunk budget inside the capacity.
+        auto budget = cast(int) cfg.chunkSize;
+        const int capacity = cast(int) _batchTokens.length;
+        if (budget > capacity)
+            budget = capacity;
+        return budget - cast(int) max(cacheDocumentPrefix.length,
+                cacheQueryPrefix.length) - cast(int) specialCount;
     }
 
     /**
@@ -229,8 +258,8 @@ class LlamaEmbedder : Embedder {
      * directly into the pre-allocated small buffer. On a negative
      * return (buffer too small) the exact required size is allocated
      * and the call is retried once. An INT32_MIN return (overflow)
-     * is rejected explicitly. No special tokens are added
-     * (add_special=false).
+     * is rejected explicitly. Special tokens (BOS/EOS) are added when
+     * `addSpecial` is true (llama_tokenize's add_special flag).
      *
      * The returned slice is a copy if the internal small buffer was
      * used, guaranteeing that repeated calls do not silently corrupt
@@ -247,14 +276,14 @@ class LlamaEmbedder : Embedder {
      *   Exception if llama_tokenize fails (e.g. invalid UTF-8) or
      *   overflows (INT32_MIN return).
      */
-    override int[] tokenize(string text) @trusted {
+    override int[] tokenize(string text, bool addSpecial) @trusted {
         import core.stdc.stdint : INT32_MIN;
 
         if (text.empty)
             return null;
 
         auto n = llama_tokenize(_model.vocab, text.ptr, cast(int) text.length,
-                _smallTokens.ptr, cast(int) _smallTokens.length, add_special: false,
+                _smallTokens.ptr, cast(int) _smallTokens.length, add_special: addSpecial,
                 parse_special: true);
         if (n < 0) {
             if (n == INT32_MIN)
@@ -262,7 +291,7 @@ class LlamaEmbedder : Embedder {
                         "LlamaEmbedder: tokenization requires INT32_MIN tokens (overflow)");
             auto big = new int[cast(size_t)-n];
             n = llama_tokenize(_model.vocab, text.ptr, cast(int) text.length,
-                    big.ptr, cast(int) big.length, add_special: false, parse_special: true);
+                    big.ptr, cast(int) big.length, add_special: addSpecial, parse_special: true);
             if (n <= 0)
                 throw new Exception("LlamaEmbedder: tokenization failed for input of "
                         ~ text.length.to!string ~ " bytes (llama_tokenize: " ~ n.to!string ~ ")");
@@ -344,7 +373,7 @@ class LlamaEmbedder : Embedder {
 
         llama_token[] tokens;
         try {
-            tokens = tokenize(text);
+            tokens = tokenize(text, addSpecial: true);
         } catch (Exception e) {
             return EmbedResult(EmbedError("Tokenization failed: " ~ e.msg));
         }
@@ -352,11 +381,39 @@ class LlamaEmbedder : Embedder {
     }
 
     override EmbedResult embedQuery(int[] tokens) {
-        return embed(cacheQueryPrefix ~ tokens);
+        return embed(withSpecials(cacheQueryPrefix ~ tokens));
     }
 
     override EmbedResult embedDocument(int[] tokens) {
-        return embed(cacheDocumentPrefix ~ tokens);
+        return embed(withSpecials(cacheDocumentPrefix ~ tokens));
+    }
+
+    /**
+     * Wrap pre-tokenized input with the model's BOS/EOS special tokens
+     * so the int[] embed overloads produce the same token layout as the
+     * string path (tokenize with add_special=true):
+     * [BOS, prefix, content, EOS]. Without this, pre-tokenized input
+     * (e.g. the RAG chunker's token windows) would embed off the model's
+     * trained distribution — nomic-embed expects the BOS token at
+     * position 0.
+     *
+     * Params:
+     *   tokens = pre-tokenized content (no special tokens)
+     *
+     * Returns:
+     *   The wrapped token array; `tokens` itself when the model adds no
+     *   special tokens.
+     */
+    private int[] withSpecials(int[] tokens) {
+        if (bosToken == -1 && eosToken == -1)
+            return tokens;
+        auto wrapped = appender!(int[])();
+        if (bosToken != -1)
+            wrapped.put(bosToken);
+        wrapped.put(tokens);
+        if (eosToken != -1)
+            wrapped.put(eosToken);
+        return wrapped[];
     }
 
     private EmbedResult embed(int[] tokens) {

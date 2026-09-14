@@ -517,9 +517,11 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
     }
 
     void runOnTokens(ref size_t chunks, ref Appender!(Embedding[]) embeddings, string text) {
-        auto prefixTokens = embedder.tokenize(chunkPrefix);
-        const nBatch = embedder.batchSize > prefixTokens.length
-            ? embedder.batchSize - prefixTokens.length : embedder.batchSize;
+        const nBatch = () {
+            auto prefixTokens = embedder.tokenize(chunkPrefix, addSpecial: false);
+            return embedder.batchSize > prefixTokens.length
+                ? embedder.batchSize - prefixTokens.length : embedder.batchSize;
+        }();
         const size_t advance = max(cast(size_t) 1,
                 cast(size_t)(nBatch * (100.0 - config.windowOverlapPercent) / 100.0));
 
@@ -532,10 +534,10 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
         Grapheme[] textChunk;
         Grapheme[] currentWord;
 
-        void addChunk() {
+        void addChunk(ref int[] tokens, ref Grapheme[] textChunk) {
             assert(tokens.length <= nBatch, "something is wrong");
 
-            // D2: unpinned flush steps the whole window. Unpinned happens at 0%
+            // unpinned flush steps the whole window. Unpinned happens at 0%
             // overlap (advance >= nBatch, pin can never fire), for the final short
             // window, or a pathological oversized word (R9).
             if (halfIndex == 0) {
@@ -553,9 +555,14 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
             const lines = countLines(textChunk);
 
             float[] emb;
-            embedder.embedDocument(prefixTokens ~ tokens).match!((float[] embed) {
-                emb = embed;
-            }, (EmbedError e) {
+            // reuse the internal logic and model understanding of llama.cpp by
+            // re-tokenize. If models in the future are added that use other
+            // schemas than BOS/EOS the RAG system do not need to be updated,
+            // llama.cpp do it for us. This is less efficient than using
+            // `tokens` as is and wrap with BOS/EOS but should be more stable
+            // to future changes.
+            embedder.embedDocument(embedder.tokenize(chunkPrefix ~ text,
+                    addSpecial: true)).match!((float[] embed) { emb = embed; }, (EmbedError e) {
                 logger.tracef("Failed to generate embedding '%s' (toks:%s text:%s): %s",
                     e.errorMsg, tokens.length, text.length, text);
             });
@@ -575,7 +582,7 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
 
             startCharPos += advStep.length;
             startLine += countLines(advStep);
-            // D3: the tail is the token suffix past the pin (O(1) slice, no
+            // The tail is the token suffix past the pin (O(1) slice, no
             // re-tokenization). tokens is the per-word concatenation over
             // textChunk's words (C3) and the pin is a word boundary in both
             // coordinates, so the retained tail is exactly tokens[pinTokenPos .. $].
@@ -589,16 +596,17 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
 
             // assuming that no sane word is larger than 50 characters
             if (graphem[0].isWhite || currentWord.length > 50) {
-                auto wordTokens = embedder.tokenize(currentWord.byCodePoint.toUTF8);
+                auto wordTokens = embedder.tokenize(currentWord.byCodePoint.toUTF8,
+                        addSpecial: false);
                 if (tokens.length + wordTokens.length > nBatch) {
-                    addChunk;
+                    addChunk(tokens, textChunk);
                 }
                 textChunk ~= currentWord;
                 tokens ~= wordTokens;
                 currentWord = null;
-                // D1: token-based pin at the word boundary (replaces the old
+                // token-based pin at the word boundary (replaces the old
                 // per-grapheme pin).
-                // Invariant (C3): the pin is a word edge in BOTH coordinates
+                // Invariant: the pin is a word edge in BOTH coordinates
                 // (halfIndex / pinTokenPos); they are reset together in addChunk.
                 if (halfIndex == 0 && tokens.length > advance) {
                     halfIndex = textChunk.length;
@@ -608,21 +616,15 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
         }
 
         if (!currentWord.empty) {
-            auto wordTokens = embedder.tokenize(currentWord.byCodePoint.toUTF8);
+            auto wordTokens = embedder.tokenize(currentWord.byCodePoint.toUTF8, addSpecial: false);
             if (tokens.length + wordTokens.length > nBatch) {
-                addChunk;
+                addChunk(tokens, textChunk);
             }
             textChunk ~= currentWord;
             tokens ~= wordTokens;
-            // D1: token-based pin at the word boundary (replaces the old
-            // per-grapheme pin).
-            if (halfIndex == 0 && tokens.length > advance) {
-                halfIndex = textChunk.length;
-                pinTokenPos = tokens.length;
-            }
         }
         if (!textChunk.empty) {
-            addChunk();
+            addChunk(tokens, textChunk);
         }
     }
 
@@ -754,7 +756,7 @@ version (unittest) {
             return embed(tokens);
         }
 
-        override int[] tokenize(string text) {
+        override int[] tokenize(string text, bool addSpecial) {
             return null;
         }
 
@@ -811,7 +813,7 @@ version (unittest) {
             return true;
         }
 
-        override int[] tokenize(string text) {
+        override int[] tokenize(string text, bool addSpecial) {
             int[] toks;
             string word;
             foreach (cp; text.byCodePoint) {
@@ -847,11 +849,11 @@ version (unittest) {
         }
 
         override EmbedResult embedQuery(string text) {
-            return embed(tokenize(text));
+            return embed(tokenize(text, true));
         }
 
         override EmbedResult embedDocument(string text) {
-            return embed(tokenize(text));
+            return embed(tokenize(text, true));
         }
 
         override EmbedResult embedQuery(int[] tokens) {

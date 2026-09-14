@@ -599,7 +599,7 @@ version (unittest) {
             return embed(tokens);
         }
 
-        override int[] tokenize(string text) {
+        override int[] tokenize(string text, bool addSpecial) {
             return null;
         }
 
