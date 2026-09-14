@@ -7,7 +7,7 @@ popd
 rsync -va --delete source/ llmfun/workarea/llmfun/source/
 rsync -va --delete cpp_tui/ llmfun/workarea/llmfun/cpp_tui/
 rsync -va --delete common/ llmfun/workarea/llmfun/common/
-rsync -va --delete local_model/ llmfun/workarea/llmfun/local_model/
+rsync -va --delete local_model/source/ llmfun/workarea/llmfun/local_model/source/
 mkdir -p llmfun/workarea/llmfun/llmfun/
 rsync -va --delete llmfun/config/ llmfun/workarea/llmfun/llmfun/config/
 rsync -va --delete llmfun/skills/ llmfun/workarea/llmfun/llmfun/skills/
