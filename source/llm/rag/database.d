@@ -373,6 +373,50 @@ struct Database {
         return rval[];
     }
 
+    /// Sources paired with their ids (for chunk counting).
+    Tuple!(Source, "src", SourceId, "id")[] getSourceEntries() {
+        static immutable sql = "SELECT id FROM SourceTbl";
+
+        auto rval = appender!(Tuple!(Source, "src", SourceId, "id")[])();
+        auto stmt = db.prepare(sql);
+        auto res = stmt.get.execute;
+        foreach (ref r; res) {
+            auto id = r.peek!long(0).SourceId;
+            getSource(id).match!((None _) {}, (Source a) => rval.put(tuple!("src", "id")(a, id)));
+        }
+        return rval[];
+    }
+
+    /// Number of chunks (embeddings) stored for a source.
+    long chunkCount(SourceId id) {
+        static immutable sql = `SELECT count(*) FROM TextChunkTbl t
+            JOIN EmbeddingsTbl e ON t.embedId = e.id WHERE e.sourceId = :id`;
+        auto stmt = db.prepare(sql);
+        stmt.get.bind(":id", id.get);
+        auto res = stmt.get.execute;
+        return res.oneValue!long;
+    }
+
+    /// Find the ids of path sources whose path equals `path` exactly or ends
+    /// with `path` at any position (suffix match): a bare file name resolves
+    /// to its indexed path without the caller knowing the exact stored path.
+    SourceId[] findPathSources(Path path) {
+        static immutable sql = `SELECT s.id FROM SourceTbl s
+            JOIN OriginUrlTbl u ON s.id = u.sourceId
+            WHERE s.urlType = :urlType
+              AND (u.url = :url OR (:url <> '' AND substr(u.url, -length(:url)) = :url))`;
+
+        auto stmt = db.prepare(sql);
+        stmt.get.bind(":urlType", cast(long) SourceTbl.UrlType.path);
+        stmt.get.bind(":url", path.toString);
+
+        auto rval = appender!(SourceId[])();
+        foreach (ref r; stmt.get.execute) {
+            rval.put(r.peek!long(0).SourceId);
+        }
+        return rval[];
+    }
+
     /// Reconstruct a source's full text from its chunks: chunks are read in
     /// charBeginPos order and each chunk's leading graphemes overlapping the
     /// previous chunk's end are stripped (the sliding-window overlap), so the
@@ -417,8 +461,10 @@ struct Database {
         return res.oneValue!long != 0;
     }
 
+    /// Path lookup: the stored path must equal `path` or end with `path`
+    /// (suffix match), so a bare file name resolves to its indexed path.
     bool hasFile(Path path) {
-        static immutable sql = "SELECT t1.url FROM SourceTbl as t0, OriginUrlTbl as t1 WHERE t0.urlType=:urlType AND t0.id=t1.sourceId AND t1.url=:url";
+        static immutable sql = "SELECT t1.url FROM SourceTbl as t0, OriginUrlTbl as t1 WHERE t0.urlType=:urlType AND t0.id=t1.sourceId AND (t1.url=:url OR (:url <> '' AND substr(t1.url, -length(:url)) = :url))";
 
         auto stmt = db.prepare(sql);
         stmt.get.bind(":urlType", cast(long) SourceTbl.UrlType.path);
@@ -571,7 +617,7 @@ struct Database {
              ~ "JOIN EmbeddingsTbl t1 ON t0.embedId = t1.id "
              ~ "JOIN SourceTbl t2 ON t1.sourceId = t2.id "
              ~ "JOIN OriginUrlTbl t3 ON t2.id = t3.sourceId "
-             ~ "WHERE t2.urlType = :urlType AND t3.url = :url "
+             ~ "WHERE t2.urlType = :urlType AND (t3.url = :url OR (:url <> '' AND substr(t3.url, -length(:url)) = :url)) "
              ~ "AND t0.lineBegin <= :lineNumber AND t0.lineEnd >= :lineNumber";
         // dfmt on
 

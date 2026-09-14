@@ -1,7 +1,7 @@
 module llm.tool_call.rag;
 
 import logger = std.logger;
-import std.algorithm : map, startsWith;
+import std.algorithm : canFind, filter, map, startsWith;
 import std.array : empty, appender, array;
 import std.conv : to, text;
 import std.format : format;
@@ -9,7 +9,7 @@ import std.json : JSONValue;
 import std.range : enumerate;
 import std.regex : Regex, regex;
 import std.stdio : File;
-import std.string : join, splitLines, strip;
+import std.string : join, splitLines, strip, toLower;
 import std.sumtype : match;
 
 import my.path : Path, AbsolutePath;
@@ -361,7 +361,7 @@ private string applyAppendLoc(string text, long startLineNumber, bool appendLoc)
 }
 
 struct QueryReadFileParams {
-    @ParamDescription("Path to the file in the RAG index")
+    @ParamDescription("Path of the file in the RAG index. The exact indexed path or any suffix ending at a path boundary (e.g. the bare file name) works.")
     string filePath;
 
     @ParamDescription("Line number to read (1-based)")
@@ -374,7 +374,7 @@ struct QueryReadFileParams {
     @ParamOptional bool appendLoc = true;
 }
 
-@Function("Read a specific line from a file in the RAG index.")
+@Function("Read a specific line from a file in the RAG index. Resolves bare file names. Use readRAGSource to read a whole document.")
 ExecuteFuncResult queryReadFile(Context baseCtx, QueryReadFileParams params) {
     mixin(baseContextToSpecific!RAGContext);
 
@@ -399,7 +399,7 @@ ExecuteFuncResult queryReadFile(Context baseCtx, QueryReadFileParams params) {
 
         if (matches.length == 0) {
             if (!ctx.getRAG().hasFile(fileAsPath, params.database)) {
-                return ExecuteFuncResult(i"error: file 'params.filePath' not found in RAG index".text,
+                return ExecuteFuncResult(i"error: file '$(params.filePath)' not found in RAG index".text,
                         success: false);
             }
             return ExecuteFuncResult(i"error: file '$(params.filePath)' exists in RAG but no chunk contains line $(
@@ -425,7 +425,123 @@ ExecuteFuncResult queryReadFile(Context baseCtx, QueryReadFileParams params) {
     }
 }
 
+struct ListRAGSourcesParams {
+    @ParamDescription(
+            "Only list sources whose path/topic/url contains this filter (case-insensitive). Empty lists all sources.")
+    @ParamOptional string filter;
+
+    @ParamDescription("Database name to list, or '*' for all databases")
+    @ParamOptional string database = "*";
+
+    @ParamDescription("Maximum number of sources to list")
+    @ParamOptional long limit = 50;
+}
+
+@Function("List documents (sources) indexed in the RAG: file paths, topics and URLs with chunk counts. Use this to resolve the exact stored path of a document, then read it with readRAGSource.")
+ExecuteFuncResult listRAGSources(Context baseCtx, ListRAGSourcesParams params) {
+    mixin(baseContextToSpecific!RAGContext);
+
+    if (ctx.getRAG() is null) {
+        return ExecuteFuncResult("error: RAG not available", success: false);
+    }
+    if (params.limit < 1) {
+        return ExecuteFuncResult(i"error: limit must be >= 1, got: $(params.limit)".text,
+                success: false);
+    }
+    if (!params.database.empty && !ctx.getRAG().databaseExists(params.database)) {
+        return ExecuteFuncResult(i"error: database '$(params.database)' not found".text,
+                success: false);
+    }
+
+    try {
+        auto all = ctx.getRAG().listSources(params.database);
+        const filterLower = params.filter.toLower;
+        auto matched = all.filter!(a => filterLower.empty
+                || a.origin.toLower.canFind(filterLower)).array;
+
+        if (matched.empty) {
+            return ExecuteFuncResult(i"no sources found matching filter '$(params.filter)'".text,
+                    success: true);
+        }
+
+        auto lines = appender!(string[])();
+        foreach (i, s; matched) {
+            if (i >= params.limit)
+                break;
+            lines.put(i"  [$(s.database)] $(s.origin) ($(s.chunks) chunks)".text);
+        }
+        const shown = matched.length > params.limit ? params.limit : matched.length;
+        const header = i"Sources in RAG ($(matched.length) matched, showing $(shown)):".text;
+        return ExecuteFuncResult(header ~ "\n" ~ lines[].join("\n"), success: true);
+    } catch (Exception e) {
+        return ExecuteFuncResult(i"error: failed to list RAG sources: $(e.msg)".text,
+                success: false);
+    }
+}
+
+struct ReadRAGSourceParams {
+    @ParamDescription("Path of the document in the RAG index. The exact indexed path or any suffix ending at a path boundary (e.g. the bare file name) works.")
+    string filePath;
+
+    @ParamDescription("Database name to read from, or '*' for all databases")
+    @ParamOptional string database = "*";
+
+    @ParamDescription("Maximum number of bytes to return per document")
+    @ParamOptional long maxBytes = 65536;
+}
+
+@Function("Read a whole document from the RAG index by path (resolves bare file names). Use it to read a document that another result referenced.")
+ExecuteFuncResult readRAGSource(Context baseCtx, ReadRAGSourceParams params) {
+    mixin(baseContextToSpecific!RAGContext);
+
+    if (ctx.getRAG() is null) {
+        return ExecuteFuncResult("error: RAG not available", success: false);
+    }
+    if (params.filePath.empty) {
+        return ExecuteFuncResult("error: filePath must not be empty", success: false);
+    }
+    if (params.maxBytes < 1024) {
+        return ExecuteFuncResult("error: maxBytes must be >= 1024", success: false);
+    }
+
+    try {
+        auto matches = ctx.getRAG().readSource(Path(params.filePath), params.database);
+        if (matches.length == 0) {
+            return ExecuteFuncResult(i"error: no document ending with '$(params.filePath)' found in the RAG index"
+                    .text, success: false);
+        }
+
+        auto blocks = appender!(string[])();
+        foreach (i, m; matches) {
+            auto text = truncateUtf8(m.text, params.maxBytes);
+            const truncated = text.length < m.text.length;
+            const suffixText = truncated ? ", truncated" : "";
+            auto header = i"--- Document $(i + 1) '$(RAG.originLabel(m.origin))' in database '$(
+                    m.databaseName)' ($(m.chunks) chunks, $(m.text.length) bytes$(suffixText)) ---"
+                .text;
+            blocks.put(header ~ "\n" ~ text);
+        }
+
+        return ExecuteFuncResult(blocks[].join("\n\n"), success: true);
+    } catch (Exception e) {
+        return ExecuteFuncResult(i"error: failed to read document from RAG: $(e.msg)".text,
+                success: false);
+    }
+}
+
 private:
+
+/// Cut `text` to at most `maxBytes` bytes without splitting a UTF-8
+/// codepoint (the cut walks back off continuation bytes).
+string truncateUtf8(string text, long maxBytes) {
+    if (text.length <= cast(size_t) maxBytes)
+        return text;
+    size_t end = cast(size_t) maxBytes;
+    while (end > 0 && (text[end] & 0xC0) == 0x80)
+        --end;
+    return text[0 .. end];
+}
+
 string fts5Help(long mode, string query) {
     import llm.rag.database : fts5Help, fts5SimpleHelp;
 

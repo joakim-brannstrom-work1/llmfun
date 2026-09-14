@@ -334,6 +334,65 @@ class RAG {
             .count >= 1;
     }
 
+    /// Origin label used by source listings and read results.
+    static string originLabel(Origin origin) {
+        return origin.match!((Topic a) => "topic:" ~ a.name,
+                (Url a) => "url:" ~ a.value, (Path a) => a.toString);
+    }
+
+    struct SourceListing {
+        string database;
+        string origin;
+        long chunks;
+    }
+
+    /// List all sources (documents) with chunk counts, optionally scoped to
+    /// one database ('*' or empty = all).
+    SourceListing[] listSources(string database = "*") {
+        size_t[] indices;
+        if (!validateDatabase(database, indices))
+            return null;
+
+        auto rval = appender!(SourceListing[])();
+        foreach (idx; indices) {
+            foreach (entry; dbs[idx].getSourceEntries) {
+                rval.put(SourceListing(databases[idx].name,
+                        originLabel(entry.src.origin), dbs[idx].chunkCount(entry.id)));
+            }
+        }
+        return rval[];
+    }
+
+    struct FullSource {
+        Origin origin;
+        string text;
+        long chunks;
+        SysTime added;
+        string databaseName;
+    }
+
+    /// Read the full reconstructed text of every source whose path equals
+    /// filePath or ends with it (suffix match, e.g. the bare file name).
+    FullSource[] readSource(Path filePath, string database) {
+        import my.optional : None;
+
+        size_t[] indices;
+        if (!validateDatabase(database, indices))
+            return null;
+
+        auto rval = appender!(FullSource[])();
+        foreach (idx; indices) {
+            foreach (id; retrySql!(() => dbs[idx].findPathSources(filePath))) {
+                auto src = dbs[idx].getSource(id);
+                src.match!((Source s) {
+                    rval.put(FullSource(s.origin, dbs[idx].sourceText(id),
+                        dbs[idx].chunkCount(id), s.added, databases[idx].name));
+                }, (None _) {});
+            }
+        }
+        return rval[];
+    }
+
     struct DbSource {
         Path name;
         Source[] sources;
