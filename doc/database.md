@@ -33,12 +33,12 @@ The constants live in `database.d` and are bound into the SQL as `:rrf_k`, `:vec
 | -------------------- | ----- | ------ |
 | `RrfK` (k)           | 10    | Sharpens rank sensitivity: rank 1 scores ~36% higher than rank 5 (1/11 vs 1/15), so the top of each engine's list dominates its tail. |
 | `VecWeight`          | 1.0   | Baseline weight for vector hits. |
-| `FtsWeight`          | 2.0   | An FTS hit counts double a vector hit at the same rank. There are almost always fewer FTS matches, and when they match they are better (exact keywords). |
+| `FtsWeight`          | 1.0   | Equal weight for FTS hits — a rank-r hit from either engine scores the same. (An earlier 2.0 FTS bias flooded name/reference queries with chunks that merely *mention* the searched term; see below.) |
 | `RrfPoolMultiplier`  | 10    | Each engine's candidate pool is topK x 10, not topK. |
 
 Why the pool is topK x 10: for the fusion to work, both engines must contribute deep enough lists. If the FTS pool were only topK, an exact keyword match ranked just below topK in FTS would never enter the fusion while weaker semantic neighbours would — a bias toward semantic-only results. A 10x pool keeps exact FTS matches in the race; the final result is still truncated to topK.
 
-Why the weighting also reduces noise: with k = 10 and FTS weighted double, a weak vector match (low similarity, deep in the vector list) contributes almost nothing to the fusion score, while any genuine FTS hit outweighs it. Low-similarity semantic noise therefore drops out of the top-K instead of diluting the results.
+Why this weighting reduces noise: with k = 10, a weak match deep in one list contributes almost nothing to the fusion score, and since both engines weigh the same, no single engine can flood the top-K — as long as the other engine has candidates, its best hits compete on equal footing. Low-similarity semantic noise is truncated by the pool, and mention-only FTS noise can no longer swamp a genuinely best vector hit (this happened with an earlier 2.0 FTS weight: corpora where many chunks merely *mention* a term — file names, API names — pushed the chunks the query was actually about out of the top-K entirely).
 
 Documents that appear high in both lists get the largest scores. A document matching neither engine is excluded entirely (a trailing `WHERE` requires at least one engine match), so a chunk can never score positively on placeholder ranks alone.
 
@@ -52,10 +52,10 @@ Why 1000? Because with k = 10:
 
 - 1 / (10 + 1000) ≈ 0.00099 – a very small contribution.
 - This essentially penalises documents that don't appear in one engine, but it doesn't exclude them entirely.
-- A document that is rank 1 in vector search but completely missing from FTS will still get a reasonable score:
-    `1.0/(10+1) + 2.0/(10+1000) ≈ 0.0909 + 0.0020 = 0.0929`.
+- A document that is rank 1 in vector search but completely missing from FTS still gets a reasonable score:
+    `1.0/(10+1) + 1.0/(10+1000) ≈ 0.0909 + 0.0010 = 0.0919`.
     This ensures it can still appear in the final results, especially if it's a top result in one engine.
-- The mirror case (rank 1 in FTS, missing from vector) scores `1.0/(10+1000) + 2.0/(10+1) ≈ 0.0010 + 0.1818 = 0.1828` — roughly twice the vector-only score, which is the FTS-over-semantic weighting made visible.
+- The mirror case (rank 1 in FTS, missing from vector) scores the same `0.0919`: with equal weights a single-engine hit is worth the same whichever engine produced it. A document present in both lists collects both contributions and outranks any single-engine hit at the same rank — the agreement bonus is what makes the fusion robust.
 
 Without coalesce, the NULL would make the entire expression NULL, and the row would be dropped or sorted unpredictably. The placeholder effectively says: "Treat missing as very low relevance, but keep it in the race."
 
@@ -72,14 +72,14 @@ Taking, say, LIMIT/2 from vector and LIMIT/2 from FTS (then stacking or interlea
 - Engine strength varies – For a query, vector might be excellent and FTS poor (or vice versa). A rigid 50/50 split forces a balance that might be wrong.
     - RRF automatically lets the stronger engine's top results dominate, because they'll get higher reciprocal weights.
 
-Example (k = 10, weights 1.0 vector / 2.0 FTS):
+Example (k = 10, weights 1.0 vector / 1.0 FTS):
 
 - Document A: Rank 1 in vector, Rank 50 in FTS.
 - Document B: Rank 6 in vector, Rank 6 in FTS.
 
 A LIMIT/2 approach that takes top 5 from each would discard Document A from FTS (since it's rank 50) and might still include it from vector. But it misses the fact that A is excellent overall.
-RRF score for A: 1.0/(10+1) + 2.0/(10+50) ≈ 0.0909 + 0.0333 = 0.1242
-RRF score for B: 1.0/(10+6) + 2.0/(10+6) ≈ 0.0625 + 0.1250 = 0.1875
+RRF score for A: 1.0/(10+1) + 1.0/(10+50) ≈ 0.0909 + 0.0167 = 0.1076
+RRF score for B: 1.0/(10+6) + 1.0/(10+6) ≈ 0.0625 + 0.0625 = 0.1250
 B ends up ranked higher, which is sensible because it's strong in both engines. A would still appear high enough, though, because its vector rank is stellar.
 
 # Why This Specific Algorithm (RRF)
@@ -89,7 +89,7 @@ B ends up ranked higher, which is sensible because it's strong in both engines. 
 - Robust – handles missing documents gracefully via the coalesce placeholder.
 - Two tuning knobs:
     - k (currently 10) controls rank sharpness: lower k makes top ranks more dominant; higher k flattens the influence. 10 is deliberately sharp so that being rank 1 matters (~36% more than rank 5).
-    - The per-engine weights (currently FTS 2.0 vs vector 1.0) encode the observation that FTS matches are rarer and more precise, so an exact keyword hit should outweigh an equally-ranked semantic hit.
+    - The per-engine weights (currently both 1.0) control the balance between the two engines. Equal weights keep an engine that produces many matches (common with mention-heavy documents and file-name queries) from flooding the top-K and pushing out the other engine's hits; a document found by both engines still scores highest.
 
 In short, RRF is a fair, data‑driven way to marry the precision of keyword search with the semantic intuition of vector search, without throwing away information or forcing an arbitrary split.
 

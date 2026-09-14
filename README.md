@@ -985,10 +985,12 @@ The agent has access to the following tools:
 | `queryTextSearch` | Full-text search (FTS5) for keyword matching (supports `database` parameter for scoping) |
 | `queryBestMatch` | Combined semantic and full-text search (supports `database` parameter for scoping) |
 | `listRAGDatabases` | List all available RAG databases with names and file paths |
+| `listRAGSources` | List indexed documents (paths/topics/URLs) with chunk counts; optional substring filter |
+| `readRAGSource` | Read a whole indexed document by path (resolves bare file names) |
 | `loadFileToRAG` | Index a file into the RAG database |
 | `loadContentToRAG` | Index raw content into the RAG database |
 | `removeTopicFromRAG` | Remove a topic from the RAG index |
-| `queryReadFile` | Read a specific line from a file in the RAG index |
+| `queryReadFile` | Read a specific line from a file in the RAG index (resolves bare file names) |
 
 ### Thinking & Reasoning
 

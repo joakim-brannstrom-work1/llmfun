@@ -56,7 +56,7 @@ The MCP server constructs a full `AgentContext` inside the actor thread. `AgentC
 |-------------------|-------|---------------------|
 | `FileContext` | `readFile`, `writeFile`, `editFile`, `listDirectory`, `removeFile`, `countLinesInFile`, `md5HashFile`, `grepFiles` | Always available |
 | `EnvironmentContext` | `executeCommand`, `listEnvironments` | Always available |
-| `RAGContext` | `querySemantic`, `queryTextSearch`, `queryBestMatch`, `listRAGDatabases`, `loadFileToRAG`, `loadContentToRAG`, `removeTopicFromRAG`, `queryReadFile` | Available if RAG is configured, graceful degradation otherwise |
+| `RAGContext` | `querySemantic`, `queryTextSearch`, `queryBestMatch`, `listRAGDatabases`, `listRAGSources`, `readRAGSource`, `loadFileToRAG`, `loadContentToRAG`, `removeTopicFromRAG`, `queryReadFile` | Available if RAG is configured, graceful degradation otherwise |
 | `MemoryContext` | `writeMemory`, `readMemory`, `removeMemory`, `getMemoryTopics` | Always available |
 | `CompletionContext` | `taskDone` | Always available (no-op with logging) |
 | `MetricsContext` | `getMetrics` | Always available |
@@ -68,7 +68,7 @@ The MCP server constructs a full `AgentContext` inside the actor thread. `AgentC
 
 The MCP server starts even when optional dependencies are unavailable:
 
-**RAG not available**: RAG-dependent tools (`querySemantic`, `queryTextSearch`, `queryBestMatch`, `listRAGDatabases`, `loadFileToRAG`, `loadContentToRAG`, `removeTopicFromRAG`, `queryReadFile`) return `"error: RAG not available"` instead of crashing. The tools still appear in `tools/list` since `AgentContext` implements `RAGContext`.
+**RAG not available**: RAG-dependent tools (`querySemantic`, `queryTextSearch`, `queryBestMatch`, `listRAGDatabases`, `listRAGSources`, `readRAGSource`, `loadFileToRAG`, `loadContentToRAG`, `removeTopicFromRAG`, `queryReadFile`) return `"error: RAG not available"` instead of crashing. The tools still appear in `tools/list` since `AgentContext` implements `RAGContext`.
 
 **SkillManager not available**: `loadSkill` returns `"error: skill manager not available"` instead of crashing. The tool still appears in `tools/list` since `AgentContext` implements `SkillContext`.
 

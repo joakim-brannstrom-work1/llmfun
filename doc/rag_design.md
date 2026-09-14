@@ -35,7 +35,7 @@ We deliberately **forego** a static reranker. Here is why:
 
 ## 3. Architecture: Tool Suite
 
-The system exposes five core tools to the LLM. All search tools support a `database` parameter (scoping) or `"*"` (global).
+The system exposes seven core tools to the LLM. All search tools support a `database` parameter (scoping) or `"*"` (global).
 
 | Tool | Function | Use Case | Key Constraint |
 | :--- | :--- | :--- | :--- |
@@ -43,7 +43,9 @@ The system exposes five core tools to the LLM. All search tools support a `datab
 | **`queryBestMatch`** | RRF (Reciprocal Rank Fusion) merging FTS5 + Vector. | **The 80% Default.** Balances keyword matching with conceptual meaning. Handles poorly crafted queries gracefully. | Returns a mixed bag; can be noisy on wide scopes (`"*"`). |
 | **`querySemantic`** | Vector/Embedding search. | **Conceptual broad strokes.** Use when objective lacks specific nouns, or when FTS5 fails. | Fast, but misses exact function names. |
 | **`queryTextSearch`** | FTS5 full-text search. Words are implicit `AND`; also `AND`/`OR`/`NOT` (NOT is binary: `x NOT y`), `( )` groups, prefix `term*`, `^term`, `NEAR(t1 t2, N)` (see `doc/database.md`). | **Precision.** Use only when you possess a highly unique, non-generic keyword (e.g., `authenticate_user_v2`). | **Warning:** Generic terms (e.g., "user", "login") cause implicit `AND` to return zero or flood results. |
-| **`queryReadFile`** | Exact line lookup in the index. | **Chunk Chasing.** Grabs the exact raw text of a specific line. | **Only takes a single `lineNumber`.** No ranges. |
+| **`listRAGSources`** | Lists the indexed documents (paths/topics/URLs) with chunk counts; optional substring `filter` + `limit`. | **Name → path resolution.** When the user names a document, or a result references one by name, resolve its exact indexed path before reading. | Listing is not searching: it finds documents by name, not content. |
+| **`readRAGSource`** | Reads a whole document (reconstructed from its chunks). Resolves bare file names (any path suffix). | **Reading referenced documents.** The cheapest way to read a document that another result referenced. | Bounded by `maxBytes` (default 64 KiB, truncation is reported). |
+| **`queryReadFile`** | Exact line lookup in the index; also resolves bare file names. | **Chunk Chasing.** Grabs the exact raw text of specific lines. | Best when a line number is known; for full documents use `readRAGSource`. |
 
 ### 3.1 Source-Aware Chunk Embedding
 
@@ -97,7 +99,7 @@ When several databases are searched (`"*"` scope), the merged top-K cannot be sw
 The safety mechanisms operate at two levels: **prompt engineering constraints** (instructed to the LLM via the skill) and **code-enforced limits** (hard stops in the agent loop). This dual-layer approach provides both graceful guidance and catastrophic failure protection.
 
 ### A. The 10-Call Budget (Prompt Engineering Constraint)
-The skill (`knowledge-retrieval`) instructs the LLM to use a maximum of **10 tool calls** per distinct knowledge-seeking objective. This includes `listRAGDatabases`, `queryTextSearch`, `querySemantic`, `queryBestMatch`, and `queryReadFile`.
+The skill (`knowledge-retrieval`) instructs the LLM to use a maximum of **10 tool calls** per distinct knowledge-seeking objective. This includes `listRAGDatabases`, `listRAGSources`, `queryTextSearch`, `querySemantic`, `queryBestMatch`, `queryReadFile`, and `readRAGSource`.
 
 - **Implementation:** This is a soft limit enforced by prompt instructions, not by code. The LLM is told to "STOP" after call 10 and synthesize its answer. The skill divides the budget into phases: Phase 0 (Call 1: discovery), Phase 1 (Calls 2-4: pivot), Phase 2 (Calls 5-8: dig/read), Phase 3 (Calls 9-10: verify).
 - **Rationale (The Calculus):** Internal telemetry indicates that approximately 50% of all FTS5-based searches return zero results due to the implicit `AND` issue. A budget of 5 would leave the LLM with only 2 to 3 successful reads—insufficient for complex coding queries. A budget of 20 would push latency beyond acceptable thresholds (often exceeding 45-60 seconds) and bloat the context window with failed searches, confusing the model.
@@ -109,10 +111,10 @@ The skill instructs the LLM that if, after **6-7 calls**, it does not have a com
 - **Implementation:** This is a soft limit enforced by prompt instructions. The LLM is told to respond transparently: *"I found [X] (e.g., line 42 of auth.py), but [Y] was not found. Proceeding with [X]."*
 - **Rationale:** The law of diminishing returns applies sharply to RAG retrieval. If the core answer hasn't been found in the first 6 attempts, it is unlikely to be found in the 7th or 8th. Continuing to search at that point merely delays the inevitable. By forcing a shift to verification, we change the failure mode. Instead of timing out with an empty context, the LLM uses the final calls to validate the partial evidence it *does* have. This guarantees that even a "failed" retrieval results in a defensible, partially informed answer rather than a hallucination.
 
-### C. The Single-Line Constraint (queryReadFile)
-`queryReadFile` takes only a single `lineNumber`. This architectural constraint directly influences why the budget is 10 rather than a lower number.
+### C. The Reading Budget (queryReadFile vs readRAGSource)
+`queryReadFile` takes only a single `lineNumber`, while `readRAGSource` reads a whole document in one call.
 
-- **Rationale:** Because the system cannot read a range of lines in one call, reading three specific lines costs three separate tool calls. If the budget were 5, the LLM could only read two lines before running out of calls. The 10-call budget intentionally allocates 3-4 calls specifically for line reads, allowing the LLM to chase adjacent code blocks and verify multiple sources without cannibalizing its search budget.
+- **Rationale:** Reading three specific lines of a file costs three separate `queryReadFile` calls, which is why the budget is 10 rather than a lower number. The 10-call budget intentionally allocates 3-4 calls specifically for line reads, allowing the LLM to chase adjacent code blocks and verify multiple sources without cannibalizing its search budget. For *whole documents* (especially documents referenced by other documents), `readRAGSource` collapses the read into one call — bounded by `maxBytes` — so chasing a document chain (A references B references C) stays within budget.
 
 ### D. Code-Enforced Safety Limits (Hard Stops)
 The agent loop has hard-coded safety mechanisms that cannot be overridden by the LLM. These are a last-resort protection against the prompt engineering constraints failing:
