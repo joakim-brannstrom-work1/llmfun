@@ -54,3 +54,14 @@ configuration "llmfun_util" {
     mainSourceFile "source/utility_app.d"
     excludeSourceFiles "source/app.d"
 }
+
+configuration "rag_eval" {
+    targetName "rag_eval"
+
+    mainSourceFile "tools/eval_rag/eval_rag.d"
+    excludeSourceFiles "source/app.d" "source/utility_app.d"
+
+    versions "llmfun_local_model"
+    dependency "llmfun_local_model" path="local_model" default=true
+    lflags "-rpath=$$ORIGIN" "-L$PACKAGE_DIR/build" "-lllama" platform="linux"
+}
