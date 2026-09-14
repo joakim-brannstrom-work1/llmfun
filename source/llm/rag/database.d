@@ -95,8 +95,13 @@ private immutable long RrfPoolMultiplier = 10;
 // Sharpens rank sensitivity so rank1 scores ~36% higher than rank 5
 private immutable long RrfK = 10;
 
-// Makes FTS hits count double vs vector hits at the same rank
-private immutable double FtsWeight = 2.0;
+// Equal engine weights: a rank-r hit from either engine contributes the same
+// score. With an FTS-biased weight (the earlier 2.0/1.0 tuning), corpora where
+// many chunks *mention* the query terms (file names, API names) flooded the
+// top-K with mentioning chunks and pushed out the chunks the query was
+// actually about; equal weights interleave both engines' best results, and
+// chunks present in both lists still get the sum and rank highest.
+private immutable double FtsWeight = 1.0;
 private immutable double VecWeight = 1.0;
 
 Optional!Database openDatabase(AbsolutePath dbFile_, string model,
