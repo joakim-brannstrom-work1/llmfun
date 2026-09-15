@@ -576,8 +576,8 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
     }
 
     void runOnTokens(ref size_t chunks, ref Appender!(Embedding[]) embeddings, string text) {
+        auto prefixTokens = embedder.tokenize(chunkPrefix, addSpecial: false);
         const nBatch = () {
-            auto prefixTokens = embedder.tokenize(chunkPrefix, addSpecial: false);
             return embedder.batchSize > prefixTokens.length
                 ? embedder.batchSize - prefixTokens.length : embedder.batchSize;
         }();
@@ -620,8 +620,10 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
             // llama.cpp do it for us. This is less efficient than using
             // `tokens` as is and wrap with BOS/EOS but should be more stable
             // to future changes.
-            embedder.embedDocument(embedder.tokenize(chunkPrefix ~ text,
-                    addSpecial: true)).match!((float[] embed) { emb = embed; }, (EmbedError e) {
+            // TODO: the above approach did not work. It resulted in more tokens than context and failed.
+            embedder.embedDocument(prefixTokens ~ tokens).match!((float[] embed) {
+                emb = embed;
+            }, (EmbedError e) {
                 logger.tracef("Failed to generate embedding '%s' (toks:%s text:%s): %s",
                     e.errorMsg, tokens.length, text.length, text);
             });
