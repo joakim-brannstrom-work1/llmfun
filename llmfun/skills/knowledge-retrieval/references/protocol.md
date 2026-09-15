@@ -30,7 +30,21 @@ Read your `queryBestMatch` results. **Do not blindly switch tools.** Pivot *only
 
 ## Phase 2: Digging and Reading (Calls 5-8)
 
-Once you find a relevant document snippet that mentions specific line numbers:
+### Reading a referenced document (document chains)
+
+When a result mentions another document by name — e.g. "the token format is
+defined in `auth_token_spec.md`" — or the user asks for "the file X", do NOT
+keep searching for that document's *content*. Resolve it and read it:
+
+1. **`listRAGSources`** with `filter` = the name (e.g. `auth_token_spec`) to find
+   the exact indexed path.
+2. **`readRAGSource`** with `filePath` = that path (a bare file name also works)
+   to read the whole document in one call.
+
+If a result header already shows the exact path, you may call `readRAGSource`
+directly (1 call). The same bare-name resolution works in `queryReadFile`.
+
+### Reading specific lines
 
 - **`queryReadFile` takes a single `lineNumber`**. Read the **single most critical line** first. Surrounding context is usually visible in the search snippet.
 - You can parallelize up to two `queryReadFile` calls if you have two equally critical lines to verify.
@@ -38,7 +52,7 @@ Once you find a relevant document snippet that mentions specific line numbers:
 ## Phase 3: Verification (Calls 9-10)
 
 - Use **Call 9** to verify a critical quoted phrase. Stick with `queryBestMatch` scoped to your database — RRF will catch it if it exists.
-- Use **Call 10** for one final `queryReadFile` to confirm your exact quote before citing it.
+- Use **Call 10** for one final `queryReadFile` (or `readRAGSource` for a short document) to confirm your exact quote before citing it.
 - **After Call 10, STOP.** Synthesize your answer.
 
 ## The "Partial Answer" Rule
@@ -53,7 +67,9 @@ If after 6-7 calls you still lack a complete picture:
 - **`queryBestMatch`** (Combined): Merges semantic and FTS scoring. Best for broad coverage. Note: for very keyword-specific queries, the semantic component may dilute precision.
 - **`querySemantic`** (Vector Search): Best for conceptual queries, natural language questions, or searching for ideas rather than exact terms. Useful when synonyms or paraphrasing may be used.
 - **`queryTextSearch`** (Full-Text Search): Best for keyword-heavy queries with specific terms, proper nouns, file names, function names, or when you know the exact words. FTS matches exact text occurrences precisely.
-- **`queryReadFile`** (Exact Line Lookup): Retrieves the exact text chunk(s) containing a specific line number from a file in the RAG index. Use when you need to read precise content from a known file at a known line.
+- **`listRAGSources`** (Source Index): Lists the documents (sources) indexed in the RAG — file paths, topics and URLs with chunk counts. Optional `filter` (substring) and `limit`. Use it to resolve a document name to its exact indexed path.
+- **`readRAGSource`** (Whole Document Read): Reads a full document from the RAG by path, reconstructed from its chunks. Resolves bare file names (any path suffix). Optional `maxBytes` cap. This is the cheapest way to read a document that another document referenced.
+- **`queryReadFile`** (Exact Line Lookup): Retrieves the exact text chunk(s) containing a specific line number from a file in the RAG index. Use when you need to read precise content from a known file at a known line. Resolves bare file names too.
 - **`listRAGDatabases`** (Discovery): Lists all available RAG databases with their names and file paths. Use to discover database names for filtering queries.
 
 ## Database Parameter
