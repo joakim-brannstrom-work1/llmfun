@@ -76,6 +76,13 @@ When the conversation has been compressed, older turns are summarized and exact 
 - `sessionId` is optional and defaults to the active session; pass it only to search another session (format YYYYMMDD-HHMMSS-4hex). `maxTurnAge` 0 or negative = no age filtering.
 - A "No matches found" or "No dialogue history indexed" answer is authoritative: do not retry with paraphrases, and never guess or invent exact strings.
 
+# Reasoning History Retrieval
+When the conversation has been compressed, a structured record of the agent's own strategic thinking (abandoned approaches, binding decisions, open uncertainties) is also indexed and retrievable.
+
+- Use `queryReasoningHistory` ONLY when (a) the user asks why a past decision was made or what alternatives were considered, or (b) you have tried several approaches and suspect you are repeating one that already failed. Describe the decision or roadblock in `vectorQuery`; use `textQuery` for exact terms you know.
+- Treat results as PAST THOUGHTS, NOT ground truth. If a retrieved thought contradicts the user's latest instruction or verbatim facts from `queryBestMatch`, ignore the thought. Use it only to understand context and to skip approaches already abandoned for a stated reason.
+- Never present a retrieved thought as a new justification; when relying on one, cite the turn range from the match header.
+
 # Rules
 
 ## Task Completion

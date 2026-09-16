@@ -9,14 +9,14 @@ other insertion continues the current turn, and `setSystemPrompt` stamps 0
 (the system prompt belongs to no turn).
 
 Invariants:
-- I1: history is sorted by (turn_id, position); insertion, load
+- History is sorted by (turn_id, position); insertion, load
   reconstruction, and compression preserve it. setHistory is a raw
   replacement - the caller owns the ordering.
-- I2: every non-system message added while a turn is active has turn_id > 0
+- Every non-system message added while a turn is active has turn_id > 0
   (temporary chats may stay turn 0).
-- I3: currentTurnId_ <= nextTurnId_ always; the per-session counter never
+- currentTurnId_ <= nextTurnId_ always; the per-session counter never
   decreases.
-- I4: TurnIDs are strictly increasing across user queries and never re-used
+- TurnIDs are strictly increasing across user queries and never re-used
   within a session across process lifetimes; cross-session identity is the
   composite (session_id, turn_id).
 
@@ -27,7 +27,7 @@ stamp; reconstructTurnIds heals legacy and partially stamped files), clear
 (resets the current turn, never the counter), compress (the merged summary
 carries the summarized slice's turnEnd; kept X/Y messages keep their
 stamps). The Facts/Trace projections getDialogueHistory/getReasoningTrace
-expose the dialogue and reasoning views that Phases 1-2 index.
+expose the dialogue and reasoning views; the indexers reuse the same classifiers.
  */
 module llm.chat;
 
@@ -54,10 +54,10 @@ struct Chat {
         long currentTurnId_; // turn stamped on insertion (0 = no active turn)
     }
 
-    // Allocates the next TurnID (A2). Per-instance state only: each Chat is owned
+    // Allocates the next TurnID. Per-instance state only: each Chat is owned
     // by one thread and each session is one file with one Chat, so no
-    // static/shared/atomic synchronization is needed (N1). Internal: external
-    // turn starts go through beginNewTurn()/add() (A3).
+    // static/shared/atomic synchronization is needed. Internal: external
+    // turn starts go through beginNewTurn()/add().
     private long allocateTurnId() @safe pure nothrow @nogc {
         return ++nextTurnId_;
     }
@@ -78,7 +78,7 @@ struct Chat {
 
     void setSystemPrompt(string x) {
         auto m = Message(Role.system, userQuery: false, content: x, thinking: null);
-        m.turnId = 0; // the system prompt belongs to no turn (A3)
+        m.turnId = 0; // the system prompt belongs to no turn
         if (history.empty)
             history ~= MessageT(m);
         else
@@ -93,7 +93,7 @@ struct Chat {
         prevIndex = 1;
     }
 
-    // A user query always opens a new turn (A3); call sites cannot violate it.
+    // A user query always opens a new turn; call sites cannot violate it.
     void add(Message m) @safe pure nothrow {
         if (m.isUserQuery) {
             currentTurnId_ = allocateTurnId();
@@ -117,7 +117,7 @@ struct Chat {
         history ~= MessageT(m);
     }
 
-    /// Adds a user query as a Message: opens a new turn (A3).
+    /// Adds a user query as a Message: opens a new turn.
     void addUserQuery(string query) @safe nothrow {
         add(Message(Role.user, userQuery: true, content: query, thinking: null));
     }
@@ -159,39 +159,20 @@ struct Chat {
         return app[];
     }
 
-    // A4 Facts projection: the live history's dialogue entries in canonical
-    // order. Delegates to the pure, Chat-free classifier dialogueOf, which the
-    // Phase 1 dialogue indexer (Task 5) reuses on a checkpoint's evicted slices
-    // once setHistory has replaced the live history.
+    // Facts projection: the live history's dialogue entries in canonical
+    // order. Delegates to the pure, Chat-free classifier dialogueOf, which
+    // the dialogue indexer reuses on a checkpoint's evicted slices once
+    // setHistory has replaced the live history.
     MessageT[] getDialogueHistory() @safe nothrow const {
         return dialogueOf(history);
     }
 
-    // A4 Trace projection: reasoning entries in canonical order — non-final
-    // ToolMessages (tool calls), every ToolResponse (tool outputs), and all
-    // thinking strings (Message.thinking). Membership is not exclusive: an
-    // assistant final Message carrying both content and thinking appears in
-    // both projections (H1) — entries are returned whole and cannot be split.
-    // H1 is categorical here: harness control traffic (user-role Messages with
-    // userQuery == false) is excluded even if it carried thinking. ToolMessage
-    // membership is exclusive: a final (taskDone) ToolMessage's thinking is
-    // not carried — revisit if Phase 2 needs the pre-taskDone reasoning.
+    // Trace projection: the live history's reasoning entries in canonical
+    // order. Delegates to the Chat-free classifier traceOf, which the
+    // reasoning indexer reuses on a checkpoint's evicted slices once
+    // setHistory has replaced the live history.
     MessageT[] getReasoningTrace() @safe nothrow const {
-        MessageT[] result;
-
-        foreach (msg; history) {
-            const bool isTrace = msg.match!((Message m) {
-                if (m.role == Role.user && !m.isUserQuery)
-                    return false; // H1: harness control traffic is neither projection
-                return !m.thinking.empty;
-            }, (ToolMessage m) { return !m.isFinalAnswer(); }, (ToolResponse m) {
-                return true;
-            }, (_) { return false; });
-            if (isTrace) {
-                result ~= msg;
-            }
-        }
-        return result;
+        return traceOf(history);
     }
 
     long approxContextSize() @safe nothrow {
@@ -199,10 +180,10 @@ struct Chat {
     }
 
     // Raw history replacement - compression's only path to rewrite history.
-    // I1 contract: the caller must pass an array sorted by (turn_id, position)
+    // Contract: the caller must pass an array sorted by (turn_id, position)
     // and must not reorder inside a turn; setHistory neither sorts nor stamps.
     // compress() satisfies this: its merged summary carries the summarized
-    // slice's turnEnd (C2) and sits before the kept X/Y tail whose ids are
+    // slice's turnEnd and sits before the kept X/Y tail whose ids are
     // >= turnEnd. prevIndex is left untouched; after a shrink lastResponses()
     // re-anchors it to 1 when it exceeds the new length.
     void setHistory(MessageT[] x) @safe nothrow {
@@ -286,9 +267,9 @@ struct Chat {
         return modified;
     }
 
-    // A5 reconstruction for loaded entries: seed the counter from the header
+    // Reconstruction for loaded entries: seed the counter from the header
     // high-water mark, then fill missing stamps in file order. Entries that
-    // already carry a turn_id are never re-stamped (H2).
+    // already carry a turn_id are never re-stamped.
     private void reconstructTurnIds(MessageT[] entries, long headerNextTurnId) @safe nothrow {
         long maxStamped = 0;
         foreach (entry; entries) {
@@ -297,8 +278,9 @@ struct Chat {
                 maxStamped = id;
         }
 
-        // Prefix allocation: the stored value is the last allocated ID (I-1,
-        // no +1). The max with the current value keeps I3 (never decreases).
+        // Prefix allocation: the stored value is the last allocated ID, not
+        // the next (no +1). The max with the current value keeps the counter
+        // non-decreasing.
         if (headerNextTurnId > nextTurnId_)
             nextTurnId_ = headerNextTurnId;
         if (maxStamped > nextTurnId_)
@@ -315,10 +297,10 @@ struct Chat {
         if (maxStamped > 0) {
             // Mixed file: a gap inherits the previous entry's ID. An unstamped
             // prefix takes the file's first stamped ID, so the walk stays
-            // monotonic (I1) and no counter ID is burned (H2). This shape is
-            // live today: /compact persists an unstamped merged summary before
-            // the stamped X/Y tail (summary_agent newHistory) and the next
-            // commit writes it back.
+            // monotonic and no counter ID is burned. This shape is live
+            // today: /compact persists an unstamped merged summary before the
+            // stamped X/Y tail (summary_agent newHistory) and the next commit
+            // writes it back.
             long firstStamped = 0;
             foreach (entry; entries) {
                 const id = turnIdOf(entry);
@@ -423,7 +405,7 @@ long approxMessageSize(T)(T msg) @safe nothrow {
 
 // Typed TurnID on every message type: 0 = unstamped (system prompt, temporary
 // chat padding). In memory the field is the single source of truth; on disk it
-// is persisted inside save_data["turn_id"] (A5, Task 3).
+// is persisted inside save_data["turn_id"].
 mixin template TurnIdMixin() {
     long turnId = 0;
 }
@@ -434,11 +416,11 @@ long turnIdOf(Chat.MessageT msg) @safe pure nothrow @nogc {
             (ToolResponse m) => m.turnId, (VisionMessage m) => m.turnId);
 }
 
-// (min, max) TurnID over a slice. Phase 1 uses this directly as chunk metadata
-// {turn_start, turn_end}. An empty slice yields (0, 0). Unstamped entries
-// (turnId == 0) participate in the range: a slice containing any of them yields
-// turnStart == 0. Phase 1 consumers must filter turnId != 0 or treat 0 as
-// "before the first stamped turn".
+// (min, max) TurnID over a slice. The dialogue indexer uses this directly as
+// chunk metadata {turn_start, turn_end}. An empty slice yields (0, 0).
+// Unstamped entries (turnId == 0) participate in the range: a slice containing
+// any of them yields turnStart == 0. Consumers must filter turnId != 0 or
+// treat 0 as "before the first stamped turn".
 Tuple!(long, "turnStart", long, "turnEnd") turnRangeOf(const(Chat.MessageT)[] msgs) @safe pure nothrow @nogc {
     if (msgs.length == 0)
         return tuple!("turnStart", "turnEnd")(0L, 0L);
@@ -454,30 +436,25 @@ Tuple!(long, "turnStart", long, "turnEnd") turnRangeOf(const(Chat.MessageT)[] ms
     return tuple!("turnStart", "turnEnd")(lo, hi);
 }
 
-// A4 Facts classifier (pure, Chat-free): dialogue entries in canonical order -
+// Facts classifier (pure, Chat-free): dialogue entries in canonical order -
 // user queries (user role with isUserQuery), assistant final text Messages
 // (non-empty content), and ToolMessages carrying taskDoneAnswer
 // (isFinalAnswer). Harness control traffic (userQuery:false nudges) is
-// excluded (H1). VisionMessage is not classified by A4 and appears in neither
+// excluded. VisionMessage is not classified and appears in neither
 // projection. Entries are returned whole, keeping their typed TurnIDs. Note:
 // isUserQuery() checks save_data["user"] key presence, not its value, so a
 // hand-edited {"user": false} entry would still classify as a user query.
 //
-// A4 classifies a merged compression summary (an assistant Message with
-// non-empty content) as dialogue - the F10 exclusion of such entries (and of
-// turnId == 0 legacy entries) is the job of the Phase 1 dialogue indexer
-// (Tasks 5/15), NOT this predicate; do not "fix" it by adding a
-// summary-marker check here.
+// A merged compression summary (an assistant Message with non-empty content)
+// classifies as dialogue here - excluding such entries (and turnId == 0
+// legacy entries) is the job of the dialogue indexer, NOT this predicate; do
+// not "fix" it by adding a summary-marker check here.
 Chat.MessageT[] dialogueOf(const(Chat.MessageT)[] msgs) @safe nothrow pure {
     static bool isDialogue(Chat.MessageT msg) @safe nothrow pure {
         return msg.match!((Message m) {
             return (m.role == Role.user && m.isUserQuery)
-                    || (m.role == Role.assistant && !m.content.empty);
-        }, (ToolMessage m) {
-            return m.isFinalAnswer();
-        }, (_) {
-            return false;
-        });
+                || (m.role == Role.assistant && !m.content.empty);
+        }, (ToolMessage m) { return m.isFinalAnswer(); }, (_) { return false; });
     }
 
     Chat.MessageT[] result;
@@ -487,8 +464,32 @@ Chat.MessageT[] dialogueOf(const(Chat.MessageT)[] msgs) @safe nothrow pure {
     return result;
 }
 
-// Writes the typed field onto the message. Plain field store — the stamp
-// cannot fail (N3).
+// Trace classifier (pure, Chat-free): reasoning entries in canonical order —
+// non-final ToolMessages (tool calls), every ToolResponse (tool outputs), and
+// all thinking strings (Message.thinking). Membership is not exclusive: an
+// assistant final Message carrying both content and thinking appears in both
+// projections — entries are returned whole and cannot be split. Harness
+// control traffic (user-role Messages with userQuery == false) is excluded
+// even if it carried thinking. ToolMessage membership is exclusive: a final
+// (taskDone) ToolMessage's thinking is not carried — revisit if the
+// pre-taskDone reasoning ever needs to be indexed.
+Chat.MessageT[] traceOf(const(Chat.MessageT)[] msgs) @safe nothrow {
+    Chat.MessageT[] result;
+    foreach (msg; msgs) {
+        const bool isTrace = msg.match!((Message m) {
+            if (m.role == Role.user && !m.isUserQuery)
+                return false; // harness control traffic is in neither projection
+            return !m.thinking.empty;
+        }, (ToolMessage m) { return !m.isFinalAnswer(); }, (ToolResponse m) {
+            return true;
+        }, (_) { return false; });
+        if (isTrace)
+            result ~= msg;
+    }
+    return result;
+}
+
+// Writes the typed field onto the message. Plain field store; cannot fail.
 private void stampEntry(ref Chat.MessageT entry, long id) @safe nothrow {
     entry.match!((ref Message m) => m.turnId = id,
             (ref ToolMessage m) => m.turnId = id, (ref ToolResponse m) => m.turnId = id,
@@ -496,7 +497,7 @@ private void stampEntry(ref Chat.MessageT entry, long id) @safe nothrow {
 }
 
 // True only for user-query Messages whose save_data["user"] is the JSON
-// boolean true (A5.5). The value check (not just key presence) keeps a legacy
+// boolean true. The value check (not just key presence) keeps a legacy
 // {"user": false} from opening a spurious turn.
 private bool isUserQueryEntry(const Chat.MessageT entry) @safe nothrow {
     bool result = false;
@@ -506,12 +507,12 @@ private bool isUserQueryEntry(const Chat.MessageT entry) @safe nothrow {
     return result;
 }
 
-// Reads save_data["turn_id"] into the typed field (A5). 0 when absent/corrupt.
+// Reads save_data["turn_id"] into the typed field. 0 when absent/corrupt.
 private long turnIdFromSaveData(JSONValue saveData) @trusted {
     return getValue!long(saveData, (v) => v["turn_id"].integer, 0L);
 }
 
-// Rebuilds saveData as a fresh object carrying turn_id (A5): the in-memory
+// Rebuilds saveData as a fresh object carrying turn_id: the in-memory
 // saveData AA is never mutated (JSONValue copies share the underlying AA, so
 // the object is copied entry by entry). Non-object saveData is returned
 // as-is and never hosts turn_id (never produced today).
@@ -713,7 +714,7 @@ Chat.MessageT fromUser(JSONValue entry) {
             auto metadata = getValue(entry, (v) => v["metadata"], JSONValue.init);
             auto saveData = getValue(entry, (v) => v["save_data"], JSONValue.init);
             auto vm = VisionMessage(text, imageDataUrl, metadata);
-            vm.turnId = turnIdFromSaveData(saveData); // M1: load() routes all user entries here
+            vm.turnId = turnIdFromSaveData(saveData); // load() routes all user entries here
             rval = vm;
         } else {
             string thinking = getValue(entry, (v) => v["reasoning_content"].str, null);
@@ -1007,7 +1008,7 @@ shared static this() {
     }
 }
 
-// --- Test: TurnIDs are unique and strictly increasing within one Chat ---
+@("TurnIDs are unique and strictly increasing within one Chat")
 unittest {
     auto chat = Chat();
     assert(chat.currentTurnId() == 0);
@@ -1023,23 +1024,23 @@ unittest {
     assert(chat.nextTurnId() == 11);
 }
 
-// --- Test: beginNewTurn allocates a fresh ID and opens the turn ---
+@("beginNewTurn allocates a fresh ID and opens the turn")
 unittest {
     auto chat = Chat();
     assert(chat.beginNewTurn() == 1);
     assert(chat.currentTurnId() == 1);
     assert(chat.nextTurnId() == 1);
-    // Pin I-1 semantics: the counter is prefix-allocated (++nextTurnId_), so
-    // nextTurnId() equals currentTurnId() right after an allocation and the
-    // next allocation is strictly greater. Task 3 seeds from
-    // max(header, max stamp) with no +1.
+    // Pin the prefix-allocation semantics: the counter is prefix-allocated
+    // (++nextTurnId_), so nextTurnId() equals currentTurnId() right after an
+    // allocation and the next allocation is strictly greater. Load seeds
+    // from max(header, max stamp) with no +1.
     assert(chat.nextTurnId() == chat.currentTurnId());
     assert(chat.beginNewTurn() == 2);
     assert(chat.currentTurnId() == 2);
     assert(chat.nextTurnId() == 2);
 }
 
-// --- Test: clear() resets currentTurnId_ to 0 but never moves nextTurnId_ ---
+@("clear() resets currentTurnId_ to 0 but never moves nextTurnId_")
 unittest {
     auto chat = Chat();
     chat.setSystemPrompt("system");
@@ -1054,20 +1055,20 @@ unittest {
     assert(chat.beginNewTurn() == 2);
 }
 
-// --- Test: two Chat instances run independent counter sequences ---
+@("two Chat instances run independent counter sequences")
 unittest {
     auto a = Chat();
     auto b = Chat();
     assert(a.allocateTurnId() == 1);
     assert(a.allocateTurnId() == 2);
-    assert(b.allocateTurnId() == 1); // overlap across chats is allowed (L1)
+    assert(b.allocateTurnId() == 1); // overlap across chats is allowed
     assert(b.allocateTurnId() == 2);
     assert(a.allocateTurnId() == 3); // allocations in b never affect a
     assert(a.nextTurnId() == 3);
     assert(b.nextTurnId() == 2);
 }
 
-// --- Test: turnIdOf reads the typed field (0 = unstamped, no JSON involved) ---
+@("turnIdOf reads the typed field (0 = unstamped, no JSON involved)")
 unittest {
     auto m = Message(Role.user, userQuery: true, content: "q", thinking: null);
     assert(turnIdOf(Chat.MessageT(m)) == 0); // default-constructed: unstamped
@@ -1087,7 +1088,7 @@ unittest {
     assert(turnIdOf(Chat.MessageT(v)) == 5);
 }
 
-// --- Test: turnRangeOf returns (min, max) over a slice ---
+@("turnRangeOf returns (min, max) over a slice")
 unittest {
     auto m1 = Message(Role.user, userQuery: true, content: "a", thinking: null);
     m1.turnId = 5;
@@ -1109,11 +1110,11 @@ unittest {
     assert(emptyRange.turnEnd == 0);
 }
 
-// --- Test: add() stamps turns per the A3 policy ---
+@("add() stamps turns per the stamping policy")
 unittest {
     auto chat = Chat();
     chat.setSystemPrompt("sys");
-    assert(turnIdOf(chat.getMessages[0]) == 0); // system prompt: no turn (A3)
+    assert(turnIdOf(chat.getMessages[0]) == 0); // system prompt: no turn
 
     chat.addUserQuery("question one");
     const q1 = turnIdOf(chat.getMessages[1]);
@@ -1138,7 +1139,7 @@ unittest {
     assert(chat.nextTurnId() == q2); // prefix counter: last allocated == current
 }
 
-// --- Test: clear() resets the current turn but never the counter (A3) ---
+@("clear() resets the current turn but never the counter")
 unittest {
     auto chat = Chat();
     chat.addUserQuery("q");
@@ -1152,7 +1153,7 @@ unittest {
     assert(chat.currentTurnId() == 2); // strictly larger: no reuse
 }
 
-// --- Test: toSaveJson/fromJson round-trip preserves turn_id in save_data ---
+@("toSaveJson/fromJson round-trip preserves turn_id in save_data")
 unittest {
     auto m = Message(Role.user, userQuery: true, content: "q", thinking: null);
     m.turnId = 3;
@@ -1191,7 +1192,7 @@ unittest {
     assert(v2.turnId == 9);
 }
 
-// --- Test: the in-memory saveData AA is never mutated by toSaveJson (A5) ---
+@("the in-memory saveData AA is never mutated by toSaveJson")
 unittest {
     auto m = Message(Role.user, userQuery: true, content: "q", thinking: null);
     assert(m.saveData.type == JSONType.object); // ctor stored save_data["user"]
@@ -1204,7 +1205,7 @@ unittest {
     assert(("turn_id" in m.saveData) is null);
 }
 
-// --- Test: unstamped message gains save_data with turn_id on save ---
+@("unstamped message gains save_data with turn_id on save")
 unittest {
     auto m = Message(Role.assistant, userQuery: false, content: "ans", thinking: null);
     m.turnId = 2;
@@ -1218,7 +1219,7 @@ unittest {
     assert(m2.turnId == 2);
 }
 
-// --- Test: pure-legacy file gains boundaries at user-query positions (A5) ---
+@("pure-legacy file gains boundaries at user-query positions")
 unittest {
     auto chat = Chat();
     auto doc = parseJSON(`{
@@ -1251,7 +1252,7 @@ unittest {
     assert(chat.currentTurnId() == 3);
 }
 
-// --- Test: partially stamped file — gaps inherit the previous turn (H2) ---
+@("partially stamped file — gaps inherit the previous turn")
 unittest {
     auto chat = Chat();
     auto doc = parseJSON(`{
@@ -1268,14 +1269,14 @@ unittest {
     auto msgs = chat.getMessages; // [system, q1, ans1, tool, q2, ans2]
     assert(msgs.length == 6);
     assert(turnIdOf(msgs[1]) == 4); // existing stamps kept, never re-stamped
-    assert(turnIdOf(msgs[2]) == 4); // gap inherits the previous turn (H2)
+    assert(turnIdOf(msgs[2]) == 4); // gap inherits the previous turn
     assert(turnIdOf(msgs[3]) == 4);
     assert(turnIdOf(msgs[4]) == 9);
     assert(turnIdOf(msgs[5]) == 9);
     assert(chat.nextTurnId() == 9);
     assert(chat.currentTurnId() == 9);
 
-    // The walk is monotonic (I1): IDs never decrease in file order.
+    // The walk is monotonic: IDs never decrease in file order.
     long prev = 0;
     foreach (m; msgs) {
         const id = turnIdOf(m);
@@ -1287,7 +1288,8 @@ unittest {
     chat.addUserQuery("q3");
     assert(turnIdOf(chat.getMessages[6]) == 10);
 }
-// --- Test: unstamped prefix in a mixed file takes the first stamped ID (I1) ---
+
+@("unstamped prefix in a mixed file takes the first stamped ID")
 unittest {
     // Live shape: /compact persists an unstamped merged summary before the
     // stamped X/Y tail (summary_agent newHistory) and the next commit writes
@@ -1309,10 +1311,10 @@ unittest {
     assert(turnIdOf(msgs[2]) == 9);
     assert(turnIdOf(msgs[3]) == 9); // mid-file gap inherits
     assert(turnIdOf(msgs[4]) == 10);
-    assert(chat.nextTurnId() == 10); // no counter ID burned (H2)
+    assert(chat.nextTurnId() == 10); // no counter ID burned
     assert(chat.currentTurnId() == 10);
 
-    // I1: monotonic in file order.
+    // Monotonic in file order.
     long prev = 0;
     foreach (m; msgs) {
         const id = turnIdOf(m);
@@ -1325,8 +1327,7 @@ unittest {
     assert(chat.currentTurnId() == 11);
 }
 
-// --- Test: legacy {"user": false} does not open a turn (A5.5) ---
-unittest {
+@("legacy {\"user\": false} does not open a turn") unittest {
     auto chat = Chat();
     auto doc = parseJSON(`{
         "messages": [
@@ -1347,7 +1348,7 @@ unittest {
     assert(chat.currentTurnId() == 1);
 }
 
-// --- Test: vision message round-tripped through fromUser keeps turn_id (M1) ---
+@("vision message round-tripped through fromUser keeps turn_id")
 unittest {
     auto entry = parseJSON(`{
         "role": "user",
@@ -1363,7 +1364,7 @@ unittest {
     assert(j["save_data"]["turn_id"].integer == 12);
 }
 
-// --- Test: corrupt entries are skipped without a crash ---
+@("corrupt entries are skipped without a crash")
 unittest {
     auto chat = Chat();
     auto doc = parseJSON(`{
@@ -1384,7 +1385,7 @@ unittest {
     assert(turnIdOf(msgs[4]) == 1);
 }
 
-// --- Test: header next_turn_id exceeds message stamps (evicted-turn continuity) ---
+@("header next_turn_id exceeds message stamps (evicted-turn continuity)")
 unittest {
     auto chat = Chat();
     auto doc = parseJSON(`{
@@ -1403,7 +1404,7 @@ unittest {
     assert(chat.currentTurnId() == 43); // continues above the header
 }
 
-// --- Test: load() without messages keeps a clean counter ---
+@("load() without messages keeps a clean counter")
 unittest {
     auto chat = Chat();
     auto doc = parseJSON(`{"messages": []}`);
@@ -1414,7 +1415,7 @@ unittest {
     assert(chat.currentTurnId() == 1);
 }
 
-// --- Test: header seed never moves the counter backwards (I3) ---
+@("header seed never moves the counter backwards")
 unittest {
     auto chat = Chat();
     chat.addUserQuery("warm-up");
@@ -1429,13 +1430,13 @@ unittest {
         ]
     }`);
     chat.load(doc);
-    assert(chat.nextTurnId() == 2); // unchanged: I3
+    assert(chat.nextTurnId() == 2); // unchanged: the counter never decreases
 
     chat.addUserQuery("next");
     assert(chat.currentTurnId() == 3);
 }
 
-// --- Test: A4 projections split synthetic turns into dialogue and trace ---
+@("projections split synthetic turns into dialogue and trace")
 unittest {
     auto chat = Chat();
     chat.setSystemPrompt("sys"); // system prompt: neither projection
@@ -1450,7 +1451,7 @@ unittest {
             JSONValue([JSONValue("call-done")]), JSONValue.init, sd));
     chat.add(ToolResponse("done", "call-done", "taskDone", true));
 
-    // Turn 2: query -> direct assistant final with content + thinking (H1).
+    // Turn 2: query -> direct assistant final with content + thinking.
     chat.addUserQuery("explain it");
     chat.add(Message(Role.assistant, userQuery: false, content: "Because 2 and 2 make 4.",
             thinking: "walk the user through the addition"));
@@ -1468,7 +1469,7 @@ unittest {
     assert(dialogue[3].match!((Message m) => m.content == "Because 2 and 2 make 4.", (_) => false));
 
     // Trace: non-final tool call, both tool responses, and the assistant final
-    // that carries thinking (dual classification, H1).
+    // that carries thinking (dual classification).
     assert(trace.length == 4);
     assert(trace[0].match!((ToolMessage m) => !m.isFinalAnswer(), (_) => false));
     assert(trace[1].match!((ToolResponse m) => m.toolName == "math", (_) => false));
@@ -1489,7 +1490,7 @@ unittest {
     assert(turnRangeOf(trace).turnStart == 1 && turnRangeOf(trace).turnEnd == 2);
 }
 
-// --- Test: content+thinking assistant Message appears in both projections (H1) ---
+@("content+thinking assistant Message appears in both projections")
 unittest {
     auto chat = Chat();
     chat.addUserQuery("q");
@@ -1500,8 +1501,9 @@ unittest {
     auto trace = chat.getReasoningTrace;
 
     // Dual classification: the whole entry appears in both projections —
-    // Phase 1 indexes the content (and strips thinking), Phase 2 uses the
-    // thinking. One message cannot be split across projections.
+    // the dialogue indexer indexes the content (and strips thinking), the
+    // reasoning indexer uses the thinking. One message cannot be split
+    // across projections.
     assert(dialogue.length == 2); // query + assistant final
     assert(dialogue[1].match!((Message m) => m.content == "final text"
             && m.thinking == "the reasoning behind it", (_) => false));
@@ -1510,7 +1512,7 @@ unittest {
             && m.thinking == "the reasoning behind it", (_) => false));
 }
 
-// --- Test: harness control traffic appears in neither projection (H1) ---
+@("harness control traffic appears in neither projection")
 unittest {
     auto chat = Chat();
     chat.addUserQuery("q");
@@ -1518,7 +1520,7 @@ unittest {
     // (agent:189/220/533) are user-role Messages with userQuery == false.
     chat.add(Message(Role.user, userQuery: false, content: "SYSTEM NUDGE", thinking: null));
     chat.add(Message(Role.user, userQuery: false, content: "feedback warning", thinking: null));
-    // H1 is categorical: even a harness nudge that carried thinking stays out.
+    // Categorical: even a harness nudge that carried thinking stays out.
     chat.add(Message(Role.user, userQuery: false, content: "nudge with thinking",
             thinking: "harness traffic must never leak into the trace"));
     chat.add(Message(Role.assistant, userQuery: false, content: "ans", thinking: null));
@@ -1532,7 +1534,7 @@ unittest {
     assert(trace.length == 0); // no tools, no thinking strings
 }
 
-// --- Test: thinking-only assistant Message lands in the trace only ---
+@("thinking-only assistant Message lands in the trace only")
 unittest {
     auto chat = Chat();
     chat.addUserQuery("q");
@@ -1550,7 +1552,7 @@ unittest {
             (_) => false));
 }
 
-// --- Test: taskDoneAnswer ToolMessage is dialogue; non-final ToolMessage is trace ---
+@("taskDoneAnswer ToolMessage is dialogue; non-final ToolMessage is trace")
 unittest {
     auto chat = Chat();
     chat.addUserQuery("q");
@@ -1569,17 +1571,17 @@ unittest {
     assert(trace[0].match!((ToolMessage m) => !m.isFinalAnswer(), (_) => false));
 }
 
-// --- Test: VisionMessage is not classified by A4 (neither projection) ---
+@("VisionMessage is not classified (neither projection)")
 unittest {
     auto chat = Chat();
-    chat.beginNewTurn(); // vision turns open explicitly (Task 6)
+    chat.beginNewTurn(); // vision turns open explicitly
     chat.add(VisionMessage("what is in this image?", "data:image/png;base64,abc"));
 
     assert(chat.getDialogueHistory.length == 0);
     assert(chat.getReasoningTrace.length == 0);
 }
 
-// --- Test: empty and system-only chats project to nothing ---
+@("empty and system-only chats project to nothing")
 unittest {
     auto chat = Chat();
     assert(chat.getDialogueHistory.length == 0);
@@ -1590,7 +1592,7 @@ unittest {
     assert(chat.getReasoningTrace.length == 0);
 }
 
-// --- Test: dialogueOf classifies a mixed slice identically to the projection ---
+@("dialogueOf classifies a mixed slice identically to the projection")
 unittest {
     auto chat = Chat();
     chat.setSystemPrompt("sys"); // system prompt: neither projection
@@ -1598,23 +1600,21 @@ unittest {
     // Turn 1: query + empty assistant + non-final tool + tool response +
     // taskDone final + harness nudge.
     chat.addUserQuery("what is 2+2?");
-    chat.add(Message(Role.assistant, userQuery: false, content: null,
-            thinking: null));
+    chat.add(Message(Role.assistant, userQuery: false, content: null, thinking: null));
     chat.add(ToolMessage("computing", JSONValue([JSONValue("call-math")])));
     chat.add(ToolResponse("4", "call-math", "math", true));
     JSONValue sd;
     sd["taskDoneAnswer"] = JSONValue("The answer is 4.");
-    chat.add(ToolMessage("final reasoning", JSONValue([JSONValue("call-done")]),
-            JSONValue.init, sd));
-    chat.add(Message(Role.user, userQuery: false, content: "SYSTEM NUDGE",
-            thinking: null));
+    chat.add(ToolMessage("final reasoning",
+            JSONValue([JSONValue("call-done")]), JSONValue.init, sd));
+    chat.add(Message(Role.user, userQuery: false, content: "SYSTEM NUDGE", thinking: null));
 
     // Turn 2: query + assistant final.
     chat.addUserQuery("explain it");
-    chat.add(Message(Role.assistant, userQuery: false,
-            content: "Because 2 and 2 make 4.", thinking: null));
+    chat.add(Message(Role.assistant, userQuery: false, content: "Because 2 and 2 make 4.",
+            thinking: null));
 
-    // Turn 3: vision (A4 classifies neither projection).
+    // Turn 3: vision (classified by neither projection).
     chat.beginNewTurn();
     chat.add(VisionMessage("what is in this image?", "data:image/png;base64,abc"));
 
@@ -1625,18 +1625,14 @@ unittest {
     assert(viaFree.length == viaChat.length);
 
     // Query 1, taskDone final, query 2, assistant final (canonical order).
-    assert(viaFree[0].match!((Message m) =>
-            m.role == Role.user && m.isUserQuery && m.content == "what is 2+2?"
-            && m.turnId == 1, (_) => false));
-    assert(viaFree[1].match!((ToolMessage m) =>
-            m.isFinalAnswer() && m.getFinalAnswer() == "The answer is 4."
-            && m.turnId == 1, (_) => false));
-    assert(viaFree[2].match!((Message m) =>
-            m.role == Role.user && m.isUserQuery && m.content == "explain it"
-            && m.turnId == 2, (_) => false));
-    assert(viaFree[3].match!((Message m) =>
-            m.role == Role.assistant && m.content == "Because 2 and 2 make 4."
-            && m.turnId == 2, (_) => false));
+    assert(viaFree[0].match!((Message m) => m.role == Role.user && m.isUserQuery
+            && m.content == "what is 2+2?" && m.turnId == 1, (_) => false));
+    assert(viaFree[1].match!((ToolMessage m) => m.isFinalAnswer()
+            && m.getFinalAnswer() == "The answer is 4." && m.turnId == 1, (_) => false));
+    assert(viaFree[2].match!((Message m) => m.role == Role.user && m.isUserQuery
+            && m.content == "explain it" && m.turnId == 2, (_) => false));
+    assert(viaFree[3].match!((Message m) => m.role == Role.assistant
+            && m.content == "Because 2 and 2 make 4." && m.turnId == 2, (_) => false));
 
     // Element-for-element agreement (same typed TurnID at each position).
     foreach (i, m; viaFree) {
@@ -1644,12 +1640,11 @@ unittest {
     }
 }
 
-// --- Test: dialogueOf is pure nothrow and works on an arbitrary copy ---
+@("dialogueOf is pure nothrow and works on an arbitrary copy")
 unittest {
     auto chat = Chat();
     chat.addUserQuery("q1");
-    chat.add(Message(Role.assistant, userQuery: false, content: "a1",
-            thinking: null));
+    chat.add(Message(Role.assistant, userQuery: false, content: "a1", thinking: null));
     chat.add(ToolResponse("r", "c", "t", true)); // trace: not dialogue
 
     // A copy out of the Chat: the classifier never sees a Chat instance.
@@ -1660,18 +1655,76 @@ unittest {
     pure nothrow long countOf(Chat.MessageT[] m) {
         return dialogueOf(m).length;
     }
+
     assert(countOf(copy) == 2);
     assert(countOf(chat.getMessages()) == 2);
 
     // Membership: the query and the assistant final, in order.
     auto viaCopy = dialogueOf(copy);
     assert(viaCopy.length == 2);
-    assert(viaCopy[0].match!((Message m) => m.isUserQuery && m.content == "q1",
-            (_) => false));
+    assert(viaCopy[0].match!((Message m) => m.isUserQuery && m.content == "q1", (_) => false));
     assert(viaCopy[1].match!((Message m) => m.content == "a1", (_) => false));
 }
 
-// --- Test: header next_turn_id lagging the message stamps self-heals (R6) ---
+@("traceOf projects a mixed slice identically to the projection")
+unittest {
+    auto chat = Chat();
+
+    // Corpus (canonical order), built via add/addUserQuery:
+    //  (1) assistant Message with content + thinking -> in the trace
+    //  (2) non-final ToolMessage (toolCalls set)     -> in the trace
+    //  (3) final taskDone ToolMessage WITH thinking  -> EXCLUDED (both)
+    //  (4) ToolResponse (any)                        -> in the trace
+    //  (5) VisionMessage                             -> EXCLUDED (both)
+    //  (6) harness-control Message (user role, userQuery:false) WITH thinking
+    //                                            -> EXCLUDED (both)
+    //  (7) user query Message (userQuery:true)       -> EXCLUDED (both; it has
+    //      no thinking and is user role)
+    chat.add(Message(Role.assistant, userQuery: false, content: "answer text",
+            thinking: "reasoning behind the answer"));
+    chat.add(ToolMessage("call reasoning", JSONValue([JSONValue("call-1")])));
+    JSONValue sd;
+    sd["taskDoneAnswer"] = JSONValue("final answer text");
+    chat.add(ToolMessage("done reasoning", JSONValue([JSONValue("call-done")]),
+            JSONValue.init, sd));
+    chat.add(ToolResponse("result", "call-1", "math", true));
+    chat.add(VisionMessage("what is in this image?", "data:image/png;base64,abc"));
+    chat.add(Message(Role.user, userQuery: false, content: "nudge with thinking",
+            thinking: "harness traffic must never leak into the trace"));
+    chat.addUserQuery("q");
+
+    // A copy out of the Chat: traceOf never sees a Chat instance.
+    auto copy = chat.getMessages().dup;
+
+    // The Chat-free classifier and the projection agree value-for-value.
+    auto viaFree = traceOf(copy);
+    auto viaChat = chat.getReasoningTrace();
+    assert(viaFree == viaChat); // value equality
+    assert(viaFree.length == 3); // entries (1), (2), (4) in canonical order
+
+    // Explicit membership per corpus entry locks the semantics, not just
+    // old-vs-new parity.
+    // (1) assistant Message with content + thinking (dual classification).
+    assert(viaFree[0].match!((Message m) => m.content == "answer text"
+            && m.thinking == "reasoning behind the answer", (_) => false));
+    // (2) non-final ToolMessage.
+    assert(viaFree[1].match!((ToolMessage m) => !m.isFinalAnswer()
+            && m.thinking == "call reasoning", (_) => false));
+    // (3) final taskDone ToolMessage is excluded even though it has thinking.
+    assert(!viaFree.canFind!(m => m.match!((ToolMessage m2) => m2.isFinalAnswer(), (_) => false))());
+    // (4) ToolResponse.
+    assert(viaFree[2].match!((ToolResponse m) => m.content == "result"
+            && m.toolName == "math", (_) => false));
+    // (5) VisionMessage is excluded (the catch-all returns false).
+    assert(!viaFree.canFind!(m => m.match!((VisionMessage m2) => true, (_) => false))());
+    // (6) harness-control user Message is excluded even though it has thinking.
+    assert(!viaFree.canFind!(m => m.match!((Message m2) => m2.role == Role.user
+            && !m2.isUserQuery, (_) => false))());
+    // (7) user query is excluded (no thinking, user role).
+    assert(!viaFree.canFind!(m => m.match!((Message m2) => m2.isUserQuery, (_) => false))());
+}
+
+@("header next_turn_id lagging the message stamps self-heals")
 unittest {
     // Crash between chat mutation and commit: the messages carry stamps up
     // to 9 but the header still holds the previous commit's 3. Seeding from
@@ -1695,7 +1748,7 @@ unittest {
     assert(chat.currentTurnId() == 10); // strictly above the max persisted stamp
 }
 
-// --- Test: stamping does not disturb lastResponses/prevIndex tracking ---
+@("stamping does not disturb lastResponses/prevIndex tracking")
 unittest {
     auto chat = Chat();
     chat.setSystemPrompt("sys");
@@ -1712,7 +1765,7 @@ unittest {
     assert(turnIdOf(slice[1]) == 1);
 
     // q2 opens turn 2. The window still starts at prevIndex; the slice keeps
-    // each message's own stamp and stays I1-monotonic.
+    // each message's own stamp and stays monotonic.
     chat.addUserQuery("q2");
     chat.add(Message(Role.assistant, userQuery: false, content: "a2", thinking: null));
     slice = chat.lastResponses;
@@ -1731,12 +1784,12 @@ unittest {
     assert(chat.lastResponses is null);
 }
 
-// --- Test: setHistory preserves an I1-sorted replacement (compression shape) ---
+@("setHistory preserves a sorted replacement (compression shape)")
 unittest {
     // The shape compress() hands to setHistory: the system prompt (0), a
     // merged summary stamped with the summarized slice's turnEnd, then the
     // kept X/Y tail whose ids are >= turnEnd. setHistory is a raw
-    // replacement - it neither sorts nor stamps, so I1 ordering is the
+    // replacement - it neither sorts nor stamps, so sorted order is the
     // caller's contract.
     auto chat = Chat();
     chat.setSystemPrompt("sys");
@@ -1747,7 +1800,7 @@ unittest {
 
     auto summary = Message(Role.assistant, userQuery: false, content: "merged summary of turn 1",
             thinking: null);
-    summary.turnId = 1; // turnEnd of the summarized slice (C2)
+    summary.turnId = 1; // turnEnd of the summarized slice
     Chat.MessageT[] replacement = [
         chat.getMessages[0], // system prompt, turn 0
         Chat.MessageT(summary), chat.getMessages[3], // q2, turn 2
@@ -1759,7 +1812,7 @@ unittest {
     long prev = 0;
     foreach (m; chat.getMessages) {
         const id = turnIdOf(m);
-        assert(id >= prev, "history must stay (turn_id, position)-sorted (I1)");
+        assert(id >= prev, "history must stay (turn_id, position)-sorted");
         prev = id;
     }
     assert(turnIdOf(chat.getMessages[1]) == 1);
@@ -1767,16 +1820,13 @@ unittest {
     assert(turnIdOf(chat.getMessages[3]) == 2);
 }
 
-// ===================== Tests for Chat.sanitizeHistory =====================
-
-/// Test: sanitizeHistory on an empty chat returns 0.
+@("sanitizeHistory on an empty chat returns 0")
 unittest {
     Chat chat;
     assert(chat.sanitizeHistory() == 0);
 }
 
-/// Test: sanitizeHistory returns 0 for a clean chat and leaves valid
-/// multibyte UTF-8 untouched (no copy).
+@("sanitizeHistory returns 0 for a clean chat and leaves valid multibyte UTF-8 untouched (no copy)")
 unittest {
     Chat chat;
     chat.add(Message(Role.system, userQuery: false, content: "sys", thinking: null));
@@ -1796,8 +1846,7 @@ unittest {
     }, (ToolMessage _) {}, (ToolResponse _) {}, (VisionMessage _) {});
 }
 
-/// Test: the original crash scenario — a poisoned ToolResponse (raw bytes from
-/// command output) is healed in place; no message is discarded.
+@("the original crash scenario — a poisoned ToolResponse (raw bytes from command output) is healed in place; no message is discarded")
 unittest {
     Chat chat;
     chat.add(Message(Role.system, userQuery: false, content: "sys", thinking: null));
@@ -1816,8 +1865,7 @@ unittest {
     }, (VisionMessage _) {});
 }
 
-/// Test: sanitizeHistory heals every message type and counts each modified
-/// message; result is idempotent.
+@("sanitizeHistory heals every message type and counts each modified message; result is idempotent")
 unittest {
     Chat chat;
     chat.add(Message(Role.system, userQuery: false, content: "sys", thinking: null));

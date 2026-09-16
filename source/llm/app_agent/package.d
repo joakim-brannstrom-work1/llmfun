@@ -26,6 +26,7 @@ import llm.metric.monitor : MetricMonitor;
 import llm.query;
 import llm.rag.dialogue_index : DialogueIndex;
 import llm.rag.dialogue_worker : DiDegraded;
+import llm.rag.reasoning_index : ReasoningIndex, loadReasoningPrompt;
 import llm.rag.rag : RAG;
 import llm.session : SessionId, SessionMeta, SessionFile, SessionStore, isValidId;
 import llm.skill;
@@ -49,6 +50,7 @@ struct AgentApp {
         LlmConfig llmConf;
         RAG rag;
         DialogueIndex dialogueIndex;
+        ReasoningIndex reasoningIndex;
         MetricMonitor monitor;
         Agent agent_;
         SessionStore sessionStore;
@@ -106,7 +108,10 @@ struct AgentApp {
 
     private void dispose() {
         // CRITICAL ORDER: drain the dialogue worker BEFORE rag.destroy
-        // so no embedding runs against weights being destroyed.
+        // so no embedding runs against weights being destroyed. The shared
+        // worker also drains queued RiJobs and bounds-joins in-flight
+        // summarization threads; ReasoningIndex itself has nothing to
+        // dispose.
         if (dialogueIndex) {
             dialogueIndex.dispose();
             dialogueIndex = null;
@@ -810,6 +815,11 @@ struct AgentApp {
         llmConf = readConfig(uconf.config, !conf_.prompt.empty,
                 uconf.noCwdConfig, uconf.trustedConfig, conf_.workArea).userToLlmConfig(conf_);
 
+        // Load BEFORE the DialogueIndex ctor: the ctor spawns the worker,
+        // which needs the prompt as a spawn argument. Missing file falls
+        // back to the built-in default.
+        auto reasoningPrompt = loadReasoningPrompt(llmConf);
+
         rag = createRag(llmConf);
         if (rag is null)
             return 1;
@@ -827,10 +837,17 @@ struct AgentApp {
         // Create the DialogueIndex (spawns the worker actor on its own thread).
         auto dialogueRagCfg = RagConfig(windowOverlapPercent: 10, nBatch: 1,
                 maxChunksPerTopic: 512);
-        dialogueIndex = new DialogueIndex(llmConf.dialogueDir.AbsolutePath,
-                llmConf.embedConfig, dialogueRagCfg);
+        dialogueIndex = new DialogueIndex(llmConf.dialogueDir.AbsolutePath, llmConf.embedConfig,
+                dialogueRagCfg, null, llmConf.summaryModel, reasoningPrompt, null);
         agent_.addCompressionCheckpointListener(&dialogueIndex.onCheckpoint);
         agent_.toolContext().setDialogueIndex(dialogueIndex);
+
+        // Second checkpoint listener on the shared worker (dialogue
+        // listener stays first, so DiJob keeps mailbox priority).
+        reasoningIndex = new ReasoningIndex(llmConf.dialogueDir.AbsolutePath,
+                llmConf.summaryModel, dialogueIndex.workerTid);
+        agent_.addCompressionCheckpointListener(&reasoningIndex.onCheckpoint);
+        agent_.toolContext().setReasoningIndex(reasoningIndex);
 
         // Register BEFORE setupSession(): a throw in setupSession (e.g. an
         // unusable session dir) must still run dispose(), which then finds

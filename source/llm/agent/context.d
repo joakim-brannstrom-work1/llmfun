@@ -22,6 +22,7 @@ import llm.metric.calculator : MetricsCalculator;
 import llm.metric.monitor : MetricMonitor, ToolCallEvent;
 import llm.rag.rag : RAG;
 import llm.rag.dialogue_index : DialogueIndex, DialogueContext;
+import llm.rag.reasoning_index : ReasoningIndex, ReasoningContext;
 import llm.skill : SkillManager;
 import llm.tool_call : Context;
 import llm.tool_call.completion : CompletionContext;
@@ -46,7 +47,8 @@ struct VisionImage {
 
 class AgentContext : Context, FileContext, RAGContext, MemoryContext,
     CompletionContext, MetricsContext, PipelineControlContext,
-    VisionContext, SkillContext, EnvironmentContext, ContextManagement, DialogueContext {
+    VisionContext, SkillContext, EnvironmentContext, ContextManagement,
+    DialogueContext, ReasoningContext {
         import llm.vfs : FlatVfs;
 
         private {
@@ -68,6 +70,7 @@ class AgentContext : Context, FileContext, RAGContext, MemoryContext,
             EnvironmentBackend[string] envLookup_;
 
             DialogueIndex dialogueIndex;
+            ReasoningIndex reasoningIndex;
 
             bool agentRequstedCompression;
             string agentMessageToSelf;
@@ -206,6 +209,15 @@ class AgentContext : Context, FileContext, RAGContext, MemoryContext,
 
         override DialogueIndex getDialogueIndex() {
             return dialogueIndex;
+        }
+
+        /// Set the reasoning index (wired by AgentApp after construction).
+        void setReasoningIndex(ReasoningIndex ri) {
+            reasoningIndex = ri;
+        }
+
+        override ReasoningIndex getReasoningIndex() {
+            return reasoningIndex;
         }
 
         override string currentSessionId() {

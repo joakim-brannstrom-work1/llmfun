@@ -1,36 +1,46 @@
 /// Dialogue indexing worker: a std.concurrency actor that owns its own embedder
 /// and indexes evicted raw dialogue into per-session RAG databases.
 ///
-/// The worker runs on its own thread (spawned by DialogueIndex in Task 5) and
+/// The worker runs on its own thread (spawned by DialogueIndex) and
 /// never shares its embedder or its batch-size state with the agent thread. It
 /// creates its OWN embedder from the EmbedConfig on its thread, opens a
 /// per-session write connection (WAL), and indexes each episode through the
 /// shared addToDatabase seam (which does the per-thread nBatchCache
 /// adaptation). All communication is via value messages (DiJob / DiDrain /
-/// DiDrained / DiDegraded); there is no shared state and no lock. The thread
-/// runs for the lifetime of the process (in-flight episodes are lost at exit --
-/// a documented hole).
+/// DiDrained / DiDegraded / RiJob / RiRecord / RiDone); there is no shared
+/// state and no lock. A RiJob additionally spawns a per-job summarization
+/// thread that makes the LLM call OFF the mailbox (dedicated timeout);
+/// DiDrain joins those in-flight threads up to a bounded deadline before
+/// closing. The thread runs for the lifetime of the process (in-flight
+/// episodes are lost at exit -- a documented hole).
 module llm.rag.dialogue_worker;
 
+import core.time : Duration, dur;
 import logger = std.logger;
 import std.algorithm : filter;
 import std.array : empty;
-import std.concurrency : Tid, receive, send, OwnerTerminated;
-import std.datetime : SysTime;
+import std.concurrency : Tid, receive, send, spawn, receiveTimeout, thisTid, OwnerTerminated;
+import std.datetime : SysTime, Clock;
 import std.exception : collectException;
+import std.json : JSONValue;
 import std.range : empty;
+import std.string : strip;
 import std.sumtype : match;
 import std.typecons : Tuple;
 
 import my.optional;
 import my.path : AbsolutePath;
 
+import llm.chat;
 import llm.common.config : EmbedConfig, RemoteEmbedConfig, ServerConfig;
 import llm.common.embedder : Embedder, EmbedderFactory, createEmbedder, EmbedResult, EmbedError;
-import llm.config : RagConfig;
+import llm.config : RagConfig, SummaryModelConfig, toRequestConfig;
+import llm.query : LlmRequester, toJson, LlamaRequestError;
 import llm.rag.database : Database, openDatabase, Source, SourceChecksum, SourceId;
+import llm.rag.dialogue_index : Kind, EpisodeMeta, encodeTopicName, decodeTopicName;
 import llm.rag.rag : Document, Origin, Topic, addToDatabase;
 import llm.session.types : SessionId, isValidId;
+import llm.summary_agent : stripFences;
 
 /// A single evicted dialogue episode to be indexed verbatim.
 ///
@@ -59,6 +69,16 @@ struct DiJob {
 /// can know that a preceding DiJob has been fully processed.
 struct DiDrain {
     Tid replyTo;
+    /// Per-drain join budget override: Duration.zero = the production
+    /// default (ReasoningDrainBudget). Travels inside the message so the
+    /// worker joins with the budget the sender chose without reading any
+    /// mutable cross-thread state (a test rewriting a shared global raced
+    /// the worker's read under parallel unittests).
+    Duration budget = Duration.zero;
+    this(Tid replyTo_, Duration budget_ = Duration.zero) {
+        replyTo = replyTo_;
+        budget = budget_;
+    }
 }
 
 /// Sent back to DiDrain.replyTo once the mailbox has been drained.
@@ -72,17 +92,79 @@ struct DiDegraded {
     immutable string reason;
 }
 
+// Reasoning protocol: RiJob in -> per-job spawned summarizer thread
+// (LLM call OFF the mailbox, dedicated timeout) -> RiRecord / RiDone back ->
+// indexed verbatim into the session DB (kind r_).
+
+/// One eviction's pre-formatted, budget-capped trace (built by
+/// ReasoningIndex.onCheckpoint). All value types; traceText dup'd
+/// (DiEpisode discipline).
+struct RiJob {
+    string sessionId;
+    string traceText;
+    long turnStart;
+    long turnEnd;
+}
+
+/// Completed record: topicName already encoded (r_); recordText = the
+/// fence-stripped model response, verbatim.
+struct RiRecord {
+    string topicName;
+    string recordText;
+}
+
+/// Completion with no record (empty response / LLM failure); `reason` is a
+/// short code (truncated when logged).
+struct RiDone {
+    string topicName;
+    string reason;
+}
+
+/// DI seam (mirrors EmbedderFactory): null = real dedicated-config
+/// LlmRequester call; a test fake may sleep to prove off-mailbox.
+/// Documented deviation from the verbatim contract, which specified a
+/// `string delegate(...)`: a plain (unshared) delegate FAILS spawn's
+/// `hasLocalAliasing` static assert (std.traits
+/// `hasUnsharedAliasing!(void delegate())` is true), so it cannot cross the
+/// thread boundary via `spawn` at all -- neither as a dialogueWorker arg nor
+/// as a reasoningThread arg. A function pointer (the EmbedderFactory shape
+/// this seam mirrors) has no context pointer and is spawn-legal; test fakes
+/// are module-scope functions, and null keeps the "real LlmRequester" meaning.
+alias SummarizerFn = string function(string prompt, string traceText);
+
+// Dedicated budget: NEVER inherits the summary model's timeout chain
+// (unbounded when timeoutSeconds unset).
+immutable int ReasoningTimeoutS = 300;
+immutable int ReasoningMaxTokens = 512;
+
+// The bounded drain-join budget (the summarizer's dedicated timeout
+// plus 30s of slack). Production default: a DiDrain carrying no override makes
+// the worker join for this long. Unit tests exercise the deadline path in
+// seconds via the per-drain DiDrain.budget override -- the budget travels in
+// the message, so no cross-thread mutable global is involved. Documented
+// deviation from the verbatim contract, which hard-coded the sum in
+// drainAndClose (infeasible to test at 330s).
+Duration ReasoningDrainBudget = (ReasoningTimeoutS + 30).dur!"seconds";
+
 /// Actor entry point. Runs on its own thread (spawn with all arguments as
-/// values). Creates and owns its own embedder; it never touches the agent's.
 /// `embedderFactory` is a DI seam: when non-null the worker builds its
 /// embedder from it instead of the process-wide factory registry, so unit
 /// tests never race each other on the shared "remote" factory slot.
+/// `summaryCfg` / `reasoningPrompt` / `summarizerFn` wire the reasoning
+/// protocol (RiJob): summarization runs on a per-job spawned thread OFF the
+/// mailbox; a null `summarizerFn` selects the real dedicated-config
+/// LlmRequester call.
 void dialogueWorker(Tid ownerTid, AbsolutePath dialogueDir, EmbedConfig embedConfig,
-        RagConfig dialogueRagCfg, EmbedderFactory embedderFactory) {
+        RagConfig dialogueRagCfg, EmbedderFactory embedderFactory,
+        SummaryModelConfig summaryCfg = SummaryModelConfig.init,
+        string reasoningPrompt = "", SummarizerFn summarizerFn = null) {
     // Worker-local state. Single-threaded, so no locks. nBatchCache is owned
     // here (per-thread) and passed by reference into the addToDatabase seam.
     size_t nBatchCache;
     Database[string] dbs; // per-session write connections (lazy)
+    // In-flight spawned reasoning threads (only this mailbox thread ever
+    // reads or writes it; the spawned threads share no state with it).
+    long outstandingThreads;
 
     // Create our OWN embedder on this thread. There is NO shared embedder
     // between this worker and the agent thread. Tests inject a factory
@@ -107,7 +189,7 @@ void dialogueWorker(Tid ownerTid, AbsolutePath dialogueDir, EmbedConfig embedCon
 
     // Open (or reuse) the WAL write connection for a session. WAL is applied
     // once per opened connection so the agent thread can read committed
-    // episodes concurrently (D6). Returns true on success.
+    // episodes concurrently. Returns true on success.
     // NOTE: openDatabase returns None (not an error) when the parent dir is
     // missing or unwritable -- the DialogueIndex constructor mkdirRecurse's the
     // directory, so this only fails on an unwritable directory.
@@ -149,10 +231,10 @@ void dialogueWorker(Tid ownerTid, AbsolutePath dialogueDir, EmbedConfig embedCon
         }
     }
 
-    // Index one checkpoint's episodes. D7 observability: exactly ONE tracef
+    // Index one checkpoint's episodes. Observability: exactly ONE tracef
     // per completed job (session id, episode/chunk/failure counts, turn
     // range min turnStart - max turnEnd); per-chunk logging is forbidden
-    // (N3) and the episode text is never logged. Episodes are single-turn
+    // and the episode text is never logged. Episodes are single-turn
     // (DialogueIndex groups by turnId, so each DiEpisode has turnStart ==
     // turnEnd), hence min(ep.turnEnd) over the job IS its min turnStart.
     void indexJob(DiJob job) {
@@ -164,7 +246,7 @@ void dialogueWorker(Tid ownerTid, AbsolutePath dialogueDir, EmbedConfig embedCon
         size_t totalChunks;
         size_t failures;
         foreach (ep; job.episodes.filter!(a => !a.text.empty)) {
-            // B1 (FX2): a turn split across two compressions re-arrives under
+            // A turn split across two compressions re-arrives under
             // the same topic; merge the existing episode text with the new
             // piece instead of replacing it (topic name and turn range stay
             // unchanged). Read failures degrade to the plain piece (N3).
@@ -214,11 +296,93 @@ void dialogueWorker(Tid ownerTid, AbsolutePath dialogueDir, EmbedConfig embedCon
                 job.sessionId, successes, totalChunks, failures, jobMinTurn, jobMaxTurn);
     }
 
+    // Reasoning protocol (P2-D12): spawn ONE summarization thread per RiJob;
+    // the LLM call happens OFF this mailbox (A1). FAST here: validation,
+    // topic-name encoding, spawn. The completion (RiRecord/RiDone) arrives
+    // later as its own message.
+    void riJob(RiJob job) {
+        if (degraded || !ensureDb(job.sessionId)) {
+            // A2: no LLM spend while degraded; ensureDb rejects invalid ids
+            // (subsumes the design's compound guard).
+            logger.tracef("dialogue worker: skipping reasoning job for '%s'", job.sessionId);
+            return;
+        }
+        long epochMillis = Clock.currTime.toUnixTime * 1000; // worker clock (Phase 1 deviation kept)
+        // NOTE: kind param is LAST (Task 2 deviation from the kind-first plan): the
+        // leading-defaulted-param form does not compile against the 4-arg call sites.
+        string topicName = encodeTopicName(job.sessionId, job.turnStart,
+                job.turnEnd, epochMillis, Kind.reasoning);
+        ++outstandingThreads;
+        try {
+            spawn(&reasoningThread, thisTid, summaryCfg, reasoningPrompt,
+                    job.traceText.idup, topicName.idup, summarizerFn);
+        } catch (Exception e) {
+            // A failed spawn must not leak the counter,
+            // or a later drain join would burn its full budget waiting for a
+            // completion that will never arrive.
+            --outstandingThreads;
+            logger.tracef("dialogue worker: reasoning spawn failed (topic '%s'): %s",
+                    topicName, e.msg);
+            return;
+        }
+        logger.tracef("dialogue worker: spawned reasoning summarizer '%s' turns %s-%s (%s chars, topic '%s')",
+                job.sessionId, job.turnStart, job.turnEnd, job.traceText.length, topicName);
+    }
+
+    // Reasoning completion: index the fence-stripped record verbatim (same
+    // seam, dedup salt = topic name) and rebuild FTS. FAST: no LLM work.
+    // --outstandingThreads first, so a concurrent drain join observes the
+    // decrement even if indexing below fails.
+    void recordJob(RiRecord r) {
+        --outstandingThreads;
+        auto metaOpt = decodeTopicName(r.topicName);
+        string sid = metaOpt.match!((EpisodeMeta m) => m.sessionId, (_) => "");
+        if (!hasValue(metaOpt) || degraded || !ensureDb(sid)) {
+            logger.tracef("dialogue worker: dropping reasoning record '%s' (db unavailable)",
+                    r.topicName);
+            return;
+        }
+        auto doc = Document(origin: Origin(Topic(r.topicName)), data: r.recordText);
+        try {
+            auto res = addToDatabase(dbs[sid], embedder, doc, dialogueRagCfg,
+                    nBatchCache, r.topicName);
+            if (res.chunks > 0)
+                rebuildFts(sid);
+            logger.tracef("dialogue worker: indexed reasoning record '%s' (%s chunks, %s chars)",
+                    r.topicName, res.chunks, r.recordText.length);
+        } catch (Exception e) {
+            logger.tracef("dialogue worker: failed to index reasoning record '%s': %s",
+                    r.topicName, e.msg);
+        }
+    }
+
+    void doneJob(RiDone r) {
+        --outstandingThreads;
+        logger.tracef("dialogue worker: reasoning record '%s' skipped: %s",
+                r.topicName, r.reason.length > 200 ? r.reason[0 .. 200] : r.reason);
+    }
+
     // Checkpoint + close all write connections. Leaves the session DBs in a
     // clean, sidecar-free state for the next process's read-only opens (normal
     // exit path; an abnormal death still leaves WAL sidecars, which SQLite
     // recovers on the next read-write open).
-    void drainAndClose() {
+    void drainAndClose(Duration budgetOverride) {
+        // In-flight summarization threads each send ONE completion;
+        // consume until outstandingThreads == 0 or the deadline.
+        // Per-drain override wins; zero means "use the production default".
+        auto budget = budgetOverride > Duration.zero ? budgetOverride : ReasoningDrainBudget;
+        auto deadline = Clock.currTime + budget;
+        while (outstandingThreads > 0) {
+            auto remaining = deadline - Clock.currTime;
+            if (remaining <= Duration.zero) {
+                logger.warningf("dialogue worker: drain deadline; %s reasoning thread(s) still in flight; record(s) lost (advisory)",
+                        outstandingThreads);
+                break;
+            }
+            receiveTimeout(remaining, (RiRecord r) { recordJob(r); }, (RiDone r) {
+                doneJob(r);
+            });
+        }
         foreach (sessionId, ref db; dbs) {
             try {
                 db.run("PRAGMA wal_checkpoint(TRUNCATE);");
@@ -242,11 +406,34 @@ void dialogueWorker(Tid ownerTid, AbsolutePath dialogueDir, EmbedConfig embedCon
                 } catch (Exception e) {
                     logger.errorf("dialogue worker: indexJob threw: %s", e.msg);
                 }
+            }, (RiJob j) {
+                try {
+                    riJob(j);
+                } catch (Exception e) {
+                    logger.errorf("dialogue worker: riJob threw: %s", e.msg);
+                }
+            }, (RiRecord r) {
+                try {
+                    recordJob(r);
+                } catch (Exception e) {
+                    logger.errorf("dialogue worker: recordJob threw: %s", e.msg);
+                }
+            }, (RiDone r) {
+                try {
+                    doneJob(r);
+                } catch (Exception e) {
+                    logger.errorf("dialogue worker: doneJob threw: %s", e.msg);
+                }
             }, (DiDrain d) {
                 // A drained mailbox leaves clean, sidecar-free DBs behind
                 // (checkpoint + close); FTS indexes were already rebuilt
-                // per job (B3).
-                drainAndClose();
+                // per job. Even a surprise throw
+                // must not starve the caller of its DiDrained reply.
+                try {
+                    drainAndClose(d.budget);
+                } catch (Exception e) {
+                    logger.errorf("dialogue worker: drainAndClose threw: %s", e.msg);
+                }
                 send(d.replyTo, DiDrained());
             });
         } catch (OwnerTerminated e) {
@@ -264,9 +451,53 @@ void dialogueWorker(Tid ownerTid, AbsolutePath dialogueDir, EmbedConfig embedCon
     dbs = null;
 }
 
-// ===========================================================================
-// Tests
-// ===========================================================================
+// Summarization thread (spawned per RiJob; the ONLY mailbox contact is the
+// ONE completion send; all exceptions caught). Module-scope: spawn targets
+// must be module-scope functions.
+void reasoningThread(Tid workerTid, SummaryModelConfig summaryCfg,
+        string reasoningPrompt, string traceText, string topicName, SummarizerFn summarizerFn) {
+    string raw;
+    bool got;
+    string reason;
+    try {
+        if (summarizerFn !is null) {
+            raw = summarizerFn(reasoningPrompt, traceText);
+            got = true;
+        } else {
+            auto rc = summaryCfg.toRequestConfig; // server URLs/apiKey/ssl/verbosity
+            rc.timeoutS = ReasoningTimeoutS;
+            rc.maxRetries = 1;
+            rc.header["max_tokens"] = JSONValue(ReasoningMaxTokens);
+            Chat chat;
+            chat.setSystemPrompt(reasoningPrompt);
+            chat.add(Message(Role.user, userQuery: true, content: traceText, thinking: null));
+            auto rq = LlmRequester(rc);
+            auto response = rq.request(chat); // SumType!(HttpResult, HttpError), nothrow
+            response.toJson.match!((JSONValue j) {
+                foreach (choice; j["choices"].array) {
+                    raw = choice["message"]["content"].str.strip;
+                    got = true;
+                }
+            }, (LlamaRequestError e) { reason = "llm_error: " ~ e.response; });
+        }
+    } catch (Exception e) {
+        reason = "llm_error: " ~ e.msg;
+    }
+    string recordText;
+    if (got && raw !is null)
+        recordText = stripFences(raw); // verbatim, fence-stripped
+    try {
+        if (recordText.length > 0)
+            send(workerTid, RiRecord(topicName.idup, recordText.idup));
+        else {
+            if (reason.empty)
+                reason = "empty";
+            send(workerTid, RiDone(topicName.idup, reason.idup));
+        }
+    } catch (OwnerTerminated) {
+        logger.warningf("reasoning thread: worker terminated; record lost (topic '%s')", topicName);
+    }
+}
 
 version (unittest) {
     import std.file : mkdirRecurse;
@@ -491,7 +722,7 @@ version (unittest) {
         return new PoisonedEmbedder();
     }
 
-    /// D7 test seam: a Logger that captures formatted messages so a test can
+    /// Test seam: a Logger that captures formatted messages so a test can
     /// assert on emitted log lines. Installed via the std.logger `sharedLog`
     /// swap (same pattern as TuiLogger in llm.tui); thread-safe because the
     /// worker thread logs concurrently with the test thread.
@@ -554,6 +785,51 @@ version (unittest) {
                 if (v[j] != (j < text.length ? cast(float) text[j] : 0f))
                     ok = false;
         send(doneTid, NtsDone(idx, ok));
+    }
+    // Reasoning-protocol test fakes. SummarizerFn is a plain function
+    // pointer (spawn-legal; a delegate fails hasLocalAliasing), so the fakes
+    // are module-scope functions with no captures; per-test state goes in
+    // statics. Each fake is used by exactly one test below.
+
+    /// Fake: returns a fenced record body; the worker must strip the
+    /// fences before indexing (stripFences), verbatim otherwise.
+    private string riFixedFake(string prompt, string traceText) {
+        return "```\nRI_FIXED_ALPHA\n```";
+    }
+
+    /// Fake: sleeps 3 s before answering, proving the LLM call runs OFF
+    /// the mailbox (dedicated timeout): a DiJob queued behind an in-flight RiJob must
+    /// complete (its chunk FTS-visible) well before the sleep ends. Also used
+    /// by the deadline test, where the 1.5 s budget is shorter than the sleep.
+    private string riSlowFake(string prompt, string traceText) {
+        import core.thread : Thread;
+
+        Thread.sleep(3000.dur!"msecs");
+        return "SLOWRI record body zeta";
+    }
+
+    /// Fake: sleeps 800 ms (drain-join test: the record must land in the
+    /// DB during the join, before the drain's checkpoint+close).
+    private string riDrainFake(string prompt, string traceText) {
+        import core.thread : Thread;
+
+        Thread.sleep(800.dur!"msecs");
+        return "DRAINJOIN_GAMMA";
+    }
+
+    /// Fake: simulates an LLM failure -> the worker takes the RiDone path
+    /// (no record indexed, warning logged, mailbox unblocked).
+    private string riThrowingFake(string prompt, string traceText) {
+        throw new Exception("riThrowingFake: simulated LLM failure (test)");
+    }
+
+    /// Fake: records that it was invoked (module-scope flag: a plain
+    /// function pointer cannot capture state). Proves a degraded worker never
+    /// spawns a summarizer thread (no LLM spend while degraded).
+    private bool riCountFakeInvoked;
+    private string riCountFake(string prompt, string traceText) {
+        riCountFakeInvoked = true;
+        return "counted";
     }
 }
 
@@ -620,12 +896,13 @@ unittest {
     auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
     // Spawn the worker on its own thread; it creates its own embedder.
-    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg, &wkEmbedderFactory);
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null));
     Thread.sleep(150.dur!"msecs"); // let the worker start up
 
     // One episode. topicName is opaque to the worker (it never parses topic
     // names - the codec round-trip is exercised by dialogue_index tests), but
-    // the session id must pass the worker's own D12 validation.
+    // the session id must pass the worker's own validation.
     string sid = "20240101-120000-abcd";
     string topicName = "d_20240101_120000_abcd__t11_11__1000";
     string episodeText;
@@ -663,7 +940,7 @@ unittest {
     assert(hits[0].text.length > 0, "hit must carry the verbatim chunk text");
 }
 
-/// B4 (FX1): identical episode text under two different topics must both be
+/// Identical episode text under two different topics must both be
 /// indexed. The topic name is the dedup salt, so the two salted identities
 /// differ; with content-only dedup the second episode would be dropped as a
 /// duplicate and only one source would exist.
@@ -683,7 +960,8 @@ unittest {
             modelName: "wk", dimensions: 8));
     auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
-    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg, &wkEmbedderFactory);
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null));
     Thread.sleep(150.dur!"msecs"); // let the worker start up
 
     // One job, two episodes: identical text, different topics (turns 11 and 12).
@@ -712,7 +990,7 @@ unittest {
                 db.getSources().length));
 }
 
-/// B1 (FX2): a turn split across two compressions re-arrives under the same
+/// A turn split across two compressions re-arrives under the same
 /// topic. The worker merges the existing episode text with the new piece
 /// (instead of replacing it): after both jobs, one source holds "old\nnew"
 /// verbatim and both pieces are text-searchable.
@@ -731,7 +1009,8 @@ unittest {
             modelName: "wk", dimensions: 8));
     auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
-    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg, &wkEmbedderFactory);
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null));
     Thread.sleep(150.dur!"msecs"); // let the worker start up
 
     // Two jobs, same topic (a turn split across two compression checkpoints).
@@ -773,7 +1052,7 @@ unittest {
     assert(h2 !is null && h2.length >= 1, "new piece not text-searchable after the merge");
 }
 
-/// B1 (FX2): Database.sourceText reconstructs a multi-chunk source exactly -
+/// Database.sourceText reconstructs a multi-chunk source exactly -
 /// the leading-overlap stripping removes the sliding-window overlap without
 /// duplicating or dropping any text.
 unittest {
@@ -792,7 +1071,8 @@ unittest {
             modelName: "wk", dimensions: 8));
     auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
-    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg, &wkEmbedderFactory);
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null));
     Thread.sleep(150.dur!"msecs"); // let the worker start up
 
     string sid = "20240101-120000-abcd";
@@ -829,7 +1109,7 @@ unittest {
             "sourceText must round-trip the original text exactly (no duplicated overlap, no lost text)");
 }
 
-/// B1 (FX2): a pre-existing source with no chunks (empty reconstruction) must
+/// A pre-existing source with no chunks (empty reconstruction) must
 /// not poison the merge - the plain piece is indexed, replacing the empty
 /// source (one source, no throw out of the job).
 unittest {
@@ -858,7 +1138,8 @@ unittest {
             modelName: "wk", dimensions: 8));
     auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
-    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg, &wkEmbedderFactory);
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null));
     Thread.sleep(150.dur!"msecs"); // let the worker start up
 
     string piece = "EMPTYFALLBACK plain piece after an empty source";
@@ -881,7 +1162,7 @@ unittest {
     assert(h !is null && h.length >= 1, "the plain piece was not indexed");
 }
 
-/// B3 (FX3): two back-to-back jobs for one session (the second arriving well
+/// Two back-to-back jobs for one session (the second arriving well
 /// inside the old 1 s coalescing window) must BOTH be text-searchable after
 /// the drain - every job that committed chunks rebuilds the FTS index itself,
 /// and the drain no longer flushes any deferred rebuilds.
@@ -900,7 +1181,8 @@ unittest {
             modelName: "wk", dimensions: 8));
     auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
-    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg, &wkEmbedderFactory);
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null));
     Thread.sleep(150.dur!"msecs"); // let the worker start up
 
     // Two jobs back-to-back (different topics, unique tokens); the second
@@ -933,7 +1215,7 @@ unittest {
             "job 2 token not text-searchable (per-job rebuild missing)");
 }
 
-/// N4: result carried back from the concurrent read-only reader (test 3) to the
+/// Result carried back from the concurrent read-only reader (WAL test) to the
 /// main thread. std.concurrency cannot send a Database, so the reader reports a
 /// verdict: the committed chunk count it observed and any lock/validity errors.
 private struct WkRdResult {
@@ -942,7 +1224,7 @@ private struct WkRdResult {
     bool ready; // true = handshake (read-only connection open), false = final verdict
 }
 
-/// N4: concurrent read-only reader (test 3). Opens the session DB file READ-ONLY
+/// Concurrent read-only reader (WAL test). Opens the session DB file READ-ONLY
 /// while the worker holds its WAL write connection, and polls the committed chunk
 /// count until it observes the worker's second commit (count >= 4) or times out.
 /// It sends a `ready` handshake once its connection is open (so the main thread
@@ -954,7 +1236,7 @@ private void readerProbe(in string dbPath, Tid outTid) {
     import core.time : dur;
     import std.string : indexOf;
 
-    // Phase 1: open the DB read-only. openDatabase(readOnly) returns None
+    // Step 1: open the DB read-only. openDatabase(readOnly) returns None
     // immediately when the file does not exist yet (no 5 s retry), so poll until
     // the worker has created the file + schema.
     Database db = Database.init;
@@ -971,7 +1253,7 @@ private void readerProbe(in string dbPath, Tid outTid) {
 
     // Handshake: the read-only connection is open (or we give up below). Let the
     // main thread commit the second job while we hold the connection open, so the
-    // reader and writer genuinely coexist (N4).
+    // reader and writer genuinely coexist.
     send(outTid, WkRdResult(-1, 0, true));
 
     if (!opened) {
@@ -981,7 +1263,7 @@ private void readerProbe(in string dbPath, Tid outTid) {
     scope (exit)
         db.destroy;
 
-    // Phase 2: poll the committed chunk count until it reaches >= 4 (both jobs'
+    // Step 2: poll the committed chunk count until it reaches >= 4 (both jobs'
     // chunks are visible through this read-only connection) or time out.
     long maxCount = -1;
     int errors = 0;
@@ -993,7 +1275,7 @@ private void readerProbe(in string dbPath, Tid outTid) {
             foreach (ref r; stmt.get.execute)
                 n = r.peek!long(0);
         } catch (Exception e) {
-            // A "database is locked" here is the N4 violation; any other error
+            // A "database is locked" here is the violation under test; any other error
             // (e.g. the table is not committed yet) is transient -- keep polling.
             string m = (e.msg is null) ? "" : e.msg;
             if (m.indexOf("locked") >= 0)
@@ -1021,7 +1303,7 @@ private Embedder throwingEmbedderFactory(EmbedConfig config) {
     throw new Exception("simulated embedder creation failure (degraded-worker test)");
 }
 
-/// N4: WAL lets the worker (single writer) and a concurrent read-only reader
+/// WAL lets the worker (single writer) and a concurrent read-only reader
 /// coexist on the same session DB file without "database is locked". The reader
 /// opens the file read-only while the worker holds its WAL write connection, must
 /// observe the worker's first commit, and must then see the worker's second
@@ -1044,7 +1326,8 @@ unittest {
             modelName: "wk", dimensions: 8));
     auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
-    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg, &wkEmbedderFactory);
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null));
     Thread.sleep(150.dur!"msecs");
 
     string sid = "20240101-120000-abcd";
@@ -1057,7 +1340,7 @@ unittest {
     // opens the worker's WAL connection and creates the schema + first commit.
     send(tid, DiJob(sid, [DiEpisode(topicName.idup, episodeText.idup, 11)]));
 
-    // Concurrent read-only reader on the same file (N4).
+    // Concurrent read-only reader on the same file.
     string dbPath = (tmpDir ~ (sid ~ ".db")).idup;
     spawn(&readerProbe, dbPath, thisTid);
 
@@ -1122,7 +1405,7 @@ unittest {
     assert(journal == "wal", "expected wal journal mode, got '%s'".format(journal));
 }
 
-/// Resilience (N3, writer side): a pre-corrupted session DB must not crash the
+/// Resilience (writer side): a pre-corrupted session DB must not crash the
 /// worker or starve other sessions. The corrupted session's job is skipped
 /// (openDatabase keeps failing and returns none), but a second session's job in
 /// the same mailbox is still indexed, and the worker still answers DiDrain.
@@ -1150,7 +1433,8 @@ unittest {
         junk ~= cast(ubyte)(i + 1);
     write((tmpDir ~ (sidA ~ ".db")).AbsolutePath, junk);
 
-    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg, &wkEmbedderFactory);
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null));
     Thread.sleep(150.dur!"msecs");
 
     // Job for the corrupted session A (skipped), then a valid session B.
@@ -1186,7 +1470,7 @@ unittest {
     assert(rowCount >= 2, "session B should have >= 2 indexed chunks, got %s".format(rowCount));
 }
 
-/// Resilience (N3, degraded worker): when the injected embedder factory
+/// Resilience (degraded worker): when the injected embedder factory
 /// throws, the worker degrades gracefully -- it sends DiDegraded exactly
 /// once, skips every DiJob, and still answers DiDrain so disposal never hangs.
 unittest {
@@ -1206,7 +1490,7 @@ unittest {
     auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
     auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
-            &throwingEmbedderFactory);
+            &throwingEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null));
     Thread.sleep(150.dur!"msecs"); // let the worker start up and degrade
 
     // Two DiJobs (both must be skipped) and a DiDrain (must be answered).
@@ -1236,7 +1520,7 @@ unittest {
     assert(drained, "degraded worker did not answer DiDrain (disposal would hang)");
 }
 
-/// Resilience (N3, per-episode): a poisoned episode (the embedder THROWS for
+/// Resilience (per-episode): a poisoned episode (the embedder THROWS for
 /// that text) must not abort the rest of the job. The bad episode is skipped
 /// (warningf + ++failures) and the other episodes in the SAME job are still
 /// indexed.
@@ -1256,7 +1540,7 @@ unittest {
     auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
     auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
-            &poisonedEmbedderFactory);
+            &poisonedEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null));
     Thread.sleep(150.dur!"msecs");
 
     string sid = "20240101-120000-abcd";
@@ -1295,12 +1579,12 @@ unittest {
             "poisoned episode was indexed despite the embedder throwing");
 }
 
-/// D7: one completed DiJob must produce exactly ONE worker trace line carrying
-/// all D7 fields (session id, episode/chunk/failure counts, turn range
+/// One completed DiJob must produce exactly ONE worker trace line carrying
+/// all observability fields (session id, episode/chunk/failure counts, turn range
 /// min turnStart - max turnEnd), with no per-chunk spam. Captures the line via
 /// the std.logger sharedLog seam (restored on exit, with the global log level
 /// raised to trace for the duration only). The capture is process-global and
-/// parallel worker tests emit their own D7 lines, so this test uses a unique
+/// parallel worker tests emit their own trace lines, so this test uses a unique
 /// per-process session id and anchors the capture filter on its quoted form.
 unittest {
     import core.thread : Thread;
@@ -1318,7 +1602,7 @@ unittest {
         tmpDir.cleanup();
 
     // Capture all log output (the worker thread's included) and enable trace
-    // level for the D7 line; both are restored on exit.
+    // level for the trace line; both are restored on exit.
     auto prevLog = logger.sharedLog;
     auto prevLevel = logger.globalLogLevel;
     auto cap = cast(shared) new D7LogCapture();
@@ -1333,10 +1617,11 @@ unittest {
             modelName: "wk", dimensions: 8));
     auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
-    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg, &wkEmbedderFactory);
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null));
     Thread.sleep(150.dur!"msecs"); // let the worker start up
 
-    // One job with two single-turn episodes (turns 3 and 7): the D7 line must
+    // One job with two single-turn episodes (turns 3 and 7): the trace line must
     // report the range 3-7 (min turnStart - max turnEnd over the job).
     // Unique per-process session id (valid IdPattern form: YYYYMMDD-HHMMSS-
     // 4hex): the capture filter anchors on its quoted form, which no parallel
@@ -1362,25 +1647,24 @@ unittest {
     receiveTimeout(30.dur!"seconds", (DiDrained _) { drained = true; });
     assert(drained, "worker did not drain its mailbox");
 
-    // The drain proves the job completed, so the D7 line is already captured.
+    // The drain proves the job completed, so the trace line is already captured.
     // Anchor on this test's quoted session id: parallel worker tests share
-    // this global capture and log their own D7 lines (their own sids).
+    // this global capture and log their own trace lines (their own sids).
     string[] d7;
     foreach (l; (cast() cap).takeLines())
         if (l.startsWith("dialogue worker: session '" ~ sid ~ "'"))
             d7 ~= l;
     assert(d7.length == 1,
-            "expected exactly one D7 trace line per completed job, got %s: %s".format(d7.length,
-                d7));
+            "expected exactly one trace line per completed job, got %s: %s".format(d7.length, d7));
     string line = d7[0];
-    assert(line.canFind(sid), "D7 line missing session id: " ~ line);
-    assert(line.canFind("2 episodes"), "D7 line missing episode count: " ~ line);
-    assert(line.canFind("chunks,"), "D7 line missing chunk count: " ~ line);
-    assert(line.canFind("0 failures"), "D7 line missing failure count: " ~ line);
-    assert(line.canFind("turns 3-7"), "D7 line missing the 3-7 turn range: " ~ line);
+    assert(line.canFind(sid), "trace line missing session id: " ~ line);
+    assert(line.canFind("2 episodes"), "trace line missing episode count: " ~ line);
+    assert(line.canFind("chunks,"), "trace line missing chunk count: " ~ line);
+    assert(line.canFind("0 failures"), "trace line missing failure count: " ~ line);
+    assert(line.canFind("turns 3-7"), "trace line missing the 3-7 turn range: " ~ line);
 
     // No per-chunk spam: several chunks were indexed (verified below) yet
-    // exactly one D7 line was emitted.
+    // exactly one trace line was emitted.
     auto dbOpt = openDatabase((tmpDir ~ (sid ~ ".db")).AbsolutePath, "wk", 8, readOnly: true);
     assert(dbOpt.hasValue, "session DB missing");
     auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
@@ -1393,4 +1677,350 @@ unittest {
             rowCount = r.peek!long(0);
     }
     assert(rowCount >= 2, "expected >= 2 indexed chunks, got %s".format(rowCount));
+}
+
+/// Fixed-text fake summarizer: an RiJob must produce a retrievable
+/// r_ reasoning record in the session DB: the fence-stripped text indexed
+/// verbatim as a single chunk, FTS-searchable, and the topic decoding to
+/// the job's session/turn range with Kind.reasoning.
+unittest {
+    import std.concurrency : spawn, send, receiveTimeout, thisTid;
+    import core.time : dur;
+    import std.file : mkdirRecurse;
+    import std.format : format;
+
+    auto tmpDir = testArea("dialogue_p2_fixed");
+    scope (exit)
+        tmpDir.cleanup();
+
+    auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
+            modelName: "wk", dimensions: 8));
+    auto ragCfg = RagConfig(windowOverlapPercent: 10);
+
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "fake prompt", &riFixedFake);
+    string sid = "20240101-120000-ab01";
+    send(tid, RiJob(sid, "trace text alpha beta for the fixed fake", 4, 8));
+    // The drain's bounded join must consume the in-flight RiRecord (the fake
+    // answers immediately) and index it BEFORE the DB connection closes.
+    send(tid, DiDrain(thisTid));
+    bool drained = false;
+    receiveTimeout(30.dur!"seconds", (DiDrained _) { drained = true; });
+    assert(drained, "worker did not answer DiDrain after RiJob");
+
+    auto dbOpt = openDatabase((tmpDir ~ (sid ~ ".db")).AbsolutePath, "wk", 8, readOnly: true);
+    assert(dbOpt.hasValue, "session DB missing after drain");
+    auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
+    scope (exit)
+        db.destroy;
+
+    // Exactly one chunk (the record is shorter than the 16-char window), and
+    // exactly the fence-stripped record text, verbatim.
+    string chunkTexts;
+    int chunkCount = 0;
+    {
+        auto stmt = db.prepare("SELECT text FROM TextChunkTbl;");
+        foreach (ref r; stmt.get.execute) {
+            chunkCount++;
+            chunkTexts ~= r.peek!string(0) ~ "\n";
+        }
+    }
+    assert(chunkCount == 1, "expected exactly 1 chunk for the record, got %s".format(chunkCount));
+    assert(chunkTexts == "RI_FIXED_ALPHA\n",
+            "record must be indexed fence-stripped, verbatim; got: %s".format(chunkTexts));
+
+    // FTS surfaces it under an r_ topic that decodes to the RiJob metadata.
+    auto hits = db.queryTextSearch("RI_FIXED_ALPHA", 10);
+    assert(hits.length >= 1, "record must be FTS-searchable");
+    string topicName = hits[0].origin.match!((Topic t) => t.name, (_) => "");
+    auto metaOpt = decodeTopicName(topicName);
+    assert(metaOpt.hasValue, "r_ topic must decode, got: " ~ topicName);
+    auto meta = metaOpt.match!((EpisodeMeta m) => m, (None _) => EpisodeMeta());
+    assert(meta.kind == Kind.reasoning, "kind must be reasoning, got %s".format(meta.kind));
+    assert(meta.sessionId == sid, "sessionId mismatch: " ~ meta.sessionId);
+    assert(meta.turnStart == 4 && meta.turnEnd == 8,
+            "turn range mismatch: %s-%s".format(meta.turnStart, meta.turnEnd));
+}
+
+/// Slow fake summarizer: the LLM call runs OFF the mailbox (dedicated
+/// timeout): a DiJob queued behind an in-flight RiJob must complete (its chunk
+/// FTS-visible) well before the fake's 3 s sleep ends. A mailbox-blocked
+/// design would delay it by the full sleep.
+unittest {
+    import core.thread : Thread;
+    import std.concurrency : spawn, send, receiveTimeout, thisTid;
+    import core.time : dur;
+    import std.datetime : Clock;
+    import std.conv : to;
+    import std.format : format;
+
+    auto tmpDir = testArea("dialogue_p2_slow");
+    scope (exit)
+        tmpDir.cleanup();
+
+    auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
+            modelName: "wk", dimensions: 8));
+    auto ragCfg = RagConfig(windowOverlapPercent: 10);
+
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "fake prompt", &riSlowFake);
+    string sid = "20240101-120000-ab02";
+    string ep;
+    foreach (i; 0 .. 12)
+        ep ~= "fastdi turn " ~ i.to!string ~ " line\n";
+
+    auto t0 = Clock.currTime;
+    send(tid, RiJob(sid, "trace text for the slow fake", 1, 2));
+    send(tid, DiJob(sid, [
+        DiEpisode("d_20240101_120000_ab02__t1_1__1000", ep.idup, 1)
+    ]));
+
+    // Poll read-only for the DiJob's chunk. The RiJob's ensureDb creates the
+    // DB file before the summarizer thread spawns, so it appears quickly;
+    // openDatabase(readOnly) returns None until then (no blocking retry).
+    bool diVisible = false;
+    auto deadline = t0 + 5.dur!"seconds";
+    while (Clock.currTime < deadline) {
+        auto dbOpt = openDatabase((tmpDir ~ (sid ~ ".db")).AbsolutePath, "wk", 8, readOnly: true);
+        if (dbOpt.hasValue) {
+            auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
+            scope (exit)
+                db.destroy;
+            if (db.queryTextSearch("FASTDI", 10).length >= 1) {
+                diVisible = true;
+                break;
+            }
+        }
+        Thread.sleep(50.dur!"msecs");
+    }
+    auto elapsed = Clock.currTime - t0;
+    assert(diVisible, "DiJob chunk never became FTS-visible within 5 s");
+    assert(elapsed < 1000.dur!"msecs",
+            "DiJob was delayed by the in-flight RiJob (mailbox blocked?): %s".format(elapsed));
+
+    // The drain must still join the in-flight RiJob (bounded) and index its
+    // record before closing the DB.
+    send(tid, DiDrain(thisTid));
+    bool drained = false;
+    receiveTimeout(30.dur!"seconds", (DiDrained _) { drained = true; });
+    assert(drained, "worker did not answer DiDrain");
+
+    auto dbOpt2 = openDatabase((tmpDir ~ (sid ~ ".db")).AbsolutePath, "wk", 8, readOnly: true);
+    assert(dbOpt2.hasValue, "session DB missing after drain");
+    auto db2 = dbOpt2.match!((Database d) => d, (None _) => Database.init);
+    scope (exit)
+        db2.destroy;
+    assert(db2.queryTextSearch("SLOWRI", 10).length >= 1,
+            "the in-flight RiJob record must be indexed by the drain join");
+}
+
+/// Throwing fake summarizer: the LLM failure takes the RiDone path:
+/// no record indexed, and the DiJob queued in the same mailbox is unaffected.
+unittest {
+    import std.concurrency : spawn, send, receiveTimeout, thisTid;
+    import core.time : dur;
+    import std.file : mkdirRecurse;
+    import std.string : startsWith;
+    import std.conv : to;
+    import std.format : format;
+
+    auto tmpDir = testArea("dialogue_p2_throw");
+    scope (exit)
+        tmpDir.cleanup();
+
+    auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
+            modelName: "wk", dimensions: 8));
+    auto ragCfg = RagConfig(windowOverlapPercent: 10);
+
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "fake prompt", &riThrowingFake);
+    string sid = "20240101-120000-ab03";
+    string ep;
+    foreach (i; 0 .. 12)
+        ep ~= "gooddi turn " ~ i.to!string ~ " line\n";
+
+    send(tid, RiJob(sid, "trace text for the throwing fake", 3, 5));
+    send(tid, DiJob(sid, [
+        DiEpisode("d_20240101_120000_ab03__t3_3__1000", ep.idup, 3)
+    ]));
+    send(tid, DiDrain(thisTid));
+    bool drained = false;
+    receiveTimeout(30.dur!"seconds", (DiDrained _) { drained = true; });
+    assert(drained, "worker did not answer DiDrain");
+
+    auto dbOpt = openDatabase((tmpDir ~ (sid ~ ".db")).AbsolutePath, "wk", 8, readOnly: true);
+    assert(dbOpt.hasValue, "session DB missing after drain");
+    auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
+    scope (exit)
+        db.destroy;
+
+    // The DiJob indexed normally (one d_ source); the failed RiJob left no
+    // r_ source behind.
+    int dSources = 0;
+    int rSources = 0;
+    foreach (src; db.getSources)
+        src.origin.match!((Topic t) {
+            if (t.name.startsWith("d_"))
+                dSources++;
+            else if (t.name.startsWith("r_"))
+                rSources++;
+        }, (_) {});
+    assert(dSources == 1, "the DiJob episode must be indexed, got %s d_ source(s)".format(dSources));
+    assert(rSources == 0,
+            "a throwing summarizer must not index a record, got %s r_ source(s)".format(rSources));
+    assert(db.queryTextSearch("GOODDI", 10).length >= 1, "the DiJob chunk must be FTS-searchable");
+}
+
+/// Degraded worker: an RiJob must be skipped WITHOUT spawning a
+/// summarizer thread (no LLM spend while degraded): the counting fake
+/// must never be invoked.
+unittest {
+    import std.concurrency : spawn, send, receiveTimeout, thisTid;
+    import core.time : dur;
+    import std.file : mkdirRecurse;
+    import std.format : format;
+
+    auto tmpDir = testArea("dialogue_p2_degraded");
+    scope (exit)
+        tmpDir.cleanup();
+
+    auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
+            modelName: "wk", dimensions: 8));
+    auto ragCfg = RagConfig(windowOverlapPercent: 10);
+
+    riCountFakeInvoked = false;
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &throwingEmbedderFactory, SummaryModelConfig.init, "fake prompt", &riCountFake);
+    string sid = "20240101-120000-ab04";
+
+    // receiveTimeout doubles as the startup wait: the worker sends DiDegraded
+    // once its (throwing) factory is exhausted.
+    int degradedCount = 0;
+    receiveTimeout(5.dur!"seconds", (DiDegraded _) { degradedCount++; });
+    assert(degradedCount == 1,
+            "worker must report DiDegraded exactly once, got %s".format(degradedCount));
+
+    send(tid, RiJob(sid, "trace text for the degraded worker", 2, 2));
+    send(tid, DiDrain(thisTid));
+    bool drained = false;
+    receiveTimeout(30.dur!"seconds", (DiDrained _) { drained = true; });
+    assert(drained, "degraded worker did not answer DiDrain (disposal would hang)");
+
+    assert(!riCountFakeInvoked,
+            "degraded worker must never invoke the summarizer (no LLM spend while degraded)");
+}
+
+/// DiDrain with an in-flight slow fake: the drain's bounded join must
+/// wait for the RiRecord, index it (recordJob) BEFORE the checkpoint+close,
+/// and then answer DiDrained: the record survives in the closed DB.
+unittest {
+    import std.concurrency : spawn, send, receiveTimeout, thisTid;
+    import core.time : dur;
+    import std.file : mkdirRecurse;
+    import std.format : format;
+
+    auto tmpDir = testArea("dialogue_p2_drainjoin");
+    scope (exit)
+        tmpDir.cleanup();
+
+    auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
+            modelName: "wk", dimensions: 8));
+    auto ragCfg = RagConfig(windowOverlapPercent: 10);
+
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "fake prompt", &riDrainFake);
+    string sid = "20240101-120000-ab05";
+    send(tid, RiJob(sid, "trace text for the drain-join fake", 6, 9));
+    // Immediately request drain: the fake sleeps 800 ms, so its RiRecord is
+    // still in flight -- the join must consume it, not skip it.
+    send(tid, DiDrain(thisTid));
+    bool drained = false;
+    receiveTimeout(30.dur!"seconds", (DiDrained _) { drained = true; });
+    assert(drained, "worker did not answer DiDrain");
+
+    auto dbOpt = openDatabase((tmpDir ~ (sid ~ ".db")).AbsolutePath, "wk", 8, readOnly: true);
+    assert(dbOpt.hasValue, "session DB missing after drain");
+    auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
+    scope (exit)
+        db.destroy;
+    assert(db.queryTextSearch("DRAINJOIN_GAMMA", 10).length >= 1,
+            "the in-flight record must be indexed before the drain's checkpoint+close");
+    string chunkTexts;
+    int chunkCount = 0;
+    {
+        auto stmt = db.prepare("SELECT text FROM TextChunkTbl;");
+        foreach (ref r; stmt.get.execute) {
+            chunkCount++;
+            chunkTexts ~= r.peek!string(0) ~ "\n";
+        }
+    }
+    assert(chunkCount == 1, "expected exactly 1 chunk, got %s".format(chunkCount));
+    assert(chunkTexts == "DRAINJOIN_GAMMA\n", "record text mismatch: %s".format(chunkTexts));
+}
+
+/// Drain-join deadline exceeded: with an in-flight fake that cannot
+/// finish within the per-drain DiDrain.budget override (1500 ms here), the
+/// drain must give up with a warning, still answer DiDrained, and never
+/// block on the fake.
+/// The late completion is consumed by the still-running mailbox afterwards
+/// (accepted shutdown record-loss window; its state is not asserted).
+unittest {
+    import core.thread : Thread;
+    import std.concurrency : spawn, send, receiveTimeout, thisTid;
+    import core.time : dur;
+    import std.datetime : Clock;
+    import std.file : mkdirRecurse;
+    import std.string : startsWith;
+    import std.format : format;
+
+    auto tmpDir = testArea("dialogue_p2_deadline");
+    scope (exit)
+        tmpDir.cleanup();
+
+    // Capture the worker thread's log output; restored on exit.
+    auto prevLog = logger.sharedLog;
+    auto prevLevel = logger.globalLogLevel;
+    auto cap = cast(shared) new D7LogCapture();
+    logger.sharedLog = cap;
+    logger.globalLogLevel = logger.LogLevel.trace;
+    scope (exit) {
+        logger.globalLogLevel = prevLevel;
+        logger.sharedLog = prevLog;
+    }
+
+    auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
+            modelName: "wk", dimensions: 8));
+    auto ragCfg = RagConfig(windowOverlapPercent: 10);
+
+    auto tid = spawn(&dialogueWorker, thisTid, tmpDir.workArea, cfg, ragCfg,
+            &wkEmbedderFactory, SummaryModelConfig.init, "fake prompt", &riSlowFake);
+    string sid = "20240101-120000-ab06";
+
+    send(tid, RiJob(sid, "trace text for the deadline fake", 7, 7));
+    auto t0 = Clock.currTime;
+    send(tid, DiDrain(thisTid, 1500.dur!"msecs"));
+    bool drained = false;
+    receiveTimeout(30.dur!"seconds", (DiDrained _) { drained = true; });
+    assert(drained, "worker must answer DiDrained even when the join hits its deadline");
+    auto elapsed = Clock.currTime - t0;
+    assert(elapsed < 4000.dur!"msecs",
+            "drain blocked on the in-flight fake instead of the deadline: %s".format(elapsed));
+
+    // The deadline warning must have been emitted by the worker thread.
+    string capturedAll;
+    bool warned = false;
+    foreach (l; (cast() cap).takeLines()) {
+        capturedAll ~= l ~ "\n";
+        if (l.startsWith("dialogue worker: drain deadline"))
+            warned = true;
+    }
+    assert(warned, "expected a 'drain deadline' warning from the worker; captured:\n" ~ capturedAll);
+
+    // Let the late RiRecord (fake sleeps 3000 ms) be consumed by the
+    // still-running worker BEFORE the test area is cleaned up (the late
+    // recordJob may reopen the session DB; accepted shutdown record-loss
+    // window -- its state is deliberately not asserted).
+    auto lateWait = 3500.dur!"msecs" - (Clock.currTime - t0);
+    if (lateWait > Duration.zero)
+        Thread.sleep(lateWait);
 }

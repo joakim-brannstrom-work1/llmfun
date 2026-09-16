@@ -35,8 +35,8 @@ struct SummaryAgent {
     private {
         LlmRequester rqSummary;
         string summaryPrompt;
-        string checkpointSessionId; // owning session for checkpoint events (G1)
-        CheckpointListener[] checkpointListeners; // multicast seam (G2)
+        string checkpointSessionId; // owning session for checkpoint events
+        CheckpointListener[] checkpointListeners; // multicast seam
         long contextSize;
         immutable AnswerSize = 8192;
         immutable MaxValidationIterations = 3;
@@ -75,13 +75,13 @@ struct SummaryAgent {
         this.summaryPrompt = x;
     }
 
-    // Registers a compression checkpoint listener (A6). The seam is
-    // multicast (G2): Phase 1 and Phase 2 subscribe independently without
-    // one overwriting the other. Listeners must not block — the compressing
-    // thread is the UI thread in the common case; a throwing listener is
-    // caught and warning-logged, it never breaks compression. The listener
-    // list is unsynchronized: registration must complete before compress
-    // runs (Phase 0 does not guard concurrent registration, M-2).
+    // Registers a compression checkpoint listener. The seam is
+    // multicast: the dialogue and reasoning indexers subscribe independently
+    // without one overwriting the other. Listeners must not block — the
+    // compressing thread is the UI thread in the common case; a throwing
+    // listener is caught and warning-logged, it never breaks compression.
+    // The listener list is unsynchronized: registration must complete
+    // before compress runs (concurrent registration is not guarded).
     void addCheckpointListener(CheckpointListener listener) {
         if (listener is null)
             return;
@@ -89,9 +89,9 @@ struct SummaryAgent {
     }
 
     // Sets the owning session id stamped into each CompressionCheckpoint
-    // (A6, G1). Call sites that know it (doCompress: activeSession.id) set it
-    // before compressing; pool callbacks set their own or leave "" (Phase 1
-    // refuses to index events with an empty sessionId).
+    // The call sites that know it (doCompress: activeSession.id) set it
+    // before compressing; pool callbacks set their own or leave "" (the
+    // dialogue indexer refuses to index events with an empty sessionId).
     void setCheckpointSessionId(string sessionId) {
         checkpointSessionId = sessionId;
     }
@@ -124,14 +124,14 @@ struct SummaryAgent {
     // @param status        human-readable status message
     alias ProgressCallback = void delegate(size_t currentChunk, size_t totalChunks, string status);
 
-    // A6: structured checkpoint emitted exactly once per compression that
-    // actually evicts verbatim content (see compress()). Phase 1 subscribes
-    // to index evictedSummarized (+ archive evictedInPlace originals);
-    // Phase 2 subscribes for the reasoning trace. Payload arrays are
-    // .dup'd copies, safe for asynchronous consumption (L4).
+    // Structured checkpoint emitted exactly once per compression that
+    // actually evicts verbatim content (see compress()). The dialogue
+    // indexer subscribes to index evictedSummarized (+ archive
+    // evictedInPlace originals); the reasoning indexer subscribes for the
+    // reasoning trace. Payload arrays are .dup'd copies, safe for async use.
     struct CompressionCheckpoint {
         SysTime timestamp;
-        string sessionId; // owning session ("" = session-less chat; Phase 1 refuses to index)
+        string sessionId; // owning session ("" = session-less chat; the dialogue indexer refuses to index)
         Chat.MessageT[] evictedSummarized; // the remaining slice summarized & removed
         Chat.MessageT[] evictedPurged; // tool messages + matching ToolResponses removed by purgeTools
         Chat.MessageT[] evictedInPlace; // originals replaced by summarizeSingleMessage (oversized Y)
@@ -143,20 +143,20 @@ struct SummaryAgent {
         long newContextSize;
     }
 
-    // Non-nothrow on purpose: a listener may throw; fireCheckpoint catches it (G2).
+    // Non-nothrow on purpose: a listener may throw; fireCheckpoint catches it.
     alias CheckpointListener = void delegate(const CompressionCheckpoint);
 
     // purgeTools result: the kept history, the pre-removal copies of the
-    // messages it discarded (H4), and the purge count.
+    // messages it discarded, and the purge count.
     private struct PurgeResult {
         Chat.MessageT[] kept;
-        Chat.MessageT[] removed; // pre-removal copies incl. matching ToolResponses (H4)
+        Chat.MessageT[] removed; // pre-removal copies incl. matching ToolResponses
         size_t purgedCount;
     }
 
     // Filter out ToolMessage and ToolResponse entries matching an exclusion list.
     // Returns the kept history, the purged messages (pre-removal copies,
-    // including the ToolResponses whose call IDs matched — H4), and the
+    // including the ToolResponses whose call IDs matched), and the
     // number of messages purged in purgedCount.
     private PurgeResult purgeTools(Chat.MessageT[] history, string[] excludedTools_) {
         if (excludedTools_.empty)
@@ -179,7 +179,7 @@ struct SummaryAgent {
                 foreach (call; m.getFunctions.filter!(a => excludedTools.contains(a.name))) {
                     removedCallIds.add(call.callId);
                 }
-                // H4: capture the pre-removal copy BEFORE removeTool rebinds
+                // Capture the pre-removal copy BEFORE removeTool rebinds
                 // toolCalls, so evictedPurged carries the message as loaded.
                 auto preRemoval = Chat.MessageT(m);
                 foreach (toolName; excludedTools_) {
@@ -209,8 +209,8 @@ struct SummaryAgent {
         return PurgeResult(result, removed, purgedCount);
     }
 
-    // Fires one checkpoint to every registered listener (A6, G2). With no
-    // listeners, falls back to a structured trace dump — the Phase-0
+    // Fires one checkpoint to every registered listener. With no
+    // listeners, falls back to a structured trace dump — the
     // observability baseline. A throwing listener is caught and warning-logged:
     // an indexing failure must never break compression.
     private void fireCheckpoint(const CompressionCheckpoint checkpoint) {
@@ -227,19 +227,19 @@ struct SummaryAgent {
             try {
                 listener(checkpoint);
             } catch (Throwable e) {
-                // G2: a throwing listener must not break compression or stop the
+                // A throwing listener must not break compression or stop the
                 // remaining listeners; log it and move on.
                 logger.warningf("Checkpoint listener threw (ignored): %s", collectException(e));
             }
         }
     }
 
-    // Builds the merged summary Message that replaces the summarized slice
-    // (A6, C2): stamped with the slice's turnEnd — NOT the live currentTurnId
-    // — so it can sit at index 1 before the kept X/Y tail (whose ids are >=
-    // the summarized ids) without breaking I1, and carrying
-    // save_data["summary_turn_start"]/["summary_turn_end"] = the summarized
-    // turn range for the Phase 3 router.
+    // Builds the merged summary Message that replaces the summarized slice:
+    // stamped with the slice's turnEnd — NOT the live currentTurnId — so it
+    // can sit at index 1 before the kept X/Y tail (whose ids are >= the
+    // summarized ids) without breaking the (turn_id, position) ordering, and
+    // carrying save_data["summary_turn_start"]/["summary_turn_end"] = the
+    // summarized turn range for the router.
     private Chat.MessageT buildMergedSummary(string summaryText, long turnStart, long turnEnd) {
         auto m = Message(Role.assistant, userQuery: false, content: summaryText, thinking: null);
         m.turnId = turnEnd;
@@ -255,22 +255,22 @@ struct SummaryAgent {
     //
     // Pre-existing same-chat cross-thread access (documented, not fixed):
     // app_agent.doCompress can run compress(chat) on the UI thread while
-    // runToCompletion mutates the same chat on the worker thread. Phase 0's
-    // turn stamping adds one more unsynchronized field (currentTurnId_) to
-    // this already-shared history. Serializing chat mutation is explicitly
-    // out of Phase-0 scope (M4/R5).
+    // runToCompletion mutates the same chat on the worker thread. Turn
+    // stamping adds one more unsynchronized field (currentTurnId_) to this
+    // already-shared history. Serializing chat mutation is explicitly
+    // out of scope.
     CompressResult compress(ref Chat chat, ProgressCallback callback = null,
             string[] excludedTools_ = null) {
         size_t purgedCount = 0;
-        Chat.MessageT[] evictedPurged; // A6 (H4): tool traffic removed by purgeTools
-        Chat.MessageT[] evictedInPlace; // A6 (H3): pre-replacement originals
+        Chat.MessageT[] evictedPurged; // tool traffic removed by purgeTools
+        Chat.MessageT[] evictedInPlace; // pre-replacement originals
 
         // Purge excluded tools before compression
         auto allMessages = chat.getMessages;
         const historyLen = allMessages.length;
         if (!excludedTools_.empty) {
             // purgeTools only reads its input (removeTool mutates its local
-            // by-value copies), so allMessages can be reused (M-3).
+            // by-value copies), so allMessages can be reused.
             auto result = purgeTools(allMessages, excludedTools_);
             if (result.purgedCount != 0) {
                 purgedCount = result.purgedCount;
@@ -286,7 +286,7 @@ struct SummaryAgent {
         // TODO: a bug is hidden here. The agent will deadlock if there are too
         // few messages in the history but one or a few of those are so big the
         // context is full.
-        // Quirk to document, not fix (A6/H4): when the purge empties the chat
+        // Quirk to document, not fix: when the purge empties the chat
         // below the compression floor, compress returns WITHOUT setHistory —
         // the purge was applied only to the local copy, so nothing was
         // actually evicted and no checkpoint fires (consistent with the
@@ -306,16 +306,16 @@ struct SummaryAgent {
             if (msgTokens > TokenBudget) {
                 logger.warningf("Verbatim message %s exceeds token budget (%s > %s), summarizing",
                         i, msgTokens, TokenBudget);
-                // H3: capture the pre-replacement original — the in-place
+                // Capture the pre-replacement original — the in-place
                 // replacement below destroys verbatim content that never
                 // reaches evictedSummarized. Captured only on a REAL
-                // replacement (I-1): summarizeSingleMessage returns the
+                // replacement: summarizeSingleMessage returns the
                 // original unchanged when the LLM fails and the content fits
                 // the truncation threshold (the trigger estimates role-
                 // prefixed length, so a narrow window triggers without
                 // replacing), and the checkpoint must not claim an eviction
                 // that never happened. When a purge also ran, the captured
-                // copy is the post-purge message (M-5).
+                // copy is the post-purge message.
                 auto original = Y[i];
                 bool replaced;
                 auto replacement = summarizeSingleMessage(original, replaced);
@@ -391,12 +391,12 @@ struct SummaryAgent {
         logger.tracef("Compressed chat: %s -> %s messages (X+Y kept: %s, summarized: %s)",
                 historyLen, newHistory.length, X.length + Y.length, remaining.length);
 
-        // A6: fire exactly one checkpoint per compression that actually evicts
+        // Fire exactly one checkpoint per compression that actually evicts
         // verbatim content — remaining non-empty OR purged messages non-empty
         // OR evictedInPlace non-empty. Fired AFTER setHistory so
         // newContextSize is final, and fired even when all summary chunks
         // failed (the raw messages are still discarded). Payload arrays are
-        // .dup'd before firing (L4).
+        // .dup'd before firing.
         if (!remaining.empty || !evictedPurged.empty || !evictedInPlace.empty) {
             CompressionCheckpoint checkpoint;
             checkpoint.timestamp = Clock.currTime;
@@ -406,9 +406,8 @@ struct SummaryAgent {
             checkpoint.evictedInPlace = evictedInPlace;
             // One concatenation per compression (the event path is cold).
             // turnRangeOf counts unstamped (turnId == 0) entries, so a slice
-            // containing any of them reports turnStart == 0 — Phase 1
-            // consumers must filter turnId != 0 (see llm.chat.turnRangeOf
-            // docs, M-4).
+            // containing any of them reports turnStart == 0 — consumers
+            // must filter turnId != 0 (see the llm.chat.turnRangeOf docs).
             const evictedRange = turnRangeOf(
                     checkpoint.evictedSummarized ~ checkpoint.evictedPurged
                     ~ checkpoint.evictedInPlace);
@@ -448,13 +447,13 @@ struct SummaryAgent {
         return r;
     }
 
-    // Replacement for an in-place summarized message (H3): the original's
+    // Replacement for an in-place summarized message: the original's
     // saveData and turnId are copied onto the replacement Message — the
     // previous bare-Message construction silently dropped both (the latent
-    // metadata-loss bug), and the typed turnId keeps I1 intact for kept X/Y
-    // entries. The pre-existing type erasure (ToolMessage/ToolResponse/
-    // VisionMessage -> Message) remains, documented as a Phase-0
-    // no-behavior-change boundary.
+    // metadata-loss bug), and the typed turnId keeps the (turn_id, position)
+    // ordering intact for kept X/Y entries. The pre-existing type erasure
+    // (ToolMessage/ToolResponse/VisionMessage -> Message) remains,
+    // documented as a no-behavior-change boundary.
     private Chat.MessageT replacementFor(Chat.MessageT original, Role role, string content) {
         JSONValue saveData;
         original.match!((Message m) { saveData = m.saveData; }, (ToolMessage m) {
@@ -462,7 +461,7 @@ struct SummaryAgent {
         }, (ToolResponse m) { saveData = m.saveData; }, (VisionMessage m) {
             saveData = JSONValue.init;
         });
-        // L4: copy the entries into a fresh JSONValue so the replacement does
+        // Copy the entries into a fresh JSONValue so the replacement does
         // NOT alias the checkpoint payload's saveData AA (JSONValue copies
         // share the underlying object — the same care as chat.d's
         // saveDataWithTurnId). The live replacement would otherwise share one
@@ -484,7 +483,7 @@ struct SummaryAgent {
     // Returns the original message if summarization fails.
     // out replaced: true when the returned message is a NEW message (the
     // original was discarded — an actual eviction), false when the original
-    // is returned unchanged (no eviction happened; I-1).
+    // is returned unchanged (no eviction happened).
     Chat.MessageT summarizeSingleMessage(Chat.MessageT msg, out bool replaced) {
         import std.string : join;
 
@@ -970,7 +969,7 @@ Tuple!(string, "response", bool, "gotResponse") request(ref LlmRequester rq, ref
 }
 
 /// Strip markdown code fences (``` ... ```) from a string.
-private string stripFences(string text) {
+string stripFences(string text) {
     import std.string : join;
 
     return text.splitter("\n").filter!(a => !a.startsWith("```"))
@@ -979,7 +978,7 @@ private string stripFences(string text) {
         .join("\n");
 }
 
-// --- Task 5 tests: compression checkpoint event (A6) ---
+// --- Compression checkpoint event tests ---
 
 version (unittest) {
     // Synthetic SummaryAgent: no system prompt is set, so requestSummary bails
@@ -1003,10 +1002,10 @@ version (unittest) {
     }
 }
 
-// C2: the merged summary Message is stamped with the summarized slice's
+// The merged summary Message is stamped with the summarized slice's
 // turnEnd (NOT the live currentTurnId) and carries the turn range in
-// save_data for the Phase 3 router. This keeps I1: the summary sits at index
-// 1 before the kept X/Y tail, whose ids are >= turnEnd.
+// save_data for the router. This keeps the ordering intact: the summary
+// sits at index 1 before the kept X/Y tail, whose ids are >= turnEnd.
 unittest {
     auto agent = makeTestSummaryAgent();
     auto summary = agent.buildMergedSummary("- summary line", 3, 7);
@@ -1018,9 +1017,9 @@ unittest {
     }, (_) { assert(false, "expected a Message"); });
 }
 
-// H3: replacementFor copies the original's saveData and turnId onto the
+// replacementFor copies the original's saveData and turnId onto the
 // replacement Message; the ToolMessage original exercises the type erasure
-// (ToolMessage -> Message) documented as a Phase-0 boundary.
+// (ToolMessage -> Message) documented as a no-behavior-change boundary.
 unittest {
     auto agent = makeTestSummaryAgent();
     auto tm = ToolMessage("think", JSONValue([makeToolCall("toolB", "call1")]),
@@ -1034,7 +1033,7 @@ unittest {
     }, (_) { assert(false, "expected a Message"); });
 }
 
-// A6 end-to-end: compressing a chat that evicts turns 1-5 fires exactly one
+// End-to-end: compressing a chat that evicts turns 1-5 fires exactly one
 // checkpoint per listener, with turnStart=1, turnEnd=5, the sessionId the
 // call site provided, and the evicted slice matching the discarded messages.
 // The oversized turn-5 reply (4500 estimated tokens) pushes every candidate
@@ -1042,8 +1041,8 @@ unittest {
 // prompt is set, so all summary chunks fail -> the event still fires (the
 // raw messages are discarded) and no merged summary message is inserted;
 // the kept Y messages retain their original TurnIDs and the history stays
-// I1-sorted. Payload arrays are .dup'd copies (L4): mutating history after
-// the event does not affect them.
+// (turn_id, position)-sorted. Payload arrays are .dup'd copies: mutating
+// history after the event does not affect them.
 unittest {
     import std.array : replicate;
 
@@ -1095,11 +1094,11 @@ unittest {
     });
     assert(turnRangeOf(capturedEvicted).turnStart == 1);
     assert(turnRangeOf(capturedEvicted).turnEnd == 5);
-    // I1: the compressed history stays (turn_id, position)-sorted
+    // The compressed history stays (turn_id, position)-sorted
     long prev = 0;
     foreach (m; chat.getMessages) {
         const id = turnIdOf(m);
-        assert(id >= prev, "history must stay I1-sorted");
+        assert(id >= prev, "history must stay (turn_id, position)-sorted");
         prev = id;
     }
     // kept Y messages retain their original TurnIDs; no merged summary was
@@ -1108,7 +1107,7 @@ unittest {
     assert(turnIdOf(chat.getMessages[1]) == 6); // q6
     assert(turnIdOf(chat.getMessages[2]) == 6); // a6
     assert(turnIdOf(chat.getMessages[5]) == 8); // q8
-    // L4: the payload arrays are independent copies of history
+    // The payload arrays are independent copies of history
     chat.getMessages[1] = Chat.MessageT(Message(Role.user, userQuery: false,
             content: "mutated", thinking: null));
     capturedEvicted[0].match!((Message m) {
@@ -1116,7 +1115,7 @@ unittest {
     }, (_) { assert(false, "expected q1"); });
 }
 
-// A6 fire rule: nothing evicted -> no event. (a) A chat below the compression
+// Fire rule: nothing evicted -> no event. (a) A chat below the compression
 // floor returns without compressing. (b) A chat whose candidate pool fits X
 // entirely is still rewritten by setHistory but discards nothing, so no
 // checkpoint fires.
@@ -1151,7 +1150,7 @@ unittest {
     assert(events == 0); // nothing discarded -> no checkpoint
 }
 
-// H4: a purged-tools compression reports the purged messages in
+// A purged-tools compression reports the purged messages in
 // evictedPurged — pre-removal copies (ToolMessages with their calls intact)
 // plus the ToolResponses whose call IDs matched. Kept messages retain their
 // original TurnIDs and the partially purged ToolMessage keeps its surviving
@@ -1201,7 +1200,7 @@ unittest {
         assert(false, "expected tr1");
     });
     purged[1].match!((ToolMessage m) {
-        assert(m.toolCalls.array.length == 2); // pre-removal copy (H4)
+        assert(m.toolCalls.array.length == 2); // pre-removal copy
     }, (_) { assert(false, "expected tm2"); });
     purged[2].match!((ToolResponse m) { assert(m.toolCallId == "callA1"); }, (_) {
         assert(false, "expected tr2");
@@ -1215,7 +1214,7 @@ unittest {
         assert(m.getFunctions.length == 1);
         assert(m.getFunctions[0].name == "toolB");
     }, (_) { assert(false, "expected the kept ToolMessage"); });
-    // I1: the compressed history stays sorted
+    // The compressed history stays sorted
     long prev = 0;
     foreach (m; chat.getMessages) {
         const id = turnIdOf(m);
@@ -1224,14 +1223,14 @@ unittest {
     }
 }
 
-// I-1 regression: the in-place capture fires only on a REAL replacement.
+// Regression: the in-place capture fires only on a REAL replacement.
 // estimateTokens counts the role prefix, so an assistant Message with content
 // in [8182, 8192] chars triggers the Y-loop summarization attempt, but the
 // truncation check inside summarizeSingleMessage (content.length / 2 >
 // TokenBudget, i.e. content > 8192) does not fire — with the LLM
 // unreachable, the original is returned unchanged. Nothing was evicted: no
 // checkpoint may fire and the message must stay byte-identical in history.
-// (~3.5 s of request retry backoff, same as the H3 test.)
+// (~3.5 s of request retry backoff, same as the replacement test.)
 unittest {
     import std.array : replicate;
 
@@ -1256,7 +1255,7 @@ unittest {
     auto result = agent.compress(chat);
 
     assert(result.compressed); // history rewritten...
-    assert(events == 0); // ...but nothing was discarded -> no checkpoint (I-1)
+    assert(events == 0); // ...but nothing was discarded -> no checkpoint
     // the borderline message is still verbatim in history
     bool foundVerbatim = false;
     foreach (m; chat.getMessages) {
@@ -1270,7 +1269,7 @@ unittest {
     assert(foundVerbatim);
 }
 
-// A6/H4 quirk (documented, not fixed): when the purge empties the chat below
+// Quirk (documented, not fixed): when the purge empties the chat below
 // the compression floor, compress returns WITHOUT setHistory — the purge was
 // applied only to the local copy, so nothing was actually evicted and no
 // checkpoint fires.
@@ -1297,7 +1296,7 @@ unittest {
     assert(chat.getMessages.length == 5); // untouched by the local purge
 }
 
-// A6 default path: with no listener registered the checkpoint falls back to
+// Default path: with no listener registered the checkpoint falls back to
 // a structured trace dump and compression completes normally.
 unittest {
     import std.array : replicate;
@@ -1321,7 +1320,7 @@ unittest {
     assert(result.newLength == 6);
 }
 
-// H3: an oversized Y message is replaced in place by summarizeSingleMessage;
+// An oversized Y message is replaced in place by summarizeSingleMessage;
 // the pre-replacement original is reported in evictedInPlace, and the
 // replacement keeps the original saveData and turnId (the latent
 // metadata-loss bug is fixed). The LLM is unreachable (empty URL), so the
@@ -1365,14 +1364,14 @@ unittest {
         assert(m.content.length == 9000);
         assert(m.turnId == 2);
     }, (_) { assert(false, "expected the original oversized a2"); });
-    // the replacement kept the original saveData and turnId (H3)
+    // the replacement kept the original saveData and turnId
     assert(chat.getMessages.length == 7);
     chat.getMessages[4].match!((Message m) {
         assert(m.turnId == 2);
         assert(m.saveData["note"].integer == 42);
         assert(m.content.length == agent.TokenBudget); // truncation path
     }, (_) { assert(false, "expected the truncated replacement"); });
-    // L4 (I-2): the replacement's saveData is an independent copy — mutating
+    // The replacement's saveData is an independent copy — mutating
     // it in place must not affect the checkpoint payload's original.
     chat.getMessages[4].match!((Message m) { m.saveData["mutated"] = true; }, (_) {
         assert(false, "expected the truncated replacement");
@@ -1382,7 +1381,7 @@ unittest {
         assert(("mutated" in m.saveData) is null,
             "payload original must not alias the live replacement");
     }, (_) { assert(false, "expected the original oversized a2"); });
-    // I1: the compressed history stays sorted
+    // The compressed history stays sorted
     long prev = 0;
     foreach (m; chat.getMessages) {
         const id = turnIdOf(m);
@@ -1391,10 +1390,10 @@ unittest {
     }
 }
 
-// Task 7: a purge-tools compression preserves every remaining message's
-// TurnID and I1 ordering. Each survivor is a kept copy of a pre-compression
-// message (matched by marker) and must carry the same stamp it had before;
-// the purge must not shift or re-stamp anything.
+// A purge-tools compression preserves every remaining message's TurnID and
+// (turn_id, position) ordering. Each survivor is a kept copy of a
+// pre-compression message (matched by marker) and must carry the same stamp
+// it had before; the purge must not shift or re-stamp anything.
 unittest {
     Chat chat;
     chat.setSystemPrompt("sys");
@@ -1455,7 +1454,7 @@ unittest {
         assert(marker in idByMarker, "every survivor must be a kept original");
         const id = turnIdOf(m);
         assert(id == idByMarker[marker], "kept messages must keep their TurnID");
-        assert(id >= prev, "history must stay I1-sorted after the purge");
+        assert(id >= prev, "history must stay sorted after the purge");
         prev = id;
     }
     // The kept toolB traffic stays in turn 2, the tail in turn 3.
@@ -1465,15 +1464,15 @@ unittest {
     assert(turnIdOf(msgs[8]) == 3); // a3
 }
 
-// --- Task 9 spike: Phase-1 seam validation (P3, optional) ---
-// The seam is validated from the consumer's side (the producer's side was
-// Task 5). A mock indexing listener stands in for the Phase-1 async indexer:
-// it subscribes once, owns copies of every payload, and records each
-// delivery in order. Phase 0 implements no indexing of any kind — the mock
-// only proves the seam hands a Phase-1 consumer complete, correctly-ordered
-// checkpoints it can rely on.
+// --- Checkpoint seam validation spike (consumer side) ---
+// The seam is validated from the consumer's side (the producer's side is
+// covered by the checkpoint tests above). A mock indexing listener stands in
+// for the async indexer: it subscribes once, owns copies of every payload,
+// and records each delivery in order. This module implements no indexing of
+// any kind — the mock only proves the seam hands an indexing consumer
+// complete, correctly-ordered checkpoints it can rely on.
 
-// One checkpoint delivery as recorded by the mock Phase-1 indexing consumer.
+// One checkpoint delivery as recorded by the mock indexing consumer.
 // The payload arrays are owned copies (.dup already yields mutable arrays —
 // the mock only reads them), so the records stay valid after the live chat
 // is rewritten by later compressions.
@@ -1504,7 +1503,7 @@ private struct SpikeCheckpointRecord {
 // the session id on every event, evicted arrays matching the discarded turns,
 // timestamps non-decreasing, and each payload internally in canonical order.
 // The consumer's dump (counts, summary text, session ids) mirrors the first
-// step a Phase-1 indexer takes.
+// step an indexer takes.
 unittest {
     import std.array : replicate;
 
@@ -1620,7 +1619,7 @@ unittest {
     assert(turnIdOf(chat.getMessages[1]) == 11);
 
     // The consumer-visible dump: counts, summary text and session ids per
-    // checkpoint, in delivery order (the Phase-1 indexer's first step).
+    // checkpoint, in delivery order (the indexer's first step).
     foreach (i, r; records) {
         logger.tracef(
                 "spike checkpoint %s: session=%s turns=%s..%s summarized=%s purged=%s inPlace=%s summaryChars=%s",
@@ -1682,7 +1681,7 @@ unittest {
     });
 }
 
-// G2: a throwing checkpoint listener must not break compression nor abort the
+// A throwing checkpoint listener must not break compression nor abort the
 // remaining listeners. The delegate type is non-nothrow precisely so a real
 // throw can be exercised here; fireCheckpoint catches each listener (item 1).
 // The throwing listener is registered first so it fires before the recorder.

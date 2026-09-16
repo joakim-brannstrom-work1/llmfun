@@ -110,7 +110,7 @@ struct LlmConfig {
     Path[] promptDir;
 
     Path chatDir;
-    /// Directory holding per-session dialogue RAG databases (Phase 1).
+    /// Directory holding per-session dialogue RAG databases.
     /// Defaults to <dataDir>/dialogue (see resolvePaths).
     Path dialogueDir;
     /// Active chat session id (stored in state.json; empty = none).
@@ -212,6 +212,9 @@ struct LlmConfig {
 
     /// Agent prompt filename searched for in promptDir.
     string agentPrompt = "AGENT.md";
+
+    /// Reasoning-summary prompt filename searched for in promptDir.
+    string reasoningSummaryPrompt = "REASONING_SUMMARY.md";
 
     CodeModelConfig[] codeModels;
     long activeCodeModelIndex = 0;
@@ -457,6 +460,20 @@ struct LlmConfig {
         return vfs.read(prompt).match!((string a) => a, (_) {
             logger.warningf("Prompt '%s' not found", prompt);
             throw new Exception("System prompt not found: " ~ prompt);
+            return null;
+        });
+    }
+
+    /// Read a prompt file raw from promptDir. No composition: unlike
+    /// getPrompt, no skills/agentMd/rag blocks are appended. THROWS when the
+    /// file is missing (mirrors getBasePrompt).
+    string readPromptFile(string name) {
+        import llm.vfs : FlatVfs;
+
+        auto vfs = FlatVfs(promptDir);
+        return vfs.read(name).match!((string a) => a, (_) {
+            logger.warningf("Prompt '%s' not found", name);
+            throw new Exception("Prompt file not found: " ~ name);
             return null;
         });
     }
@@ -1540,6 +1557,38 @@ unittest {
     assert(!conf.dialogueDir.empty, "dialogueDir should be non-empty after defaulting");
     assert(conf.dialogueDir == (conf.dataDir ~ "dialogue"),
             "dialogueDir default mismatch: " ~ conf.dialogueDir.to!string);
+}
+
+unittest {
+    // Default: the reasoning-summary prompt ships as the named file.
+    assert(LlmConfig().reasoningSummaryPrompt == "REASONING_SUMMARY.md");
+}
+
+unittest {
+    // Round-trip: an explicit reasoningSummaryPrompt in YAML is preserved
+    // through applyConfig (reflection) and not overwritten by resolvePaths.
+    import std.path : buildPath;
+    import std.stdio : File;
+
+    auto tmpDir = buildPath("llmfun_test", "reasoningSummaryPrompt_roundtrip_" ~ __LINE__
+            .to!string);
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        rmdirRecurse(tmpDir);
+
+    auto configFile = buildPath(tmpDir, "test.yaml");
+    string yaml = `reasoningSummaryPrompt: MY_PROMPT.md
+codeModels:
+  - modelName: test
+    display: test42
+    server:
+      url: http://localhost:8080
+`;
+    File(configFile, "w").write(yaml);
+
+    auto conf = readConfig(configFile.Path, silent: true, noCwdConfig: true, trustedConfig: false);
+    assert(conf.reasoningSummaryPrompt == "MY_PROMPT.md",
+            "reasoningSummaryPrompt round-trip failed: " ~ conf.reasoningSummaryPrompt);
 }
 
 unittest {

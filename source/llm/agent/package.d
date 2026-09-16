@@ -32,6 +32,7 @@ import llm.skill : SkillManager, makeSkillManager;
 import llm.summary_agent;
 import llm.tool_call : FunctionCall, Context;
 import llm.tool_call.pipeline : PipelineControlContext;
+import llm.tool_call.reasoning;
 import llm.utility : getValue;
 
 import llm.environment.config : EnvironmentBackend;
@@ -1107,4 +1108,24 @@ unittest {
             "Task 8 trigger-rule section missing from the composed main-agent prompt (R12)");
     assert(prompt.canFind("queryDialogueHistory"),
             "Task 8 rule must name the queryDialogueHistory tool (R12)");
+}
+
+// The reasoning-history rule also lives in prompt data, not code, so
+// in-tree removal of the section would silently change the main agent's
+// behavior. Same guard shape as the dialogue test above: load the real
+// llmfun/config/prompt/AGENT.md through the production getPrompt path
+// and assert the section heading, the exact tool name, and the
+// anti-anchoring warning are present.
+unittest {
+    const agentPromptFile = "llmfun/config/prompt/AGENT.md";
+    assert(agentPromptFile.exists,
+            "in-tree AGENT.md missing; getBasePrompt would throw at startup (R12)");
+    auto llmConf = makeAgentTestConfig("llmfun/config/prompt");
+    auto prompt = llmConf.getPrompt(null, "AGENT.md");
+    assert(prompt.canFind("# Reasoning History Retrieval"),
+            "Reasoning History Retrieval section missing from the composed main-agent prompt");
+    assert(prompt.canFind("queryReasoningHistory"),
+            "Reasoning rule must name the queryReasoningHistory tool");
+    assert(prompt.canFind("PAST THOUGHTS, NOT ground truth"),
+            "Reasoning rule must state that results are past thoughts, not ground truth");
 }

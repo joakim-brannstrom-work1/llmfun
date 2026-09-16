@@ -1,7 +1,7 @@
 /// DialogueIndex: per-session dialogue database manager and async indexing coordinator.
 ///
 /// The agent thread owns a single DialogueIndex instance for the process lifetime.
-/// It spawns the dialogue worker (Task 4) on its own thread and coordinates:
+/// It spawns the dialogue worker on its own thread and coordinates:
 ///   - onCheckpoint: the CheckpointListener that fires on every compression
 ///     checkpoint, filtering evicted dialogue and enqueuing it for indexing.
 ///   - query: opens the session DB read-only, dispatches the appropriate search,
@@ -34,18 +34,15 @@ import my.optional;
 import llm.chat : Chat, Message, ToolMessage, ToolResponse, Role, turnIdOf, dialogueOf;
 import llm.common.config : EmbedConfig, RemoteEmbedConfig;
 import llm.common.embedder : Embedder, EmbedError, EmbedderFactory;
-import llm.config : RagConfig, ToolLimits;
+import llm.config : RagConfig, ToolLimits, SummaryModelConfig;
 import llm.rag.database : Database, openDatabase, SourceMatch, Search;
-import llm.rag.dialogue_worker : DiJob, DiEpisode, DiDrain, DiDrained, DiDegraded, dialogueWorker;
+import llm.rag.dialogue_worker : DiJob, DiEpisode, DiDrain, DiDrained,
+    DiDegraded, dialogueWorker, SummarizerFn, ReasoningDrainBudget;
 import llm.rag.rag : Origin, Topic;
 import llm.session.types : SessionId, isValidId;
 import llm.summary_agent : SummaryAgent;
 import llm.tool_call : Context;
 
-// ===========================================================================
-// DialogueContext interface (Task 6)
-// ===========================================================================
-//
 // Defined here (in llm.rag.dialogue_index) rather than in llm.tool_call to
 // avoid a circular import: llm.agent.context imports this module for
 // DialogueIndex, and the tool_call modules import llm.agent.context.
@@ -60,12 +57,20 @@ interface DialogueContext : Context {
 alias CompressionCheckpoint = SummaryAgent.CompressionCheckpoint;
 alias CheckpointListener = SummaryAgent.CheckpointListener;
 
+/// The kind of an indexed episode: a dialogue summary (`d_`) or a
+/// reasoning record (`r_`).
+enum Kind {
+    dialogue,
+    reasoning
+}
+
 /// Metadata parsed from an episode's topic name.
 struct EpisodeMeta {
     string sessionId;
     long turnStart;
     long turnEnd;
     long epochMillis;
+    Kind kind = Kind.dialogue; // appended last with a default value
 }
 
 /// A single dialogue match from a query.
@@ -78,7 +83,7 @@ struct DialogueMatch {
 /// Result of a dialogue query.
 ///
 /// Contract: when `hasHistory` is false, `message` is either a graceful
-/// no-history notice (N3 - a success from the tool's perspective) or an
+/// no-history notice (a success from the tool's perspective) or an
 /// engine error whose message starts with "error:" (embed failure, missing
 /// embedder). The tool maps the "error:" prefix to `success: false`; all
 /// other messages are returned as `success: true`. Keep this prefix
@@ -92,21 +97,33 @@ struct DialogueQueryResult {
     string message;
 }
 
-/// Encode a topic name: d_<sess>__t<turnStart>_<turnEnd>__<epochMillis>
-/// Session hyphens are replaced with underscores.
-string encodeTopicName(string sessionId, long turnStart, long turnEnd, long epochMillis) @safe {
+// Encode a topic name: <d_|r_>_<sess>__t<turnStart>_<turnEnd>__<epochMillis>
+// Session hyphens are replaced with underscores. `Kind.dialogue` (the
+// default) emits exactly the `d_` format, byte-identical. The
+// `kind` param is LAST (not first) so existing positional
+// call sites `encodeTopicName(sess, ts, te, epoch)` compile unchanged via
+// the default; a leading defaulted param would break those callers in D.
+string encodeTopicName(string sessionId, long turnStart, long turnEnd,
+        long epochMillis, Kind kind = Kind.dialogue) @safe {
     string safeSess = replace(sessionId, "-", "_");
-    return "d_" ~ safeSess ~ "__t" ~ turnStart.to!string ~ "_"
+    string prefix = kind == Kind.reasoning ? "r_" : "d_";
+    return prefix ~ safeSess ~ "__t" ~ turnStart.to!string ~ "_"
         ~ turnEnd.to!string ~ "__" ~ epochMillis.to!string;
 }
 
 /// Decode a topic name back into its components.
 /// Returns none if the name does not match the expected format.
 Optional!EpisodeMeta decodeTopicName(string topicName) @safe {
-    if (!topicName.startsWith("d_"))
+    Kind kind;
+    if (topicName.startsWith("r_")) {
+        kind = Kind.reasoning;
+    } else if (topicName.startsWith("d_")) {
+        kind = Kind.dialogue;
+    } else {
         return none!EpisodeMeta();
+    }
 
-    auto rest = topicName[2 .. $]; // strip "d_"
+    auto rest = topicName[2 .. $]; // strip the 2-char kind prefix
     auto firstDq = indexOf(rest, "__");
     if (firstDq == -1)
         return none!EpisodeMeta();
@@ -144,16 +161,18 @@ Optional!EpisodeMeta decodeTopicName(string topicName) @safe {
         return none!EpisodeMeta();
     }
 
-    return some(EpisodeMeta(sessionId, turnStart, turnEnd, epochMillis));
+    return some(EpisodeMeta(sessionId, turnStart, turnEnd, epochMillis, kind));
 }
 
-/// Candidate headroom for DB-level queries: the maxTurnAge window and the
-/// unparseable-topic filter can drop candidates, so the DB is asked for more
-/// than topK and the result is capped AFTER post-filtering (plan 5.2 step 3).
+/// Candidate headroom for DB-level queries: the maxTurnAge window, the
+/// unparseable-topic filter, and the kind filter can drop candidates,
+/// so the DB is asked for more than topK and the result is capped AFTER
+/// post-filtering.
 immutable long CandidateHeadroom = 100;
 
-/// F10: true if the entry is a merged compression summary marker.
-private bool isSummaryMarker(const Chat.MessageT msg) @safe {
+/// True if the entry is a merged compression summary marker.
+/// Public: shared by DialogueIndex and ReasoningIndex (marker exclusion).
+bool isSummaryMarker(const Chat.MessageT msg) @safe {
     return msg.match!((const Message m) {
         if (m.saveData.type != JSONType.object)
             return false;
@@ -195,11 +214,12 @@ private string episodePiece(const Chat.MessageT entry) @safe {
 /// Per-session dialogue database manager and async indexing coordinator.
 ///
 /// The agent thread owns one instance for the process lifetime. It spawns the
-/// dialogue worker on its own thread (Task 4) and coordinates checkpoint-driven
+/// dialogue worker on its own thread and coordinates checkpoint-driven
 /// indexing and read-only queries. There is no shared state between threads.
 class DialogueIndex {
+    /// Public: the shared dialogue worker; ReasoningIndex sends RiJob here too.
+    Tid workerTid;
     private {
-        Tid workerTid;
         AbsolutePath dialogueDir;
         EmbedConfig embedConfig;
         RagConfig dialogueRagCfg;
@@ -211,8 +231,14 @@ class DialogueIndex {
     /// it to create its own embedder instead of consulting the process-global
     /// factory registry; null means the worker resolves the embedder from the
     /// registry (createEmbedder) as before.
+    /// The last three params configure the worker's reasoning path:
+    /// the summary model config, the reasoning prompt, and an optional
+    /// summarizer DI override; all defaultable, so existing call sites are
+    /// unchanged.
     this(AbsolutePath dialogueDir, EmbedConfig embedConfig,
-            RagConfig dialogueRagCfg, EmbedderFactory embedderFactory = null) {
+            RagConfig dialogueRagCfg, EmbedderFactory embedderFactory = null,
+            SummaryModelConfig summaryCfg = SummaryModelConfig.init,
+            string reasoningPrompt = "", SummarizerFn summarizerFn = null) {
         import std.file : exists;
 
         if (!dialogueDir.toString.exists) {
@@ -225,21 +251,21 @@ class DialogueIndex {
         this.dialogueDir = dialogueDir;
         this.embedConfig = embedConfig;
         this.dialogueRagCfg = dialogueRagCfg;
-        this.workerTid = spawn(&dialogueWorker, thisTid, dialogueDir,
-                embedConfig, dialogueRagCfg, embedderFactory);
+        this.workerTid = spawn(&dialogueWorker, thisTid, dialogueDir, embedConfig,
+                dialogueRagCfg, embedderFactory, summaryCfg, reasoningPrompt, summarizerFn);
         logger.tracef("DialogueIndex: spawned worker for dir '%s'", dialogueDir);
     }
 
     /// CheckpointListener: fires on every compression checkpoint.
     ///
     /// Refuses empty/invalid session ids (log only). Filters the evicted
-    /// dialogue through the A4 classifier (dialogueOf) and the F10 exclusion
+    /// dialogue through the classifier (dialogueOf) and the marker exclusion
     /// (summary markers and turnId==0). Groups by turnId into episodes,
     /// encodes topic names, and sends a DiJob to the worker.
     ///
     /// Must never throw (fire-and-forget; errors are logged and the
     /// compression proceeds). Must return quickly (no I/O, no blocking).
-    /// Emits exactly one trace per sent DiJob (D7/N3: the per-checkpoint
+    /// Emits exactly one trace per sent DiJob (the per-checkpoint
     /// counts and turn range are logged by the worker, not here).
     void onCheckpoint(const CompressionCheckpoint cp) nothrow {
         try {
@@ -249,11 +275,11 @@ class DialogueIndex {
                 return;
             }
 
-            // Combine evicted messages and apply the A4 dialogue filter.
+            // Combine evicted messages and apply the dialogue filter.
             auto combined = cp.evictedSummarized ~ cp.evictedInPlace;
             auto dialogue = dialogueOf(combined);
 
-            // F10: drop summary markers and turnId==0 entries.
+            // Drop summary markers and turnId==0 entries.
             Chat.MessageT[] filtered;
             foreach (entry; dialogue) {
                 if (turnIdOf(entry) == 0)
@@ -274,7 +300,7 @@ class DialogueIndex {
             // Epoch milliseconds (second precision is fine for metadata).
             // NOTE: epochMillis uses Clock.currTime (checkpoint-handling time) rather than
             // cp.timestamp (the stamped eviction time). The two differ by microseconds at
-            // most. Known deviation from D2; intentionally not worth fixing (user decision,
+            // most. Known deviation; intentionally not worth fixing (user decision,
             // 2026-09-06 review).
             long epochMillis = Clock.currTime.toUnixTime * 1000;
             long[] turnOrder;
@@ -359,12 +385,21 @@ class DialogueIndex {
         scope (exit)
             db.destroy();
 
-        // Check if the DB has any sources
+        // Check if the DB has any DIALOGUE (d_) sources. No-history
+        // detection is kind-specific - a session whose DB holds only r_
+        // (reasoning) topics reports no dialogue history.
         size_t sourceCount;
         try {
-            sourceCount = db.getSources.length;
+            foreach (src; db.getSources) {
+                src.origin.match!((Topic t) {
+                    auto metaOpt = decodeTopicName(t.name);
+                    if (hasValue(metaOpt)
+                        && metaOpt.match!(m => m.kind == Kind.dialogue, (_) => false))
+                        sourceCount++;
+                }, (_) {});
+            }
         } catch (Exception e) {
-            logger.warningf("getSources failed: %s", e.msg);
+            logger.tracef("getSources failed: %s", e.msg);
             return DialogueQueryResult(null, false,
                     "No dialogue history indexed for this session yet.");
         }
@@ -385,10 +420,11 @@ class DialogueIndex {
             });
         }
 
-        // Query the DB with candidate headroom: the maxTurnAge window and the
-        // unparseable-topic filter can drop candidates, so topK is applied
-        // AFTER post-filtering (plan 5.2 step 3), not by the DB LIMIT alone.
-        long dbLimit = max(topK * 10, CandidateHeadroom);
+        // Query the DB with candidate headroom: the maxTurnAge window, the
+        // unparseable-topic filter, and the kind filter can drop
+        // candidates, so topK is applied AFTER post-filtering,
+        // not by the DB LIMIT alone.
+        const long dbLimit = max(topK * 10, CandidateHeadroom);
 
         // Dispatch the appropriate search
         SourceMatch[] raw;
@@ -414,14 +450,15 @@ class DialogueIndex {
         // Post-filter: parse topic, apply age window
         DialogueMatch[] matches;
         foreach (sm; raw) {
-            auto origin = sm.origin;
-            auto metaOpt = origin.match!((Topic t) => decodeTopicName(t.name),
+            auto metaOpt = sm.origin.match!((Topic t) => decodeTopicName(t.name),
                     (_) => none!EpisodeMeta());
-
             if (!hasValue(metaOpt))
                 continue; // drop unparseable topics
 
             auto meta = metaOpt.match!((EpisodeMeta m) => m, (None _) => EpisodeMeta.init);
+
+            if (meta.kind != Kind.dialogue)
+                continue; // dialogue queries never surface reasoning records
 
             // Apply maxTurnAge window
             if (maxTurnAge > 0 && maxTurn > 0) {
@@ -482,16 +519,24 @@ class DialogueIndex {
 
     /// Best-effort drain of the worker mailbox. Idempotent (guarded by a flag).
     /// Never throws (catches OwnerTerminated). Returns without waiting if the
-    /// worker is already gone. After the wait, consumes any DiDrained that may
-    /// have arrived late (e.g. after a timeout) so it cannot be mistaken for a
+    /// worker is already gone. Waits for the worker's bounded drain-join
+    /// queued jobs are flushed and in-flight reasoning
+    /// summarization threads are joined before the worker replies, so the
+    /// wait window is the join budget plus slack rather than a fixed short
+    /// timeout that would let those threads outlive a normal exit and lose
+    /// their records. After the wait, consumes any DiDrained that may have
+    /// arrived late (e.g. after a timeout) so it cannot be mistaken for a
     /// future drain's reply by a later consumer of this thread's mailbox.
     void dispose() {
         if (disposed)
             return;
         disposed = true;
         try {
-            send(workerTid, DiDrain(thisTid));
-            receiveTimeout(5.dur!"seconds", (DiDrained _) {});
+            // The explicit budget travels with the drain so
+            // the wait below is guaranteed to cover the worker's bounded join.
+            send(workerTid, DiDrain(thisTid, ReasoningDrainBudget));
+            receiveTimeout(ReasoningDrainBudget + 10.dur!"seconds", (DiDrained _) {
+            });
             // Consume a possible late/duplicate DiDrained (zero-time poll).
             receiveTimeout(Duration.zero, (DiDrained _) {});
         } catch (OwnerTerminated) {
@@ -503,7 +548,7 @@ class DialogueIndex {
 
     /// Compute the max turnEnd from a database's sources. Never throws:
     /// a corrupt DB (getSources failure) yields 0.
-    private static long computeMaxTurn(ref Database db) nothrow {
+    public static long computeMaxTurn(ref Database db) nothrow {
         try {
             long mt = 0;
             foreach (src; db.getSources) {
@@ -532,6 +577,7 @@ version (unittest) {
     import llm.common.embedder : Embedder, EmbedResult, EmbedError;
     import llm.common.config : ServerConfig;
     import llm.test_util : TestArea, testArea;
+    import llm.rag.rag : addToDatabase, Document; // test-only (seedTopicDb)
 
     /// Deterministic test embedder: returns an all-ones 8-dim vector.
     private class DiTestEmbedder : Embedder {
@@ -627,12 +673,30 @@ version (unittest) {
     private DiTestEmbedder qEmb() {
         return new DiTestEmbedder();
     }
+
+    /// Seed a session's DB directly with one encoded topic (bypassing the
+    /// worker), mirroring seedSessionDb in tool_call/dialogue.d: open the
+    /// per-session DB with the query embedder's model/dimensions (so the
+    /// read-only query open succeeds), index the episode text, rebuild the
+    /// FTS index so text queries can find it, then checkpoint + close so a
+    /// read-only open sees a clean, sidecar-free DB.
+    private void seedTopicDb(TestSetup s, string sid, string topic, string text) {
+        auto qe = qEmb();
+        auto dbOpt = openDatabase((s.tmpDir ~ (sid ~ ".db")).AbsolutePath,
+                qe.modelName(), qe.dimensions(), readOnly: false);
+        assert(hasValue(dbOpt), "seed DB must open");
+        auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
+        size_t nBatch;
+        auto doc = Document(origin: Origin(Topic(topic)), data: text);
+        auto res = addToDatabase(db, qe, doc, s.ragCfg, nBatch, topic);
+        assert(res.chunks > 0, "seeded episode must index at least one chunk");
+        db.fts5Rebuild;
+        db.run("PRAGMA wal_checkpoint(TRUNCATE);");
+        db.destroy();
+    }
 }
 
-// ------------------------------------------------------------------
 // Codec tests
-// ------------------------------------------------------------------
-
 unittest {
     // Round-trip: encode then decode
     auto encoded = encodeTopicName("20240101-120000-abcd", 5, 5, 1700000000000);
@@ -675,10 +739,28 @@ unittest {
     }
 }
 
-// ------------------------------------------------------------------
-// onCheckpoint rejection tests
-// ------------------------------------------------------------------
+// P2 codec: r_ round-trip, kind decode, cross-prefix, unknown prefix
+unittest {
+    // existing d_ tests at 633-670 stay UNMODIFIED and green
+    auto r = encodeTopicName("20240101-120000-abcd", 5, 5, 1700000000000, Kind.reasoning);
+    assert(r == "r_20240101_120000_abcd__t5_5__1700000000000");
+    auto dr = decodeTopicName(r);
+    assert(hasValue(dr));
+    assert(dr.match!((EpisodeMeta m) => m.kind == Kind.reasoning
+            && m.sessionId == "20240101-120000-abcd" && m.turnStart == 5
+            && m.turnEnd == 5 && m.epochMillis == 1700000000000, (_) => false));
+    // cross-prefix: default-arg encode unchanged & round-trips as dialogue
+    auto d = encodeTopicName("20240101-120000-abcd", 5, 5, 1700000000000);
+    assert(d == "d_20240101_120000_abcd__t5_5__1700000000000"); // byte-identical
+    // unknown prefix -> none
+    assert(!hasValue(decodeTopicName("x_20240101_120000_abcd__t5_5__1")));
+    // d_ decode now carries kind == Kind.dialogue
+    auto dd = decodeTopicName(d);
+    assert(hasValue(dd));
+    assert(dd.match!((EpisodeMeta m) => m.kind == Kind.dialogue, (_) => false));
+}
 
+// onCheckpoint rejection tests
 unittest {
     auto s = setupTest("on_checkpoint_rejection_test");
     scope (exit)
@@ -697,7 +779,7 @@ unittest {
             summaryText: "", originalLength: 1, newLength: 0, newContextSize: 0);
     di.onCheckpoint(cp1); // must not throw
 
-    // Invalid session IDs → refused (path-traversal guard, plan cases)
+    // Invalid session IDs → refused (path-traversal guard)
     foreach (bad; [
         "invalid", "../etc/passwd", "not-an-id", "20240101-120000-zzzz"
     ]) {
@@ -719,10 +801,7 @@ unittest {
     assert(!(s.tmpDir ~ "invalid.db").toString.exists, "refused session must not create a DB file");
 }
 
-// ------------------------------------------------------------------
-// F10 filter test (synchronous: verify grouping logic)
-// ------------------------------------------------------------------
-
+// Summary-marker filter test (synchronous: verify grouping logic)
 unittest {
     // Summary marker: assistant message with summary_turn_start in saveData
     JSONValue sd1;
@@ -747,10 +826,7 @@ unittest {
             "tool message with summary marker should be detected");
 }
 
-// ------------------------------------------------------------------
 // End-to-end: onCheckpoint → worker indexes → query returns results
-// ------------------------------------------------------------------
-
 unittest {
     auto s = setupTest("on_checkpoint_end_to_end_with_worker_indexes");
     scope (exit)
@@ -797,10 +873,7 @@ unittest {
     assert(result.matches[0].text.length > 0, "match should have text");
 }
 
-// ------------------------------------------------------------------
 // maxTurnAge window test
-// ------------------------------------------------------------------
-
 unittest {
     auto s = setupTest("max_turn_age_window");
     scope (exit)
@@ -868,10 +941,7 @@ unittest {
     assert(foundTurn10, "should find turn 10");
 }
 
-// ------------------------------------------------------------------
 // No-history: query on a never-indexed session
-// ------------------------------------------------------------------
-
 unittest {
     auto s = setupTest("no_history");
     scope (exit)
@@ -897,10 +967,7 @@ unittest {
     assert(result.matches.length == 0, "should have no matches");
 }
 
-// ------------------------------------------------------------------
 // onCheckpoint with evictedInPlace (combined with evictedSummarized)
-// ------------------------------------------------------------------
-
 unittest {
     auto s = setupTest("on_checkpoint_eviced_in_place");
     scope (exit)
@@ -947,10 +1014,7 @@ unittest {
     assert(result.matches.length >= 1, "should find at least one match");
 }
 
-// ------------------------------------------------------------------
 // onCheckpoint excludes harness traffic (non-userQuery user messages)
-// ------------------------------------------------------------------
-
 unittest {
     auto s = setupTest("on_checkpoint_excludes_harness_traffic");
     scope (exit)
@@ -1000,11 +1064,8 @@ unittest {
     }
 }
 
-// ------------------------------------------------------------------
 // Episode grouping: taskDone included, thinking excluded, empty episode
 // skipped, non-final ToolMessage and harness nudge excluded.
-// ------------------------------------------------------------------
-
 unittest {
     auto s = setupTest("episode_grouping");
     scope (exit)
@@ -1026,10 +1087,10 @@ unittest {
     sd["taskDoneAnswer"] = "FINAL ANSWER delta 777";
     auto td = ToolMessage("", JSONValue(JSONType.array), JSONValue.init, sd);
     td.turnId = 1;
-    // Non-final ToolMessage (tool call, no taskDoneAnswer) - excluded by A4.
+    // Non-final ToolMessage (tool call, no taskDoneAnswer) - excluded by the dialogue filter.
     auto tool = ToolMessage("", JSONValue(JSONType.array));
     tool.turnId = 1;
-    // Harness nudge (user role, NOT userQuery) - excluded by A4.
+    // Harness nudge (user role, NOT userQuery) - excluded by the dialogue filter.
     auto nudge = Message(Role.user, false, "NUDGE TEXT epsilon", "");
     nudge.turnId = 1;
     // Turn 2: user query with EMPTY content - episode text empty, skipped.
@@ -1066,7 +1127,7 @@ unittest {
     assert(think.matches.length == 0,
             "thinking text must not be indexed (got %s matches)".format(think.matches.length));
 
-    // Harness nudge is not indexed (A4).
+    // Harness nudge is not indexed (dialogue filter).
     auto nud = di.query(qEmb(), SessionId(sid), "epsilon", "");
     assert(nud.matches.length == 0,
             "harness nudge must not be indexed (got %s matches)".format(nud.matches.length));
@@ -1076,11 +1137,8 @@ unittest {
             "empty episode must be skipped, maxTurn should be 1");
 }
 
-// ------------------------------------------------------------------
-// F10 end-to-end: summary markers and turnId==0 entries are NOT indexed;
+// End-to-end: summary markers and turnId==0 entries are NOT indexed;
 // a genuine adjacent turn in the same checkpoint IS indexed.
-// ------------------------------------------------------------------
-
 unittest {
     auto s = setupTest("end_to_end_summary_markers");
     scope (exit)
@@ -1125,28 +1183,24 @@ unittest {
     receiveTimeout(10.dur!"seconds", (DiDrained _) { drained = true; });
     assert(drained, "worker did not drain");
 
-    // The summary marker text must not be queryable (F10).
+    // The summary marker text must not be queryable.
     auto sm = di.query(qEmb(), SessionId(sid), "zebra", "");
     assert(sm.matches.length == 0,
-            "merged summary must not be indexed (F10), got %s matches".format(sm.matches.length));
-    // The legacy unstamped text must not be queryable (F10).
+            "merged summary must not be indexed, got %s matches".format(sm.matches.length));
+    // The legacy unstamped text must not be queryable.
     auto lg = di.query(qEmb(), SessionId(sid), "quokka", "");
     assert(lg.matches.length == 0,
-            "legacy turnId==0 entry must not be indexed (F10), got %s matches".format(
-                lg.matches.length));
+            "legacy turnId==0 entry must not be indexed, got %s matches".format(lg.matches.length));
     // The genuine adjacent turn IS indexed.
     auto g = di.query(qEmb(), SessionId(sid), "alpha", "");
     assert(g.hasHistory && g.matches.length > 0, "genuine adjacent turn must be indexed");
     assert(g.matches[0].episode.turnEnd == 5, "genuine turn must carry turnEnd 5");
-    assert(di.maxTurn(qEmb(), SessionId(sid)) == 5,
-            "maxTurn must reflect only the genuine turn (F10)");
+    assert(di.maxTurn(qEmb(), SessionId(sid)) == 5, "maxTurn must reflect only the genuine turn");
 }
 
 version (unittest) {
-    // ------------------------------------------------------------------
     // onCheckpoint is asynchronous: it enqueues and returns immediately even
     // when the worker's embedder is slow (no inline embedding).
-    // ------------------------------------------------------------------
 
     /// Embedder that sleeps per embed; proves onCheckpoint never embeds inline.
     private class SlowDiEmbedder : Embedder {
@@ -1528,7 +1582,7 @@ unittest {
 }
 
 // feedback-loop guard: a ToolResponse (trace) in a checkpoint's evicted
-// slice must never reach the session DB. The A4 classifier inside
+// slice must never reach the session DB. The dialogue classifier inside
 // onCheckpoint (dialogueOf) drops it, so a distinctive sentinel string is
 // provably absent from every indexed topic - even if a future change fed
 // the raw (unfiltered) evicted slice through. Pinned at the INDEXING
@@ -1547,13 +1601,13 @@ unittest {
     string sid = "20240601-010203-f6a1";
 
     // A prior queryDialogueHistory result: a ToolResponse whose content is
-    // a distinctive sentinel. Under F6 it is trace, never dialogue.
+    // a distinctive sentinel. It is classified as trace, never dialogue.
     immutable SENTINEL = "SENTINEL-TOOLRESULT-7f3a9c";
     auto toolResp = ToolResponse(SENTINEL, "call-sentinel", "queryDialogueHistory", true);
     toolResp.turnId = 1;
 
-    // One genuine user query and one genuine assistant answer (A4
-    // dialogue), same turn as the ToolResponse.
+    // One genuine user query and one genuine assistant answer,
+    // same turn as the ToolResponse.
     auto u1 = Message(Role.user, true, "F6 guard genuine question zebra", "");
     u1.turnId = 1;
     auto a1 = Message(Role.assistant, false, "F6 guard genuine answer quokka", "");
@@ -1598,19 +1652,18 @@ unittest {
     }
     assert(foundGood, "genuine dialogue must be indexed");
 
-    // THE F6 GUARD (a): an FTS5 phrase search for the sentinel finds
+    // THE GUARD (a): an FTS5 phrase search for the sentinel finds
     // nothing. If a future change indexed the ToolResponse content, this
     // phrase would match and the guard would trip.
     auto sent = db.queryTextSearch(SENTINEL, 100);
     assert(sent.length == 0,
-            "sentinel ToolResponse content must not be text-searchable (F6), "
+            "sentinel ToolResponse content must not be text-searchable, "
             ~ "got %s matches".format(sent.length));
     foreach (m; sent) {
-        assert(indexOf(m.text, SENTINEL) == size_t.max,
-                "no topic may contain ToolResponse content (F6)");
+        assert(indexOf(m.text, SENTINEL) == size_t.max, "no topic may contain ToolResponse content");
     }
 
-    // THE F6 GUARD (b): a wide-k semantic scan surfaces every indexed
+    // THE GUARD (b): a wide-k semantic scan surfaces every indexed
     // chunk (TestEmbedder returns all-ones vectors, so all chunks are
     // within k). None may contain the sentinel; exactly one chunk exists.
     float[] scanEmb;
@@ -1621,14 +1674,14 @@ unittest {
     assert(all.length == 1, "exactly one indexed chunk expected, got %s".format(all.length));
     foreach (m; all) {
         assert(indexOf(m.text, SENTINEL) == size_t.max,
-                "no topic may contain ToolResponse content (F6): " ~ m.text);
+                "no topic may contain ToolResponse content: " ~ m.text);
     }
 }
 
 // summary-marker regression: a merged compression summary
 // entry (buildMergedSummary shape) in a checkpoint's evicted slice must
 // never reach the session DB, and a legacy unstamped entry (turnId == 0,
-// as loaded for pre-Phase-0 sessions) is excluded the same way - while
+// as loaded for legacy sessions) is excluded the same way - while
 // genuine evicted dialogue in the same checkpoint is still indexed
 // (positive control: the filter is not over-broad). Pinned at the DB
 // level: the sentinel must be absent from every topic's content AND the
@@ -1663,13 +1716,13 @@ unittest {
     summaryMsg.saveData["summary_turn_start"] = SUM_TURN_START;
     summaryMsg.saveData["summary_turn_end"] = SUM_TURN_END;
 
-    // (b) Legacy pre-Phase-0 entry: genuine user-query shape but
+    // (b) Legacy entry: genuine user-query shape but
     //     unstamped (turnId 0, as loaded by session/store.d).
     immutable SENTINEL_LEGACY = "LEGACY-UNSTAMPED-9e2c57";
     auto legacyMsg = Message(Role.user, true, SENTINEL_LEGACY, "");
     legacyMsg.turnId = 0;
 
-    // (c) Genuine user query + assistant answer (A4 dialogue) from the
+    // (c) Genuine user query + assistant answer from the
     //     same checkpoint turn range (turn 5).
     auto u5 = Message(Role.user, true, "F10 regression genuine question", "");
     u5.turnId = 5;
@@ -1707,7 +1760,7 @@ unittest {
     assert(db.getSources().length == 1,
             "expected exactly one indexed episode, got %s".format(db.getSources().length));
 
-    // The single topic decodes (D2) to the genuine turn 5's range.
+    // The single topic decodes to the genuine turn 5's range.
     auto meta = db.getSources()[0].origin.match!((Topic t) {
         auto m = decodeTopicName(t.name);
         assert(hasValue(m), "indexed topic must decode: " ~ t.name);
@@ -1717,7 +1770,7 @@ unittest {
             "the only indexed episode must be genuine turn 5, got t%s-t%s".format(
                 meta.turnStart, meta.turnEnd));
 
-    // THE F10 GUARD (a): no indexed topic covers the summary's turn
+    // THE GUARD (a): no indexed topic covers the summary's turn
     // range (1-3). If the marker exclusion regressed, the summary would
     // be indexed as a t3_3 episode inside this range.
     bool rangeLeaks = false;
@@ -1731,24 +1784,24 @@ unittest {
             }
         }, (_) {});
     }
-    assert(!rangeLeaks, "no indexed topic may cover the summary turn range 1-3 (F10)");
+    assert(!rangeLeaks, "no indexed topic may cover the summary turn range 1-3");
 
-    // THE F10 GUARD (b): an FTS5 phrase search for the full sentinel
+    // THE GUARD (b): an FTS5 phrase search for the full sentinel
     // finds nothing (cleanFts5 quotes the hyphenated token into a
     // phrase, so this is a sound "is this string indexed?" probe).
     auto sent = db.queryTextSearch(SENTINEL_SUMMARY, 100);
     assert(sent.length == 0,
-            "merged summary content must not be text-searchable (F10), got "
-            ~ "%s matches".format(sent.length));
+            "merged summary content must not be text-searchable, got " ~ "%s matches".format(
+                sent.length));
 
     // The legacy unstamped entry is excluded the same way.
     auto leg = db.queryTextSearch(SENTINEL_LEGACY, 100);
     assert(leg.length == 0,
-            "legacy turnId==0 content must not be text-searchable (F10), got "
-            ~ "%s matches".format(leg.length));
+            "legacy turnId==0 content must not be text-searchable, got " ~ "%s matches".format(
+                leg.length));
 
     // Positive control: the genuine dialogue IS present and verbatim
-    // (both pieces in one chunk) - the F10 filter is not over-broad, and
+    // (both pieces in one chunk) - the marker filter is not over-broad, and
     // the FTS probes above are not vacuous.
     auto good = db.queryTextSearch("genuine", 100);
     bool foundGood = false;
@@ -1759,7 +1812,7 @@ unittest {
     }
     assert(foundGood, "genuine dialogue must be indexed (positive control)");
 
-    // THE F10 GUARD (c): a wide-k semantic scan surfaces every indexed
+    // THE GUARD (c): a wide-k semantic scan surfaces every indexed
     // chunk (TestEmbedder returns all-ones vectors, so all chunks are
     // within k). Neither sentinel may appear in any of them; exactly one
     // chunk exists.
@@ -1771,8 +1824,109 @@ unittest {
     assert(all.length == 1, "exactly one indexed chunk expected, got %s".format(all.length));
     foreach (m; all) {
         assert(indexOf(m.text, SENTINEL_SUMMARY) == size_t.max,
-                "no topic may contain merged summary content (F10): " ~ m.text);
+                "no topic may contain merged summary content: " ~ m.text);
         assert(indexOf(m.text, SENTINEL_LEGACY) == size_t.max,
-                "no topic may contain legacy turnId==0 content (F10): " ~ m.text);
+                "no topic may contain legacy turnId==0 content: " ~ m.text);
+    }
+}
+
+// An r_-only session DB reports no DIALOGUE history
+unittest {
+    auto s = setupTest("p2d1_r_only_no_history");
+    scope (exit)
+        teardownTest(s);
+
+    auto di = new DialogueIndex(s.tmpDir, s.cfg, s.ragCfg, &diTestFactory);
+    scope (exit)
+        di.dispose;
+    Thread.sleep(100.dur!"msecs"); // let worker start
+
+    string sid = "20240101-120000-aaaa";
+
+    // Seed ONLY an r_ (reasoning) topic - no d_ (dialogue) episodes.
+    auto rTopic = encodeTopicName(sid, 5, 5, 1700000000000L, Kind.reasoning);
+    seedTopicDb(s, sid, rTopic, "abandoned hypothesis: the root cause was a race");
+
+    // The r_ topic is physically in the DB (getSources sees it)...
+    {
+        auto qe = qEmb();
+        auto dbOpt = openDatabase((s.tmpDir ~ (sid ~ ".db")).AbsolutePath,
+                qe.modelName(), qe.dimensions(), readOnly: true);
+        assert(hasValue(dbOpt), "session DB must exist after seeding");
+        auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
+        assert(db.getSources().length == 1, "the r_ topic must be physically present in the DB");
+        db.destroy();
+    }
+
+    // ...but the dialogue query reports NO history (kind-specific detection).
+    auto result = di.query(qEmb(), SessionId(sid), "root cause", "");
+    assert(!result.hasHistory, "r_-only session must report no dialogue history");
+    assert(result.message == "No dialogue history indexed for this session yet.",
+            "unexpected no-history message: " ~ result.message);
+    assert(result.matches.length == 0, "r_-only session must return no matches");
+}
+
+// A mixed session returns only d_ matches (r_ never surfaces)
+unittest {
+    auto s = setupTest("p2d1_mixed_only_d");
+    scope (exit)
+        teardownTest(s);
+
+    auto di = new DialogueIndex(s.tmpDir, s.cfg, s.ragCfg, &diTestFactory);
+    scope (exit)
+        di.dispose;
+    Thread.sleep(100.dur!"msecs"); // let worker start
+
+    string sid = "20240101-120000-bbbb";
+
+    // (1) Worker-index a genuine d_ (dialogue) episode for turn 1.
+    auto u1 = Message(Role.user, true, "First question about the capital", "");
+    u1.turnId = 1;
+    auto a1 = Message(Role.assistant, false, "The answer to the capital question.", "");
+    a1.turnId = 1;
+    auto cp = CompressionCheckpoint(timestamp: Clock.currTime, sessionId: sid,
+            evictedSummarized: [Chat.MessageT(u1), Chat.MessageT(a1)],
+            evictedPurged: null, evictedInPlace: null, turnStart: 1, turnEnd: 1,
+            summaryText: "", originalLength: 2, newLength: 0, newContextSize: 0);
+    di.onCheckpoint(cp);
+    send(di.workerTid, DiDrain(thisTid));
+    bool drained = false;
+    receiveTimeout(10.dur!"seconds", (DiDrained _) { drained = true; });
+    assert(drained, "worker did not drain");
+
+    // (2) Directly seed an r_ (reasoning) episode for turn 5, with a
+    //     distinctive sentinel word the d_ text does not contain.
+    immutable R_SENTINEL = "REASONINGGAMMAMARKER";
+    auto rTopic = encodeTopicName(sid, 5, 5, 1700000000000L, Kind.reasoning);
+    seedTopicDb(s, sid, rTopic, "abandoned hypothesis under " ~ R_SENTINEL ~ " review");
+
+    // Non-vacuity: the r_ episode IS text-searchable at the DB level
+    // (the FTS index covers it) - so an unfiltered query WOULD surface it.
+    {
+        auto qe = qEmb();
+        auto dbOpt = openDatabase((s.tmpDir ~ (sid ~ ".db")).AbsolutePath,
+                qe.modelName(), qe.dimensions(), readOnly: true);
+        assert(hasValue(dbOpt), "session DB must exist");
+        auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
+        auto raw = db.queryTextSearch(R_SENTINEL, 10);
+        assert(raw.length >= 1, "r_ episode must be text-searchable at the DB level (non-vacuous)");
+        db.destroy();
+    }
+
+    // (3) The dialogue query for the r_-only sentinel returns ZERO matches:
+    //     the kind post-filter drops the reasoning record.
+    auto rQuery = di.query(qEmb(), SessionId(sid), R_SENTINEL, "");
+    assert(rQuery.hasHistory, "mixed session must report dialogue history");
+    assert(rQuery.matches.length == 0, "dialogue query must never surface reasoning records");
+
+    // (4) The dialogue query for the d_-only word returns ONLY d_ matches.
+    auto dQuery = di.query(qEmb(), SessionId(sid), "capital", "");
+    assert(dQuery.hasHistory);
+    assert(dQuery.matches.length >= 1, "genuine d_ dialogue must be found");
+    foreach (m; dQuery.matches) {
+        assert(m.episode.kind == Kind.dialogue,
+                "no reasoning record may surface in a dialogue query");
+        assert(indexOf(m.text, R_SENTINEL) == size_t.max,
+                "no match may contain the reasoning sentinel");
     }
 }
