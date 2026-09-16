@@ -8,6 +8,8 @@ This document describes the architecture and operational logic of our RAG (Retri
 
 The LLM acts as an autonomous researcher, equipped with multiple search tools, to actively hunt for, read, and verify information from a corpus of knowledge bases (databases). The system is designed to handle complex, multi-step coding and technical queries where the relevant information might span multiple files or require follow-up "chunk chasing."
 
+Two companion documents cover the rest of the system: `rag_design2.md` documents the indexing, embedding, and fusion pipeline internals (chunkers, embedding layout contract, the three query paths, name resolution, evaluation harness), and `database.md` documents the SQL/FTS5/RRF behavior. Section 9 below records the design's history — the pitfalls we hit, the approaches that didn't work, and what prevents regressions now.
+
 ---
 
 ## 2. Core Philosophy: Why No Traditional Reranker?
@@ -52,7 +54,7 @@ The system exposes seven core tools to the LLM. All search tools support a `data
 Every chunk is embedded with its source prepended as a prefix — `Topic: <name> | `, `Url: <url> | ` or `File: <path> | ` — before it is sent to the embedder. Only the *embedding* carries the prefix; the stored chunk text (and therefore the FTS5 index) does not.
 
 - **Why:** the embedder model can "see" which source a chunk came from, so semantic queries about the source itself work — e.g. *"what does file X say about retries"* matches that file's chunks even though no chunk text mentions the file name.
-- **Chunk budget:** the prefix eats into the embedder's batch budget, so the chunk window is `batchSize - prefixLength` (in both the grapheme-based and token-based chunkers). If the prefix alone fills the budget, nothing is reserved — the per-chunk halving fallback still protects against models that reject the input.
+- **Chunk budget:** the prefix eats into the embedder's batch budget, so the chunk window is `batchSize - prefixLength`. In the token-based chunker the budget is exact by construction (the window is built in tokens and the model's special tokens are reserved up front), and a chunk that is still rejected is dropped with a `warningf` rather than vanishing silently. The grapheme-based chunker additionally has a per-chunk halving fallback for models that reject the input.
 
 ---
 
@@ -156,4 +158,42 @@ If you are new to this system, remember these three golden rules:
 
 1. **Do not add a Cross-Encoder reranker.** The agentic loop already handles relevance sorting dynamically via the LLM's reasoning and is far more flexible for multi-document stitching.
 2. **Never hard-code a search type.** Always let the LLM diagnose the failure (Noise vs. Zero-Result vs. Conceptual) before pivoting. `queryBestMatch` is the safe default.
- 3. **Respect the 10-Call Budget.** The skill instructs the LLM to limit itself to 10 tool calls per objective. If the LLM exceeds this (it can, since it's a prompt instruction, not a code limit), it is a sign we need better RAG index quality, not a larger budget. Raising the budget drastically increases latency and context confusion.
+3. **Respect the 10-Call Budget.** The skill instructs the LLM to limit itself to 10 tool calls per objective. If the LLM exceeds this (it can, since it's a prompt instruction, not a code limit), it is a sign we need better RAG index quality, not a larger budget. Raising the budget drastically increases latency and context confusion.
+
+---
+
+## 9. Design History: Lessons & Post-Mortems
+
+Each entry follows the same skeleton: **Symptom** (what was observed) → **Root cause** → **Approaches tried (and why they failed)** → **Resolution** (the current design) → **Guard** (what prevents a regression). Full measurements and battery tables are in `rag_report2.md` at the workspace root (one level above this repository).
+
+### L1. "I want file X" — a name query is not a content ranking
+
+**Symptom.** The user asks for a document by name ("want the token spec file, by name"); the agent's searches surface *other* documents. In the eval battery, `f1`–`f3` (target `auth_token_spec.md`): semantic rank 1, `best` and `text` — absent from top-5. `f5`/`f6` work in all three modes; `f4` reaches rank 4 in `best`.
+
+**Root cause** (verified against the committed code and the battery): the name query's own words (`want`, `the`, `file`, `by`, `name`) do not appear in the target's text, and FTS5's raw `MATCH` does not strip stopwords and treats `auth_token_spec` as one token — so the target earns **no FTS score at all**, only its vector score. In `queryBestMatch`'s RRF (`RrfK = 10`, weights 1.0/1.0, pools of `topK × 10`), any chunk that *also* matches FTS earns from both engines. On the 14-chunk eval corpus the vector pool (k=50) covers the whole corpus, so **every** chunk gets a vector rank: the worst possible double score (`1/15 + 1/24 = 0.108`) exceeds the best possible single-engine score (`1/11 = 0.091`). Any FTS match therefore outranks the rank-1 vector-only hit — on small corpora. The five docs that beat the target are exactly the ones that *mention* it. On large corpora this self-heals, because few FTS hits land in the vector pool (see `rag_design2.md` §3.4).
+
+**Approaches tried (and why they failed):**
+- *Letting the vector model "see" the file name* — the source prefix (`File: <path> | `) helps when the query names the file in natural language (`f5`/`f6` work), but a bare identifier (`f2`: `auth_token_spec`) still rides on embedding luck, and a document's own text never mentions its own name.
+- *Fusion weight tuning (`FtsWeight` 2.0 → 1.0)* — fixed the "mentioning chunks flood top-K" problem on content queries (c4 `best` rank 2 → 1) but did not fix the name queries. The weights are corpus-size-dependent (see L5); the *signal* was wrong.
+
+**Resolution.** Treat the name as *metadata*, not content, and separate the two jobs: `listRAGSources` (listing + substring `filter`) resolves name → exact indexed path; `readRAGSource` (bare-name suffix resolution, bounded by `maxBytes`) reads the whole document; `queryReadFile` also resolves bare names. The `knowledge-retrieval` skill (v1.1.0) routes here: *"When a result mentions another document by name, or the user asks for 'the file X': call `listRAGSources` with a filter to resolve the exact indexed path, then `readRAGSource`."* Verified end-to-end on the committed build: a name query resolved `auth_token_spec.md` and answered correctly in 29 s (2 calls); a cross-reference chain (`auth_overview.md` → `auth_token_spec.md`) was followed and answered correctly in 55 s.
+
+**Guard.** `f1`–`f6` in the eval harness (plus the bare-name read-workflow check), and the semantic `f1 = 1` regression check. Follow-ups: `rag_design2.md` §8 (source-name signal in fusion; FTS underscore/stopword policy).
+
+### L3. BOS/EOS layout split between embedding paths
+
+**Symptom.** The string embedding path applies the model's special tokens (`add_special`) while the `int[]` path did not — indexed and queried embeddings could silently diverge. Measured on the nomic model: cosine 0.995–0.998, zero window drift. Latent, not catastrophic — but the two paths had no obligation to agree.
+
+**Approach tried (and why it failed):** baking the special tokens into the caller's token stream produced the *wrong order* — `[docPrefix, BOS, chunkPrefix, ...]` instead of llama.cpp's `[BOS, docPrefix, chunkPrefix, ...]`.
+
+**Resolution.** The embedder owns the layout: `withSpecials()` in `llama_embedder.d` wraps the `int[]` overloads with `[BOS, prefix, content, EOS]` using ids cached from `llama_vocab_get_add_bos/eos`, and the batch budget reserves `specialCount` up front. All paths now share one layout (`rag_design2.md` §2).
+
+**Guard.** `probe_embed.c` (token-for-token equivalence with `add_special=true`, cosine 1.000000) and `probe_token_drift.c` (budget exactness, drift 0).
+
+### L5. Fusion weights are a band-aid, not a fix
+
+**Symptom.** With `FtsWeight = 2.0`, `best`-mode top-K was flooded with mentioning chunks on some content queries (c4 at rank 2).
+
+**Approach tried:** halving to 1.0 fixed that case (best rank 2 → 1) and is the current value.
+
+**Lesson.** The "right" fusion weight is corpus-size-dependent (L1's arithmetic) — tuning masks missing signals rather than adding them. Prefer the correct signal (L1's name→path architecture) over weight changes. Current values: `VecWeight = FtsWeight = 1.0`, `RrfK = 10`.
