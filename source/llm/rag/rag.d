@@ -624,7 +624,7 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
             embedder.embedDocument(prefixTokens ~ tokens).match!((float[] embed) {
                 emb = embed;
             }, (EmbedError e) {
-                logger.tracef("Failed to generate embedding '%s' (toks:%s text:%s): %s",
+                logger.warningf("DROPPED chunk. Failed to generate embedding: '%s' (toks:%s text:%s): %s",
                     e.errorMsg, tokens.length, text.length, text);
             });
 
