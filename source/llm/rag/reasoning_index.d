@@ -445,7 +445,7 @@ version (unittest) {
             return EmbedResult(EmbedError("no tokens"));
         }
 
-        override int[] tokenize(string text) {
+        override int[] tokenize(string text, bool addSpecial) {
             return null;
         }
 

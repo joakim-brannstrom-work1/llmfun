@@ -27,7 +27,6 @@ unittest {
     assert(reg.argModeOf("plan") == SlashArgMode.required);
     assert(reg.argModeOf("code") == SlashArgMode.required);
     assert(reg.argModeOf("skills") == SlashArgMode.none);
-    assert(reg.argModeOf("refresh-agent-md") == SlashArgMode.none);
 }
 
 // Real built-ins dispatch through the registry.

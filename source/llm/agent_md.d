@@ -563,18 +563,8 @@ AgentMdState processAgentMd(LlmConfig config, bool noCwdConfig, RAG rag, bool fo
     return newState;
 }
 
-/// Force-refresh AGENTS.md: clears the cache and re-summarizes.
-/// Equivalent to calling processAgentMd(config, false, rag, forceRefresh: true),
-/// but provides a cleaner API for callers that only need a refresh.
-/// Returns the new AgentMdState, or a default-constructed state if no AGENTS.md is present.
-/// NOTE: @system due to RAG and SummaryAgent operations.
-AgentMdState refreshAgentMd(LlmConfig config, RAG rag) {
-    return processAgentMd(config, false, rag, forceRefresh: true);
-}
-
-// ----------------------------------------------------------------------------
 // Unit Tests: @path resolution and security
-// ----------------------------------------------------------------------------
+
 // Helper: safely remove a directory in scope(exit)
 private void safeRmdirRecurse(string path) @safe {
     import std.file : rmdirRecurse;
@@ -1215,8 +1205,8 @@ unittest {
 
 unittest {
     // Integration Test: forceRefresh workflow simulation
-    // Integration Test: forceRefresh workflow simulation
-    // Simulates the /refresh-agent-md command path
+    // Simulates processAgentMd's forceRefresh path: the stale cache is
+    // cleared before re-summarization.
     auto td = TestDataDir("forcerefresh");
     scope (exit)
         td.cleanup();
