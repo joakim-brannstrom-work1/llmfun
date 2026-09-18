@@ -1,0 +1,15 @@
+name "mylib"
+description "A library collection of algorithms and data structures for personal use"
+authors "Joakim Brännström"
+copyright "Copyright © 2019, Joakim Brännström"
+license "BSL-1.0"
+
+targetPath "build"
+targetType "library"
+
+configuration "unittest" {
+    dependency "nusilly" version="~>1.0.0"
+    dflags "-verrors=context" platform="dmd"
+    dflags "--verrors-context" platform="ldc"
+    versions "mylib_actor_trace"
+}

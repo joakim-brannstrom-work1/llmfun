@@ -55,16 +55,27 @@ struct FlatVfs {
     // found. This mean that if file "foo" is found in hierarchy[0] and in
     // hierarchy[2] the one from 0 is used.
     AbsolutePath[] getAllFiles() @safe {
+        import std.array : array;
         import std.file : exists, dirEntries, SpanMode;
+
+        // std.file.dirEntries uses dip1000-dependent instantiations: without
+        // -preview=dip1000 the returned range and its destructor are @system.
+        // Confine the scan to one @trusted scope and materialize the names
+        // eagerly so the lazy range never escapes into @safe code.
+        auto names = () @trusted {
+            return hierarchy.filter!(a => a.exists)
+                .map!(a => dirEntries(a, SpanMode.shallow))
+                .joiner
+                .map!(f => f.name)
+                .array;
+        }();
 
         bool[string] found;
         AbsolutePath[] rval;
-        foreach (f; hierarchy.filter!(a => a.exists)
-                .map!(a => dirEntries(a, SpanMode.shallow))
-                .joiner) {
-            if (f.name.baseName !in found) {
-                rval ~= AbsolutePath(f.name);
-                found[f.name.baseName] = true;
+        foreach (name; names) {
+            if (name.baseName !in found) {
+                rval ~= AbsolutePath(name);
+                found[name.baseName] = true;
             }
         }
         return rval;
