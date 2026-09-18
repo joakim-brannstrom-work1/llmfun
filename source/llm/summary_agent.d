@@ -45,6 +45,9 @@ struct SummaryAgent {
         immutable KeepLast = 5;
         immutable TokenBudget = 4096L;
         immutable ToolCallMaxLength = 200;
+        // Content cap for the text form of an erased tool response
+        // (toolPartnerErasure); matches summarizeSingleMessage's cap.
+        immutable ToolErasureResponseLength = 8196;
     }
 
     string formatMessagesToText(Chat.MessageT[] messages) {
@@ -300,31 +303,6 @@ struct SummaryAgent {
         // Step 1: Identify Y — last KeepLast messages
         auto Y = allMessages[$ - KeepLast .. $];
 
-        // Enforce token budget on verbatim Y messages
-        for (size_t i = 0; i < Y.length; i++) {
-            auto msgTokens = estimateTokens(Y[i]);
-            if (msgTokens > TokenBudget) {
-                logger.warningf("Verbatim message %s exceeds token budget (%s > %s), summarizing",
-                        i, msgTokens, TokenBudget);
-                // Capture the pre-replacement original — the in-place
-                // replacement below destroys verbatim content that never
-                // reaches evictedSummarized. Captured only on a REAL
-                // replacement: summarizeSingleMessage returns the
-                // original unchanged when the LLM fails and the content fits
-                // the truncation threshold (the trigger estimates role-
-                // prefixed length, so a narrow window triggers without
-                // replacing), and the checkpoint must not claim an eviction
-                // that never happened. When a purge also ran, the captured
-                // copy is the post-purge message.
-                auto original = Y[i];
-                bool replaced;
-                auto replacement = summarizeSingleMessage(original, replaced);
-                if (replaced)
-                    evictedInPlace ~= original;
-                Y[i] = replacement;
-            }
-        }
-
         // Step 2: Identify candidate pool — messages [1 .. $ - KeepLast] (skip system prompt)
         auto candidates = allMessages[1 .. $ - KeepLast];
         if (candidates.empty) {
@@ -356,10 +334,93 @@ struct SummaryAgent {
         // Remaining = candidates that didn't fit into X
         auto remaining = candidates[0 .. $ - xCount];
 
+        // Step 4: Keep tool pairs intact at the X|remaining boundary. Live
+        // history places a ToolResponse immediately after its ToolMessage
+        // call, so a budget break between a pair would summarize the call
+        // away and leave the response orphaned at the head of the kept
+        // tail — unbalanced tool traffic the model APIs reject. Pull the
+        // call into X (one message past the budget, the smallest
+        // correction) so the pair is kept or summarized together. If the
+        // message before the orphan is not its call (pre-existing
+        // unbalance, e.g. a legacy session file), leave it: the final
+        // balance guard after the merge erases the orphan.
+        if (!remaining.empty) {
+            auto tailFirst = X.empty ? Y[0] : X[0];
+            if (tailFirst.match!((ToolResponse m) => true, (_) => false)
+                    && remaining[$ - 1].match!((ToolMessage m) => true, (_) => false)) {
+                X = [remaining[$ - 1]] ~ X;
+                remaining = remaining[0 .. $ - 1];
+                tokensUsed += estimateTokens(X[0]);
+                logger.tracef("Pulled tool call across the X boundary to keep its pair intact");
+            }
+        }
+
         auto keptXCount = X.length;
         auto keptXTokens = tokensUsed;
 
-        // Step 4: Summarize remaining messages
+        // Step 5: Enforce token budget on verbatim Y messages. Runs after X
+        // is built so an oversized tool message can pull its strictly
+        // adjacent partner along: summarizing one side of a
+        // ToolMessage/ToolResponse pair type-erases it into a plain Message
+        // and orphans the other side, which the model APIs reject. The
+        // partner is erased in place too (both originals reach the
+        // checkpoint). A ToolResponse at Y[0] may hold its call in X (the
+        // non-oversized case is covered by Step 4's pull; the partner = -2
+        // sentinel covers this one).
+        bool[] converted = new bool[Y.length];
+        for (size_t i = 0; i < Y.length; i++) {
+            if (converted[i])
+                continue;
+            auto msgTokens = estimateTokens(Y[i]);
+            if (msgTokens <= TokenBudget)
+                continue;
+            logger.warningf("Verbatim message %s exceeds token budget (%s > %s), summarizing",
+                    i, msgTokens, TokenBudget);
+            long partner = -1;
+            Y[i].match!((Message m) {}, (VisionMessage m) {}, (ToolMessage m) {
+                if (i + 1 < Y.length && Y[i + 1].match!((ToolResponse r) => true, (_) => false))
+                    partner = i + 1;
+            }, (ToolResponse m) {
+                if (i > 0 && Y[i - 1].match!((ToolMessage t) => true, (_) => false))
+                    partner = i - 1;
+                else if (i == 0 && !X.empty && X[$ - 1].match!((ToolMessage t) => true, (_) => false))
+                    partner = -2;
+            });
+            // Capture the pre-replacement original — the in-place
+            // replacement below destroys verbatim content that never
+            // reaches evictedSummarized. Captured only on a REAL
+            // replacement: summarizeSingleMessage returns the
+            // original unchanged when the LLM fails and the content fits
+            // the truncation threshold (the trigger estimates role-
+            // prefixed length, so a narrow window triggers without
+            // replacing), and the checkpoint must not claim an eviction
+            // that never happened. When a purge also ran, the captured
+            // copy is the post-purge message.
+            auto original = Y[i];
+            bool replaced;
+            auto replacement = summarizeSingleMessage(original, replaced);
+            if (!replaced) {
+                Y[i] = replacement;
+                continue;
+            }
+            evictedInPlace ~= original;
+            Y[i] = replacement;
+
+            if (partner >= 0) {
+                auto p = cast(size_t) partner;
+                evictedInPlace ~= Y[p];
+                Y[p] = toolPartnerErasure(Y[p]);
+                converted[p] = true;
+            } else if (partner == -2) {
+                evictedInPlace ~= X[$ - 1];
+                X[$ - 1] = toolPartnerErasure(X[$ - 1]);
+            } else {
+                logger.warning("Oversized tool message in Y has no adjacent partner; "
+                        ~ "erasing it alone (the final balance guard repairs any residue)");
+            }
+        }
+
+        // Step 6: Summarize remaining messages
         auto newHistory = [allMessages[0]]; // system prompt
         string summaryText; // merged replacement summary ("" when all chunks fail)
 
@@ -382,14 +443,24 @@ struct SummaryAgent {
             }
         }
 
-        // Step 5: Build new history: [system_prompt, summaries..., X..., Y...]
+        // Step 7: Build new history: [system_prompt, summaries..., X..., Y...]
         newHistory ~= X;
         newHistory ~= Y;
 
-        chat.setHistory(newHistory);
+        // Step 8: Final balance guard — whatever slipped through (legacy
+        // unbalanced input, a multi-call ToolMessage split between its
+        // responses, an LLM failure that returned the original tool
+        // message) cannot reach the model: the APIs reject unpaired tool
+        // traffic. Erase the residue before setHistory; the repaired
+        // originals join the checkpoint payload.
+        auto repaired = repairToolBalance(newHistory);
+        if (!repaired.empty) {
+            logger.warningf("Compression left %s unbalanced tool message(s); erased to plain messages",
+                    repaired.length);
+            evictedInPlace ~= repaired;
+        }
 
-        logger.tracef("Compressed chat: %s -> %s messages (X+Y kept: %s, summarized: %s)",
-                historyLen, newHistory.length, X.length + Y.length, remaining.length);
+        chat.setHistory(newHistory);
 
         // Fire exactly one checkpoint per compression that actually evicts
         // verbatim content — remaining non-empty OR purged messages non-empty
@@ -479,6 +550,22 @@ struct SummaryAgent {
         return Chat.MessageT(replacement);
     }
 
+    // In-place erasure of a tool message whose partner was summarized:
+    // type-erased to a plain Message carrying the payload in text form —
+    // the same boundary as summarizeSingleMessage, but without an LLM
+    // round trip (the partner's content is already evicted and the point
+    // is to keep the pair from going unbalanced).
+    private Chat.MessageT toolPartnerErasure(Chat.MessageT msg) {
+        import std.string : join;
+
+        return msg.match!((Message m) => Chat.MessageT(m),
+                (VisionMessage m) => Chat.MessageT(m), (ToolMessage m) => replacementFor(Chat.MessageT(m),
+                    Role.assistant, summarizeToolCalls(m.toolCalls, ToolCallMaxLength).join("\n")),
+                (ToolResponse m) => replacementFor(Chat.MessageT(m),
+                    Role.user, summarizeToolResponse(m, ToolErasureResponseLength)));
+    }
+
+    // Summarize a single oversized message to fit within TokenBudget.
     // Summarize a single oversized message to fit within TokenBudget.
     // Returns the original message if summarization fails.
     // out replaced: true when the returned message is a NEW message (the
@@ -497,7 +584,9 @@ struct SummaryAgent {
             role = m.role;
         }, (ToolResponse m) {
             content = summarizeToolResponse(m, 8196);
-            role = m.role;
+            // A plain Message has no tool_call_id, so it must not keep the
+            // "tool" role (invalid standalone); user is the neutral side.
+            role = Role.user;
         }, (VisionMessage m) { content = m.content; role = Role.user; });
 
         // Build a minimal chat with system prompt and the message to summarize
@@ -1163,6 +1252,7 @@ unittest {
         makeToolCall("toolA", "call1"), makeToolCall("toolB", "call2")
     ]), JSONValue.init, JSONValue.init));
     chat.add(ToolResponse("resp1", "call1", "toolA", true));
+    chat.add(ToolResponse("resp1b", "call2", "toolB", true));
     chat.add(Message(Role.assistant, userQuery: false, content: "a1", thinking: null));
     chat.addUserQuery("q2");
     chat.add(ToolMessage("", JSONValue([
@@ -1173,7 +1263,7 @@ unittest {
     chat.add(Message(Role.assistant, userQuery: false, content: "a2", thinking: null));
     chat.addUserQuery("q3");
     chat.add(Message(Role.assistant, userQuery: false, content: "a3", thinking: null));
-    assert(chat.getMessages.length == 12);
+    assert(chat.getMessages.length == 13);
 
     int events = 0;
     long turnStart = -1;
@@ -1718,4 +1808,180 @@ unittest {
     assert(result.newLength == 6);
     assert(threw == 1, "the throwing listener must have been invoked");
     assert(recorderRuns == 1, "the recording listener must still run after a throwing one");
+}
+
+// A budget break landing between a ToolMessage and its immediately
+// following ToolResponse would leave the response orphaned at the head of
+// the kept tail. Step 4 pulls the call into X (one message past the
+// budget) so the pair is kept together; the final history carries the
+// intact pair and nothing for the balance guard to erase.
+unittest {
+    import std.array : replicate;
+
+    // One call whose summarized form blows past the remaining X budget, so
+    // the newest-first break lands exactly between the call and response.
+    auto callArray = parseJSON("[{\"id\": \"call1\", \"type\": \"function\", \"function\": {\"name\": \""
+            ~ "t".replicate(5000) ~ "\", \"arguments\": \"{}\"}}]");
+
+    Chat chat;
+    chat.setSystemPrompt("sys");
+    chat.addUserQuery("q1"); // turn 1
+    chat.add(Message(Role.assistant, userQuery: false, content: "ok", thinking: null));
+    chat.add(ToolMessage("", callArray, JSONValue.init, JSONValue.init));
+    chat.add(ToolResponse("ok", "call1", "t", true));
+    chat.add(Message(Role.assistant, userQuery: false, content: "x".replicate(4000), thinking: null));
+    chat.add(Message(Role.assistant, userQuery: false, content: "x".replicate(100), thinking: null));
+    chat.addUserQuery("q7"); // turn 2
+    chat.add(Message(Role.assistant, userQuery: false, content: "a7", thinking: null));
+    chat.addUserQuery("q8"); // turn 3
+    chat.add(Message(Role.assistant, userQuery: false, content: "a8", thinking: null));
+    chat.addUserQuery("q9"); // turn 4
+    assert(chat.getMessages.length == 12);
+
+    auto agent = makeTestSummaryAgent();
+    auto result = agent.compress(chat);
+
+    assert(result.compressed);
+    assert(result.keptXCount == 4); // the pulled call + response + both replies
+
+    auto msgs = chat.getMessages;
+    assert(msgs.length == 10); // 1 system + 4 X + 5 Y
+    msgs[1].match!((Message _) { assert(false, "expected the kept ToolMessage"); }, (ToolMessage m) {
+        assert(m.getFunctions.length == 1);
+        assert(m.getFunctions[0].callId == "call1");
+    }, (ToolResponse _) {}, (VisionMessage _) {});
+    msgs[2].match!((Message _) {
+        assert(false, "expected the kept ToolResponse");
+    }, (ToolMessage _) {}, (ToolResponse m) { assert(m.toolCallId == "call1"); }, (VisionMessage _) {
+    });
+
+    // The pulled pair balances: nothing left for the final guard to erase.
+    assert(repairToolBalance(msgs).empty);
+}
+
+// An oversized ToolResponse inside Y pulls its strictly preceding
+// ToolMessage along: summarizing one side type-erases it into a plain
+// Message, so the partner is erased in place too. Both originals reach the
+// checkpoint as evictedInPlace, and no tool traffic survives.
+unittest {
+    import std.array : replicate;
+
+    immutable Huge = "x".replicate(9000); // 4503 tokens > TokenBudget
+
+    auto agent = makeTestSummaryAgent();
+    size_t inPlaceCount = 0;
+    const(Chat.MessageT)[] inPlace;
+    agent.addCheckpointListener((const SummaryAgent.CompressionCheckpoint cp) {
+        inPlaceCount = cp.evictedInPlace.length;
+        inPlace = cast(Chat.MessageT[]) cp.evictedInPlace.dup;
+    });
+
+    Chat chat;
+    chat.setSystemPrompt("sys");
+    chat.addUserQuery("q1"); // turn 1
+    chat.add(Message(Role.assistant, userQuery: false, content: "ok", thinking: null));
+    chat.addUserQuery("q2"); // turn 2
+    chat.add(ToolMessage("", JSONValue([makeToolCall("t", "call1")]),
+            JSONValue.init, JSONValue.init));
+    chat.add(ToolResponse(Huge, "call1", "t", true));
+    chat.add(Message(Role.assistant, userQuery: false, content: "a3", thinking: null));
+    chat.addUserQuery("q4"); // turn 3
+    chat.add(Message(Role.assistant, userQuery: false, content: "a5", thinking: null));
+    assert(chat.getMessages.length == 9);
+
+    auto result = agent.compress(chat);
+
+    assert(result.compressed);
+    auto msgs = chat.getMessages;
+    assert(msgs.length == 9); // remaining was empty: nothing summarized away
+
+    bool anyTool;
+    foreach (m; msgs)
+        anyTool = anyTool || m.match!((Message _) => false,
+                (ToolMessage _) => true, (ToolResponse _) => true, (VisionMessage _) => false);
+    assert(!anyTool, "no tool traffic may survive the pair-wise erasure");
+
+    // The call's erasure (assistant side) keeps the ToolMessage's slot.
+    msgs[4].match!((Message m) {
+        assert(m.role == Role.assistant);
+        assert(m.turnId == 2);
+    }, (_) { assert(false, "expected the erased ToolMessage"); });
+    // The response's replacement (user side, truncated to the budget).
+    msgs[5].match!((Message m) {
+        assert(m.role == Role.user);
+        assert(m.content.length == agent.TokenBudget);
+        assert(m.turnId == 2);
+    }, (_) { assert(false, "expected the erased ToolResponse"); });
+
+    // Both originals reach the checkpoint, response first (processed first).
+    assert(inPlaceCount == 2);
+    inPlace[0].match!((Message _) {}, (ToolMessage _) {}, (ToolResponse m) {
+        assert(m.content.length == 9000);
+    }, (VisionMessage _) {});
+    inPlace[1].match!((Message _) {}, (ToolMessage m) {
+        assert(m.getFunctions.length == 1);
+    }, (ToolResponse _) {}, (VisionMessage _) {});
+}
+
+// An oversized ToolResponse at Y[0] holds its call in X (the non-oversized
+// split case Step 4 does not cover): the partner = -2 sentinel erases the
+// X-side call in place, so both sides of the pair are erased together and
+// the checkpoint carries both originals.
+unittest {
+    import std.array : replicate;
+
+    immutable Huge = "x".replicate(9000);
+
+    auto agent = makeTestSummaryAgent();
+    size_t inPlaceCount = 0;
+    const(Chat.MessageT)[] inPlace;
+    agent.addCheckpointListener((const SummaryAgent.CompressionCheckpoint cp) {
+        inPlaceCount = cp.evictedInPlace.length;
+        inPlace = cast(Chat.MessageT[]) cp.evictedInPlace.dup;
+    });
+
+    Chat chat;
+    chat.setSystemPrompt("sys");
+    chat.addUserQuery("q1"); // turn 1
+    chat.add(Message(Role.assistant, userQuery: false, content: "ok", thinking: null));
+    chat.add(ToolMessage("", JSONValue([makeToolCall("t", "call1")]),
+            JSONValue.init, JSONValue.init));
+    chat.add(ToolResponse(Huge, "call1", "t", true));
+    chat.add(Message(Role.assistant, userQuery: false, content: "a2", thinking: null));
+    chat.addUserQuery("q3"); // turn 2
+    chat.add(Message(Role.assistant, userQuery: false, content: "a4", thinking: null));
+    chat.addUserQuery("q5"); // turn 3
+    assert(chat.getMessages.length == 9);
+
+    auto result = agent.compress(chat);
+
+    assert(result.compressed);
+    auto msgs = chat.getMessages;
+    assert(msgs.length == 9);
+
+    bool anyTool;
+    foreach (m; msgs)
+        anyTool = anyTool || m.match!((Message _) => false,
+                (ToolMessage _) => true, (ToolResponse _) => true, (VisionMessage _) => false);
+    assert(!anyTool, "no tool traffic may survive the pair-wise erasure");
+
+    // X-side erasure (the call, assistant side) and Y-side replacement
+    // (the response, user side) keep their positions and turn stamps.
+    msgs[3].match!((Message m) {
+        assert(m.role == Role.assistant);
+        assert(m.turnId == 1);
+    }, (_) { assert(false, "expected the erased ToolMessage"); });
+    msgs[4].match!((Message m) {
+        assert(m.role == Role.user);
+        assert(m.content.length == agent.TokenBudget);
+        assert(m.turnId == 1);
+    }, (_) { assert(false, "expected the erased ToolResponse"); });
+
+    assert(inPlaceCount == 2);
+    inPlace[0].match!((Message _) {}, (ToolMessage _) {}, (ToolResponse m) {
+        assert(m.content.length == 9000);
+    }, (VisionMessage _) {});
+    inPlace[1].match!((Message _) {}, (ToolMessage m) {
+        assert(m.getFunctions.length == 1);
+    }, (ToolResponse _) {}, (VisionMessage _) {});
 }

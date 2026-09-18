@@ -14,6 +14,11 @@ Invariants:
   replacement - the caller owns the ordering.
 - Every non-system message added while a turn is active has turn_id > 0
   (temporary chats may stay turn 0).
+- Tool traffic is balanced: every ToolResponse.toolCallId matches a kept
+  ToolMessage call and every kept tool call has its ToolResponse. The agent
+  loop keeps pairs strictly adjacent; compression must not split a pair,
+  and repairToolBalance erases any violation to a plain Message (load()
+  heals files written by a pre-fix compression).
 - currentTurnId_ <= nextTurnId_ always; the per-session counter never
   decreases.
 - TurnIDs are strictly increasing across user queries and never re-used
@@ -32,7 +37,7 @@ expose the dialogue and reasoning views; the indexers reuse the same classifiers
 module llm.chat;
 
 import logger = std.logger;
-import std.algorithm : filter, map, sum, min, canFind;
+import std.algorithm : filter, map, sum, min, canFind, startsWith;
 import std.array : array, replace, appender;
 import std.conv : to, text;
 import std.exception : collectException;
@@ -42,7 +47,7 @@ import std.sumtype : SumType, match;
 import std.typecons : Tuple, tuple;
 import std.utf : byUTF, toUTF8, validate, UTFException;
 import llm.common.config : ApproxTokenSize;
-import llm.utility : getValue;
+import llm.utility : getValue, summarizeToolCalls, summarizeToolResponse;
 
 struct Chat {
     alias MessageT = SumType!(Message, ToolMessage, ToolResponse, VisionMessage);
@@ -184,8 +189,10 @@ struct Chat {
     // and must not reorder inside a turn; setHistory neither sorts nor stamps.
     // compress() satisfies this: its merged summary carries the summarized
     // slice's turnEnd and sits before the kept X/Y tail whose ids are
-    // >= turnEnd. prevIndex is left untouched; after a shrink lastResponses()
-    // re-anchors it to 1 when it exceeds the new length.
+    // >= turnEnd, and it leaves the replacement tool-balanced (orphan tool
+    // traffic is erased to plain Messages before the call). prevIndex is
+    // left untouched; after a shrink lastResponses() re-anchors it to 1 when
+    // it exceeds the new length.
     void setHistory(MessageT[] x) @safe nothrow {
         history = x;
     }
@@ -229,6 +236,16 @@ struct Chat {
                     (v) => v["next_turn_id"].integer, 0L));
 
             logger.tracef("Loaded previous chat history. Size %s->%s", startLen, history.length);
+            // Heals tool traffic left unbalanced by a pre-fix compression
+            // (an orphan ToolResponse, or a ToolMessage whose response was
+            // summarized away): the model APIs reject such requests, so the
+            // first request of a resumed session would otherwise fail.
+            // Idempotent and a no-op on balanced history.
+            if (auto n = repairToolBalance()) {
+                logger.warningf("Repaired %s unbalanced tool message(s) in loaded history", n);
+            }
+
+            logger.tracef("Loaded previous chat history. Size %s->%s", startLen, history.length);
         } catch (Exception e) {
             logger.trace(e).collectException;
             logger.trace(e.msg).collectException;
@@ -265,6 +282,16 @@ struct Chat {
                 modified++;
         }
         return modified;
+    }
+
+    /// Erases tool traffic in the live history that no longer balances:
+    /// a ToolResponse whose call id appears in no kept ToolMessage (orphan
+    /// response) and a ToolMessage carrying a call id with no kept
+    /// ToolResponse (dangling call) are replaced in place by plain Messages.
+    /// Returns: number of messages replaced (0 = already balanced).
+    /// See repairToolBalance for the erasure semantics.
+    size_t repairToolBalance() {
+        return llm.chat.repairToolBalance(history).length;
     }
 
     // Reconstruction for loaded entries: seed the counter from the header
@@ -1006,6 +1033,98 @@ shared static this() {
         }
         RoleLength = tmp;
     }
+}
+
+// Text-payload caps for erasure Messages (see repairToolBalance): long
+// enough to keep the tool traffic's meaning, short enough that the erased
+// history stays light.
+private enum {
+    ErasureCallLength = 200,
+    ErasureResponseLength = 4096
+}
+
+/// Erases tool traffic in the history that no longer balances: a
+/// ToolResponse whose toolCallId matches no kept ToolMessage call (orphan
+/// response) and a ToolMessage with a call id that has no kept ToolResponse
+/// (dangling call) are replaced in place by plain Messages carrying the
+/// payload in text form. Model APIs reject histories with unpaired tool
+/// traffic, so this is the last line of defence: compress() applies it
+/// before setHistory, load() with it heals session files written by a
+/// pre-fix compression. The fixpoint loop covers partially paired multi-call
+/// ToolMessages (erasing the call also orphans the still-paired responses).
+/// Returns: the erased originals in order (empty = history was balanced).
+public Chat.MessageT[] repairToolBalance(ref Chat.MessageT[] history) {
+    import std.string : join;
+
+    Chat.MessageT[] replaced;
+    while (true) {
+        bool[string] hasCall;
+        bool[string] hasResponse;
+        foreach (msg; history) {
+            msg.match!((Message m) {}, (ToolMessage m) {
+                foreach (f; m.getFunctions()) {
+                    if (!f.callId.empty)
+                        hasCall[f.callId] = true;
+                }
+            }, (ToolResponse m) {
+                if (!m.toolCallId.empty)
+                    hasResponse[m.toolCallId] = true;
+            }, (VisionMessage m) {});
+        }
+
+        bool found;
+        foreach (i, ref msg; history) {
+            msg.match!((Message m) {}, (ToolMessage m) {
+                bool dangling;
+                foreach (f; m.getFunctions()) {
+                    if (!f.callId.empty && !(f.callId in hasResponse))
+                        dangling = true;
+                }
+                if (dangling) {
+                    replaced ~= msg;
+                    msg = toolErasureFor(msg, Role.assistant,
+                        "[tool call without a response after context compression: " ~ summarizeToolCalls(m.toolCalls,
+                        ErasureCallLength).join("\n") ~ "]");
+                    found = true;
+                }
+            }, (ToolResponse m) {
+                if (!m.toolCallId.empty && !(m.toolCallId in hasCall)) {
+                    replaced ~= msg;
+                    msg = toolErasureFor(msg, Role.user,
+                        "[orphan tool response after context compression: " ~ summarizeToolResponse(m,
+                        ErasureResponseLength) ~ "]");
+                    found = true;
+                }
+            }, (VisionMessage m) {});
+        }
+        if (!found)
+            break;
+    }
+    return replaced;
+}
+
+// Builds the plain Message replacement for an erased tool message: text
+// payload in content, the original's turnId (keeps the (turn_id, position)
+// ordering) and a fresh copy of saveData (a JSONValue copy would alias the
+// caller's AA, and the caller keeps its own copy for the checkpoint).
+private Chat.MessageT toolErasureFor(Chat.MessageT original, Role role, string content) {
+    JSONValue saveData;
+    original.match!((Message m) { saveData = m.saveData; }, (ToolMessage m) {
+        saveData = m.saveData;
+    }, (ToolResponse m) { saveData = m.saveData; }, (VisionMessage m) {
+        saveData = JSONValue.init;
+    });
+    if (saveData.type == JSONType.object) {
+        JSONValue fresh;
+        foreach (key, val; saveData.object) {
+            fresh[key] = val;
+        }
+        saveData = fresh;
+    }
+    auto replacement = Message(role, userQuery: false, content: content,
+            thinking: null, saveData: saveData);
+    replacement.turnId = turnIdOf(original);
+    return Chat.MessageT(replacement);
 }
 
 @("TurnIDs are unique and strictly increasing within one Chat")
@@ -1902,4 +2021,123 @@ unittest {
     });
 
     assert(chat.sanitizeHistory() == 0); // idempotent: healed history is valid
+}
+
+@("repairToolBalance leaves a balanced tool history untouched")
+unittest {
+    Chat chat;
+    chat.add(Message(Role.system, userQuery: false, content: "sys", thinking: null));
+    chat.add(Message(Role.user, userQuery: true, content: "q1", thinking: null));
+    chat.add(ToolMessage("think", parseJSON(
+            "[{\"id\": \"c1\", \"type\": \"function\", "
+            ~ "\"function\": {\"name\": \"t\", \"arguments\": \"{}\"}}]")));
+    chat.add(ToolResponse("out", "c1", "t", true));
+    chat.add(Message(Role.assistant, userQuery: false, content: "a1", thinking: null));
+
+    assert(chat.repairToolBalance() == 0); // balanced: nothing to repair
+
+    chat.getMessages[2].match!((Message _) {
+        assert(false, "TM must keep its type");
+    }, (ToolMessage m) { assert(m.getFunctions.length == 1); }, (ToolResponse _) {
+        assert(false, "TM must keep its type");
+    }, (VisionMessage _) {});
+    chat.getMessages[3].match!((Message _) {
+        assert(false, "TR must keep its type");
+    }, (ToolMessage _) {}, (ToolResponse m) { assert(m.toolCallId == "c1"); }, (VisionMessage _) {
+    });
+}
+
+@("repairToolBalance erases an orphan ToolResponse to a plain user Message")
+unittest {
+    Chat chat;
+    chat.add(Message(Role.system, userQuery: false, content: "sys", thinking: null));
+    chat.add(Message(Role.user, userQuery: true, content: "q1", thinking: null));
+    chat.add(ToolResponse("out", "c1", "t", true)); // no ToolMessage carries c1
+    chat.add(Message(Role.assistant, userQuery: false, content: "a1", thinking: null));
+
+    assert(chat.repairToolBalance() == 1);
+    assert(chat.length == 4); // nothing discarded, erased in place
+
+    chat.getMessages[2].match!((Message m) {
+        assert(m.role == Role.user);
+        assert(m.content.startsWith("[orphan tool response after context compression: "));
+        assert(m.content.canFind("out"));
+        assert(m.turnId == 1); // the turn stamp survives the erasure
+    }, (ToolMessage _) { assert(false, "the orphan must be erased"); }, (ToolResponse _) {
+        assert(false, "the orphan must be erased");
+    }, (VisionMessage _) {});
+}
+
+@("repairToolBalance erases a dangling ToolMessage to a plain assistant Message")
+unittest {
+    Chat chat;
+    chat.add(Message(Role.system, userQuery: false, content: "sys", thinking: null));
+    chat.add(Message(Role.user, userQuery: true, content: "q1", thinking: null));
+    chat.add(ToolMessage("think", parseJSON(
+            "[{\"id\": \"c1\", \"type\": \"function\", "
+            ~ "\"function\": {\"name\": \"t\", \"arguments\": \"{}\"}}]"))); // no response for c1
+    chat.add(Message(Role.assistant, userQuery: false, content: "a1", thinking: null));
+
+    assert(chat.repairToolBalance() == 1);
+
+    chat.getMessages[2].match!((Message m) {
+        assert(m.role == Role.assistant);
+        assert(m.content.startsWith("[tool call without a response after context compression: "));
+        assert(m.content.canFind("t()"));
+        assert(m.turnId == 1);
+    }, (ToolMessage _) { assert(false, "the dangling call must be erased"); }, (ToolResponse _) {
+    }, (VisionMessage _) {});
+}
+
+@("repairToolBalance fixpoint: erasing a partially paired call orphans the still-paired response")
+unittest {
+    Chat chat;
+    chat.add(Message(Role.system, userQuery: false, content: "sys", thinking: null));
+    chat.add(Message(Role.user, userQuery: true, content: "q1", thinking: null));
+    chat.add(ToolMessage("think", parseJSON(
+            "[{\"id\": \"c1\", \"type\": \"function\", " ~ "\"function\": {\"name\": \"t\", \"arguments\": \"{}\"}}, "
+            ~ "{\"id\": \"c2\", \"type\": \"function\", "
+            ~ "\"function\": {\"name\": \"u\", \"arguments\": \"{}\"}}]")));
+    chat.add(ToolResponse("out1", "c1", "t", true)); // c2 has no response
+
+    assert(chat.repairToolBalance() == 2); // the call (c2 dangling) and the response it orphans
+    assert(chat.length == 4);
+
+    chat.getMessages[2].match!((Message m) {
+        assert(m.role == Role.assistant);
+        assert(m.content.startsWith("[tool call without a response after context compression: "));
+    }, (_) { assert(false, "the call must be erased"); });
+    chat.getMessages[3].match!((Message m) {
+        assert(m.role == Role.user);
+        assert(m.content.startsWith("[orphan tool response after context compression: "));
+        assert(m.content.canFind("out1"));
+    }, (_) { assert(false, "the orphaned response must be erased"); });
+}
+
+@("load heals a legacy file whose tool traffic is unbalanced (pre-fix compression artifact)")
+unittest {
+    auto chat = Chat();
+    auto doc = parseJSON(`{
+        "messages": [
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "first", "save_data": {"user": true}},
+            {"role": "tool", "content": "out", "tool_call_id": "c1", "name": "t"},
+            {"role": "assistant", "content": "ans1"}
+        ]
+    }`);
+    chat.load(doc);
+
+    auto msgs = chat.getMessages; // [system, hello, first, out-erased, ans1]
+    assert(msgs.length == 5);
+    msgs[3].match!((Message m) {
+        assert(m.role == Role.user);
+        assert(m.content.startsWith("[orphan tool response after context compression: "));
+        assert(m.content.canFind("out"));
+    }, (ToolMessage _) { assert(false, "the orphan must be erased"); }, (ToolResponse _) {
+        assert(false, "the orphan must be erased");
+    }, (VisionMessage _) {});
+    assert(turnIdOf(msgs[3]) == 1); // the erasure keeps the turn stamp
+    // Balanced entries stay untouched.
+    msgs[4].match!((Message m) { assert(m.content == "ans1"); }, (ToolMessage _) {
+    }, (ToolResponse _) {}, (VisionMessage _) {});
 }
