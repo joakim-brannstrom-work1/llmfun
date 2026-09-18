@@ -282,6 +282,43 @@ struct StrongAddress {
     }
 }
 
-StrongAddress makeAddress2() @safe {
+/// An address that carries the actor's type: the result of `spawn!T`.
+/// Holding it lets `Channel!I` verify at compile time that the actor class
+/// implements `I`; erase explicitly (`.weakRef`) when the type must travel
+/// untyped (message payloads, dynamic sends).
+struct TypedAddress(T) {
+    private StrongAddress addr_;
+
+    /// Wrap an address of a known actor type (normally done by `spawn!T`).
+    this(StrongAddress addr) @safe nothrow @nogc {
+        this.addr_ = addr;
+    }
+
+    /// Strong form of the address.
+    @property StrongAddress addr() @safe nothrow @nogc {
+        return addr_;
+    }
+
+    /// Weak form — use it when the address travels, or for dynamic sends.
+    @property WeakAddress weakRef() @safe nothrow {
+        return addr_.weakRef;
+    }
+
+    /// True when the address is unset.
+    @property bool empty() @safe pure nothrow const @nogc scope {
+        return addr_.empty;
+    }
+
+    bool opCast(B : bool)() @safe nothrow const @nogc {
+        return cast(bool) addr_;
+    }
+}
+
+/// `true` when `T` is a `TypedAddress!U`.
+template isTypedAddress(T) {
+    enum isTypedAddress = is(T : TypedAddress!U, U);
+}
+
+StrongAddress makeAddress() @safe {
     return StrongAddress(new Address(new Mutex));
 }

@@ -1,5 +1,5 @@
 /**
-Copyright: Copyright (c) 2021, Joakim Brännström. All rights reserved.
+Copyright: Copyright (c) Joakim Brännström. All rights reserved.
 License: $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost Software License 1.0)
 Author: Joakim Brännström (joakim.brannstrom@gmx.com)
 
@@ -7,14 +7,12 @@ Allocators used by system.
 */
 module my.actor.memory;
 
-import my.actor.actor : Actor, ActorState;
-import my.actor.mailbox : StrongAddress, makeAddress2;
+import my.actor.actor : ActorShell, ActorState;
+import my.actor.mailbox : StrongAddress, makeAddress;
 
-/** Assuming that the `System` instance ensure that only actors creating with
- * the allocator are deallocated. If everything goes OK it means that an actor
- * reach the state `shutdown` and is then disposed of by `System`.
- *
- */
+/** Assumes that the `System` instance ensures that only actors created with
+ * this allocator are deallocated through it; in the normal flow an actor
+ * reaches `shutdown` and is then disposed of by the `System`. */
 struct ActorAlloc {
     import core.memory : GC;
     import std.experimental.allocator.mallocator : Mallocator;
@@ -22,18 +20,18 @@ struct ActorAlloc {
     // lazy for now and just use the global allocator.
     alias allocator_ = Mallocator.instance;
 
-    enum Sz = Actor.sizeof;
+    enum Sz = ActorShell.sizeof;
 
-    Actor* make(StrongAddress addr) @trusted {
+    ActorShell* make(StrongAddress addr) @trusted {
         import std.experimental.allocator : make;
 
-        auto rval = make!Actor(allocator_, addr);
+        auto rval = make!ActorShell(allocator_, addr);
         GC.addRange(rval, Sz);
 
         return rval;
     }
 
-    void dispose(Actor* a) @trusted
+    void dispose(ActorShell* a) @trusted
     in (a.state_ == ActorState.stopped, "actors must be stopped before disposed") {
         static import my.alloc.dispose_;
 
@@ -52,7 +50,7 @@ unittest {
 
     ActorAlloc aa;
     foreach (_1; 0 .. 10) {
-        auto addr = makeAddress2;
+        auto addr = makeAddress;
         auto a = aa.make(addr);
 
         // adding a StrongAddress is normally blocked by the user BUT the
