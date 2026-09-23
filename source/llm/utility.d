@@ -236,7 +236,7 @@ void playNotification() {
 
 private shared bool signalStopAgent;
 
-void stopAgent() nothrow @nogc @system {
+void stopAgent() nothrow @nogc @safe {
     .signalStopAgent = true;
 }
 

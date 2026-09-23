@@ -4,7 +4,6 @@
 module llm.app_agent.ui;
 
 import std.array : empty;
-import std.concurrency : Tid, send;
 import std.conv : text;
 import std.format : format;
 import std.stdio : writeln;
@@ -13,134 +12,406 @@ import llm.types : ServerStat, StreamMessage, StreamToolCall, IStreamCallback;
 import llm.tui; // Ui* message types (UiChatMessage, UiPipelineClear, ...)
 import llmfun_tui; // TuiChatMessageType (C binding)
 import my.path : Path;
+import my.actor.channel : Channel;
+import my.actor.mailbox : TypedAddress;
 
-/// Message bridge between the agent thread and the TUI thread.
-/// In blocked (one-shot) mode all messages go to stdout via writeln.
+/// One-way sink for agent->TUI messages. Abstracts where TUI traffic goes so
+/// the agent can target a live TUI actor (channel), the console (one-shot),
+/// or a recording buffer (tests) without the call sites changing.
+interface TuiSink {
+    bool isActive();
+    void ready();
+    void busy();
+    void terminate();
+    void chatMessage(string msg, TuiChatMessageType type);
+    void chatThinkMessage(string msg, string thinking, TuiChatMessageType type);
+    void statusText(string status);
+    void finalAnswer(string msg);
+    void clearChat();
+    void logFile(bool useFile);
+    void setIniFile(string path);
+    void streamStatusText(string status);
+    void streamChatMessage(string msg, string thinking);
+    void streamChatDone();
+    void pipelineStreamChatMessage(string agentId, string content,
+            string thinking, string role, string status);
+    void pipelineStreamDone(string agentId);
+    void pipelineClear();
+    void sessionList(const(UiSessionItem)[] items);
+    void initHistory(immutable(string)[] history);
+}
+
+/// Production sink: each call is one checked message on the TUI actor's
+/// Channel (task 5/6 spawn the actor and hand its address in here).
+class TuiChannelSink : TuiSink {
+    private Channel!TUICommands ch;
+
+    this(TypedAddress!TextUserInterfaceActor addr) {
+        // Send-only channel: self is null (every TUICommands method is void).
+        ch = Channel!TUICommands(addr, null);
+    }
+
+    override bool isActive() {
+        return true;
+    }
+
+    override void ready() {
+        ch.uiAgentReady();
+    }
+
+    override void busy() {
+        ch.uiAgentBusy();
+    }
+
+    override void terminate() {
+        ch.uiTerminate();
+    }
+
+    override void chatMessage(string msg, TuiChatMessageType type) {
+        ch.uiMsg(UiChatMessage(msg, type));
+    }
+
+    override void chatThinkMessage(string msg, string thinking, TuiChatMessageType type) {
+        ch.uiMsg(UiChatThinkMessage(msg, thinking, type));
+    }
+
+    override void statusText(string status) {
+        ch.uiMsg(UiStatusText(status));
+    }
+
+    override void finalAnswer(string msg) {
+        ch.uiMsg(UiFinalAnswer(msg));
+    }
+
+    override void clearChat() {
+        ch.uiClearChat();
+    }
+
+    override void logFile(bool useFile) {
+        ch.uiMsg(UiLogFile(useFile));
+    }
+
+    override void setIniFile(string path) {
+        ch.uiMsg(UiSetIniFile(Path(path)));
+    }
+
+    override void streamStatusText(string status) {
+        ch.uiMsg(UiStatusText(status));
+    }
+
+    override void streamChatMessage(string msg, string thinking) {
+        ch.uiMsg(UiStreamChatMessage(msg, thinking));
+    }
+
+    override void streamChatDone() {
+        ch.uiStreamChatDone();
+    }
+
+    override void pipelineStreamChatMessage(string agentId, string content,
+            string thinking, string role, string status) {
+        ch.uiMsg(UiPipelineStreamChatMessage(agentId, content, thinking, role, status));
+    }
+
+    override void pipelineStreamDone(string agentId) {
+        ch.uiMsg(UiPipelineStreamDone(agentId));
+    }
+
+    override void pipelineClear() {
+        ch.uiPipelineClear();
+    }
+
+    override void sessionList(const(UiSessionItem)[] items) {
+        ch.uiMsg(UiSessionList(items));
+    }
+
+    override void initHistory(immutable(string)[] history) {
+        ch.uiMsg(UiInitHistory(history));
+    }
+}
+
+/// Blocked (one-shot) sink: exact legacy writeln semantics. Streaming and
+/// status messages are dropped (one-shot mode only emits final output).
+class TuiBlockedSink : TuiSink {
+    override bool isActive() {
+        return false;
+    }
+
+    override void ready() {
+    }
+
+    override void busy() {
+    }
+
+    override void terminate() {
+    }
+
+    override void chatMessage(string msg, TuiChatMessageType type) {
+        writeln(msg);
+    }
+
+    override void chatThinkMessage(string msg, string thinking, TuiChatMessageType type) {
+        if (!thinking.empty)
+            writeln("Thinking: ", thinking);
+        writeln(msg);
+    }
+
+    override void statusText(string status) {
+    }
+
+    override void finalAnswer(string msg) {
+        writeln(msg);
+    }
+
+    override void clearChat() {
+    }
+
+    override void logFile(bool useFile) {
+    }
+
+    override void setIniFile(string path) {
+    }
+
+    override void streamStatusText(string status) {
+    }
+
+    override void streamChatMessage(string msg, string thinking) {
+    }
+
+    override void streamChatDone() {
+    }
+
+    override void pipelineStreamChatMessage(string agentId, string content,
+            string thinking, string role, string status) {
+    }
+
+    override void pipelineStreamDone(string agentId) {
+    }
+
+    override void pipelineClear() {
+    }
+
+    override void sessionList(const(UiSessionItem)[] items) {
+    }
+
+    override void initHistory(immutable(string)[] history) {
+    }
+}
+
+/// Test sink: records every call so tests can assert what the agent sent to
+/// the TUI without a live UI thread (task 7/9).
+class TuiRecordingSink : TuiSink {
+    struct Call {
+        string kind; // method name, e.g. "chatMessage"
+        string payload; // best-effort summary of the arguments
+    }
+
+    Call[] calls;
+
+    /// chatMessage payloads in call order (most recent last).
+    string[] chatMessages;
+    /// sessionList snapshots in call order; items are copied at record time
+    /// so later store mutations cannot leak into the recording.
+    UiSessionItem[][] sessionLists;
+
+    /// Number of recorded calls of `kind` (0 if none).
+    int countOf(string kind) const {
+        int n;
+        foreach (c; calls)
+            if (c.kind == kind)
+                n++;
+        return n;
+    }
+
+    /// Most recently recorded chatMessage payload ("" if none).
+    string lastChatMessage() {
+        return chatMessages.length == 0 ? "" : chatMessages[chatMessages.length - 1];
+    }
+
+    /// Most recently recorded sessionList snapshot (empty if none).
+    UiSessionItem[] lastSessionList() {
+        return sessionLists.length == 0 ? null : sessionLists[sessionLists.length - 1];
+    }
+
+    private void record(string kind, string payload = "") {
+        calls ~= Call(kind, payload);
+    }
+
+    override bool isActive() {
+        return true;
+    }
+
+    override void ready() {
+        record("ready");
+    }
+
+    override void busy() {
+        record("busy");
+    }
+
+    override void terminate() {
+        record("terminate");
+    }
+
+    override void chatMessage(string msg, TuiChatMessageType type) {
+        chatMessages ~= msg;
+        record("chatMessage", msg);
+    }
+
+    override void chatThinkMessage(string msg, string thinking, TuiChatMessageType type) {
+        record("chatThinkMessage", msg ~ "\n[thinking] " ~ thinking);
+    }
+
+    override void statusText(string status) {
+        record("statusText", status);
+    }
+
+    override void finalAnswer(string msg) {
+        record("finalAnswer", msg);
+    }
+
+    override void clearChat() {
+        record("clearChat");
+    }
+
+    override void logFile(bool useFile) {
+        record("logFile", useFile ? "on" : "off");
+    }
+
+    override void setIniFile(string path) {
+        record("setIniFile", path);
+    }
+
+    override void streamStatusText(string status) {
+        record("streamStatusText", status);
+    }
+
+    override void streamChatMessage(string msg, string thinking) {
+        record("streamChatMessage", msg);
+    }
+
+    override void streamChatDone() {
+        record("streamChatDone");
+    }
+
+    override void pipelineStreamChatMessage(string agentId, string content,
+            string thinking, string role, string status) {
+        record("pipelineStreamChatMessage", agentId ~ ": " ~ content);
+    }
+
+    override void pipelineStreamDone(string agentId) {
+        record("pipelineStreamDone", agentId);
+    }
+
+    override void pipelineClear() {
+        record("pipelineClear");
+    }
+
+    override void sessionList(const(UiSessionItem)[] items) {
+        auto copy = new UiSessionItem[items.length];
+        foreach (i, ref const it; items)
+            copy[i] = it;
+        sessionLists ~= copy;
+        record("sessionList", "n=" ~ items.length.text);
+    }
+
+    override void initHistory(immutable(string)[] history) {
+        record("initHistory", "n=" ~ history.length.text);
+    }
+}
+
+/// Message bridge between the agent and the TUI. A thin delegate over a
+/// TuiSink: the public API is unchanged, but the destination of the traffic is
+/// now chosen by the injected sink (channel for the actor, console for
+/// one-shot, recording for tests).
 class UiMessenger {
-    Tid uiTid;
-    bool blocked;
+    TuiSink sink;
 
-    this(Tid t, bool b = false) {
-        uiTid = t;
-        blocked = b;
+    /// Production/test: wrap an existing sink (e.g. TuiChannelSink,
+    /// TuiBlockedSink, TuiRecordingSink).
+    this(TuiSink s) {
+        sink = s;
     }
 
     bool isActive() {
-        return !blocked;
+        return sink.isActive();
     }
 
+    // No-op: a sink's mode is fixed at construction; kept for API parity
+    // with the legacy UiMessenger.
     void setActive(bool onOff) {
-        blocked = !onOff;
     }
 
     void ready() {
-        if (blocked)
-            return;
-        send(uiTid, UiAgentReady.init);
+        sink.ready();
     }
 
     void busy() {
-        if (blocked)
-            return;
-        send(uiTid, UiAgentBusy.init);
+        sink.busy();
     }
 
     void terminate() {
-        if (blocked)
-            return;
-        if (uiTid == Tid.init)
-            return; // safety: no UI thread to terminate
-        send(uiTid, UiTerminate.init);
+        sink.terminate();
     }
 
     void chatMessage(string msg, TuiChatMessageType type) {
-        if (blocked) {
-            writeln(msg);
-        } else {
-            send(uiTid, UiChatMessage(msg, type));
-        }
+        sink.chatMessage(msg, type);
     }
 
     void chatThinkMessage(string msg, string thinking, TuiChatMessageType type) {
-        if (blocked) {
-            if (!thinking.empty) {
-                writeln("Thinking: ", thinking);
-            }
-            writeln(msg);
-        } else {
-            send(uiTid, UiChatThinkMessage(msg, thinking, type));
-        }
+        sink.chatThinkMessage(msg, thinking, type);
     }
 
     void statusText(string status) {
-        if (blocked)
-            return;
-        send(uiTid, UiStatusText(status));
+        sink.statusText(status);
     }
 
     void finalAnswer(string msg) {
-        if (blocked) {
-            writeln(msg);
-        } else {
-            send(uiTid, UiFinalAnswer(msg));
-        }
+        sink.finalAnswer(msg);
     }
 
     void clearChat() {
-        if (blocked)
-            return;
-        send(uiTid, UiClearChat.init);
+        sink.clearChat();
     }
 
     void logFile(bool useFile) {
-        if (blocked)
-            return;
-        send(uiTid, UiLogFile(useFile));
+        sink.logFile(useFile);
     }
 
     void setIniFile(string path) {
-        if (blocked)
-            return;
-        send(uiTid, UiSetIniFile(Path(path)));
+        sink.setIniFile(path);
     }
 
-    // Streaming methods — silently skipped in blocked (one-shot) mode.
-    // One-shot mode produces final output via writeln in chatMessage/finalAnswer;
-    // incremental streaming feedback is not needed.
     void streamStatusText(string status) {
-        statusText(status); // delegate to canonical method
+        sink.streamStatusText(status);
     }
 
     void streamChatMessage(string msg, string thinking) {
-        if (blocked)
-            return;
-        send(uiTid, UiStreamChatMessage(msg: msg, thinking: thinking));
+        sink.streamChatMessage(msg, thinking);
     }
 
     void streamChatDone() {
-        if (blocked)
-            return;
-        send(uiTid, UiStreamChatDone.init);
+        sink.streamChatDone();
     }
 
     void pipelineStreamChatMessage(string agentId, string content,
             string thinking, string role, string status) {
-        if (blocked)
-            return;
-        send(uiTid, UiPipelineStreamChatMessage(agentId: agentId, content: content,
-                thinking: thinking, role: role, status: status));
+        sink.pipelineStreamChatMessage(agentId, content, thinking, role, status);
     }
 
     void pipelineStreamDone(string agentId) {
-        if (blocked)
-            return;
-        send(uiTid, UiPipelineStreamDone(agentId));
+        sink.pipelineStreamDone(agentId);
     }
 
     void pipelineClear() {
-        if (blocked)
-            return;
-        send(uiTid, UiPipelineClear.init);
+        sink.pipelineClear();
+    }
+
+    void sessionList(const(UiSessionItem)[] items) {
+        sink.sessionList(items);
+    }
+
+    void initHistory(immutable(string)[] history) {
+        sink.initHistory(history);
     }
 }
 

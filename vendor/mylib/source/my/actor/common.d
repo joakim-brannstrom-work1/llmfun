@@ -7,6 +7,7 @@ module my.actor.common;
 
 import logger = std.logger;
 
+import core.sync.condition : Condition;
 import core.sync.mutex : Mutex;
 
 /** Multiple producer, "single" consumer thread safe queue.
@@ -97,6 +98,39 @@ struct Queue(RawT) {
                 auto tmp = data.front;
                 data.removeFront;
                 length_--;
+                return typeof(return)(tmp);
+            }
+        }
+
+        return typeof(return).init;
+    }
+
+    /** Pop a message and, if one was removed, wake `cond` while still
+     * holding the queue lock.
+     *
+     * Needed by the bounded incoming mailbox: the pop is the moment a slot
+     * frees, and non-actor senders waiting on the bound must be woken in
+     * the same critical section that frees it or the wakeup is lost.
+     * `cond` must be bound to this queue's lock. `null` behaves like `pop`.
+     *
+     * The Item is returned directly from the critical section: if it were
+     * bound to a local first and then returned, the local's destructor
+     * (`*ptr = T.init`) would null the popped slot before the caller's
+     * copy could read it.
+     */
+    Item!(T*) popNotifying(Condition cond) @trusted scope {
+        synchronized (mtx) {
+            if (!empty) {
+                auto tmp = data.front;
+                data.removeFront;
+                length_--;
+                if (cond !is null) {
+                    // Insurance: a condition bound to a different lock would
+                    // wake the wrong waiters.
+                    assert(cond.mutex_nothrow is this.mtx,
+                            "popNotifying: condition detached from queue lock");
+                    cond.notifyAll;
+                }
                 return typeof(return)(tmp);
             }
         }

@@ -21,7 +21,8 @@ import my.actor.registration : countMethods, messageMethod;
 
 /// Box the send arguments the same way `implActor` unboxes them at dispatch:
 /// an empty tuple for zero-arg messages, a `Tuple!UArgs` otherwise.
-private Variant makePayload(Args...)(auto ref Args args) @trusted {
+/// Package-visible: `my.actor.behavior` reuses it for `ActorRef` sends.
+package Variant makePayload(Args...)(auto ref Args args) @trusted {
     alias UArgs = staticMap!(Unqual, Args);
     static if (UArgs.length == 0)
         return Variant(tuple());

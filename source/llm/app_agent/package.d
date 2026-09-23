@@ -75,13 +75,12 @@ struct AgentApp {
     }
 
     private bool oneShotQuery;
-    package Tid uiTid;
 
     @disable this(this);
 
     this(UserConfig.AgentChatConfig conf) {
         this.conf_ = conf;
-        this.uiMsg = new UiMessenger(Tid.init, true);
+        this.uiMsg = new UiMessenger(new TuiBlockedSink());
         registerBuiltinCommands(slashCommands_);
         foreach (cmd; startupSlashCommands()) {
             auto ignore = slashCommands_.register(cmd);
@@ -95,9 +94,10 @@ struct AgentApp {
 
     /// Public plugin seam: access the live command registry (e.g. to render
     /// help text or list command names for TUI completion).
-    /// Not thread-safe: register commands before `run()` (or at module load
-    /// via `addStartupSlashCommand`); concurrent `register` from another
-    /// thread while the TUI dispatches is a data race.
+    /// Not thread-safe: register commands before the agent actor starts
+    /// (or at module load via `addStartupSlashCommand`); concurrent
+    /// `register` from another thread while the TUI dispatches is a data
+    /// race.
     public ref SlashCommandRegistry slashCommands() {
         return slashCommands_;
     }
@@ -112,14 +112,6 @@ struct AgentApp {
             dialogueIndex.dispose();
             dialogueIndex = null;
         }
-        if (uiTid != Tid.init) {
-            try {
-                uiMsg.terminate();
-            } catch (Exception) {
-                // UI thread may have already terminated
-            }
-            uiTid = Tid.init;
-        }
         if (rag) {
             rag.destroy;
             rag = null;
@@ -133,11 +125,12 @@ struct AgentApp {
                 commitActiveSession();
             }
             // Empty-session cleanup on clean exit, after the final commit.
-            // The store guard is REQUIRED: dispose() runs on the scope(exit)
-            // path and a failed setupSession leaves the store null while
-            // agent_ is already set. The active session is exempted even
-            // when empty. Single-writer: the sweep runs on the agent thread
-            // only; it never touches state.json (saved below, unchanged order).
+            // The store guard is REQUIRED: dispose() runs on the actor
+            // failure paths (start() catch / hooks) and a failed
+            // setupSession leaves the store null while agent_ is already
+            // set. The active session is exempted even when empty.
+            // Single-writer: the sweep runs on the agent thread only; it
+            // never touches state.json (saved below, unchanged order).
             if (sessionStore) {
                 try {
                     auto swept = sessionStore.sweepEmptySessions(activeSession.id);
@@ -331,7 +324,7 @@ struct AgentApp {
         }
 
         if (uiMsg.isActive()) {
-            send(uiTid, UiInitHistory(agent_.getUserQueries.map!(a => a.content).array.idup));
+            uiMsg.initHistory(agent_.getUserQueries.map!(a => a.content).array.idup);
         }
 
         activeSession = sf.meta;
@@ -374,21 +367,18 @@ struct AgentApp {
         auto dt = (UnixEpoch + unixSec.dur!"seconds").toLocalTime();
         auto now = Clock.currTime();
 
-        // Same day: show time only
         if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
             return format("%02d:%02d", dt.hour, dt.minute);
         }
-        // Same year: show month abbreviation and day
         if (dt.year == now.year) {
             return format("%s %02d", MonthAbbr[cast(size_t)(dt.month - 1)], dt.day);
         }
-        // Different year: full date
         return format("%04d-%02d-%02d", dt.year, dt.month, dt.day);
     }
 
     /** Extract the short id (hex suffix) from a full session id. */
     package static string shortSessionId(SessionId id) @safe pure nothrow {
-        // Format: YYYYMMDD-HHMMSS-NNNN — return the last 4 hex chars
+        // id format: YYYYMMDD-HHMMSS-NNNN
         auto idStr = id.get;
         ptrdiff_t pos = -1;
         foreach (i, c; idStr) {
@@ -435,7 +425,6 @@ struct AgentApp {
     package void doCreateSession() {
         auto newMeta = sessionStore.create();
         switchToSession(newMeta.id);
-        // Confirmation message sent in the new session's context
         this.sendChatMessage("Created new session: '%s' (%s)",
                 TuiChatMessageType_Assistant, newMeta.title, shortSessionId(newMeta.id));
     }
@@ -559,14 +548,14 @@ struct AgentApp {
      */
     package void sendSessionList() {
         if (!uiMsg.isActive())
-            return; // one-shot mode: no UI thread to send to
+            return;
         auto items = mapSessionItems(sessionStore.list(), activeSession.id);
-        send(uiTid, cast(immutable) UiSessionList(items));
+        uiMsg.sessionList(items);
     }
 
-    /** Sidebar select handler (UiSessionSelect): clear pending delete,
-     * validate the untrusted UI id, then switch. Store failures degrade
-     * to a chat message - the receive loop keeps running.
+    /** Sidebar select handler (TUIListener.sessionSelect): clear pending
+     * delete, validate the untrusted UI id, then switch. Store failures
+     * degrade to a chat message - the actor keeps processing.
      */
     package void doSidebarSelect(SessionId id) {
         pendingDeleteId = SessionId.init;
@@ -583,8 +572,8 @@ struct AgentApp {
         }
     }
 
-    /** Sidebar new handler (UiSessionNew): clear pending delete, then
-     * create + switch. Store failures degrade to a chat message.
+    /** Sidebar new handler (TUIListener.sessionNew): clear pending delete,
+     * then create + switch. Store failures degrade to a chat message.
      */
     package void doSidebarNew() {
         pendingDeleteId = SessionId.init;
@@ -596,7 +585,7 @@ struct AgentApp {
         }
     }
 
-    /** Sidebar rename handler (UiSessionRename): clear pending delete,
+    /** Sidebar rename handler (TUIListener.sessionRename): clear pending delete,
      * validate the id, reject empty titles only (no length cap, mirrors
      * /rename), rename the CARRIED id, refresh the active meta on
      * success, and always send the refreshed list - the rename goes
@@ -641,7 +630,7 @@ struct AgentApp {
         }
     }
 
-    /** Sidebar delete handler (UiSessionDelete): clear pending delete,
+    /** Sidebar delete handler (TUIListener.sessionDelete): clear pending delete,
      * validate the id, then delete. The C++ panel already ran the
      * two-step confirmation, so D delegates to doDeleteSession (active
      * fallback incl.).
@@ -802,149 +791,274 @@ struct AgentApp {
     package void continueAgent() {
         forceRunAgentLoop = true;
     }
+}
 
-    private int run(UserConfig uconf) {
+struct AgentDone {
+    int code;
+}
+
+class AppAgentActor {
+    import my.actor;
+    import llm.tui;
+
+    private {
+        ActorRef self_;
+        AgentApp app;
+        UserConfig uconf;
+        System* sys;
+        Tid mainTid;
+        TypedAddress!TextUserInterfaceActor tui_;
+    }
+
+    // runs on the MAIN thread inside sys.spawn (ctor-on-calling-thread)
+    this(UserConfig uconf, UserConfig.AgentChatConfig conf, System* sys, Tid mainTid) {
+        this.uconf = uconf;
+        this.sys = sys;
+        this.mainTid = mainTid;
+        this.app = AgentApp(conf); // slash registration happens here
+    }
+
+    void onSpawn(ActorRef self) {
+        self_ = self;
+    }
+
+    void start() {
+        try {
+            startSetup();
+        } catch (Exception e) {
+            // onException (mylib hook) only fires for Exception. A
+            // core.exception.Error escaping a handler violates
+            // ActorShell.process()'s nothrow contract: the scheduler
+            // worker dies inside the pool (TaskPool.doJob swallows the
+            // Throwable into task.exception, thread returns to idle) and
+            // this actor is orphaned — no AgentDone, supervisor hangs
+            // forever. Catching every Throwable here turns any start
+            // failure into a logged, clean exit (D3).
+            logger.errorf("AppAgentActor start failed (%s): %s",
+                    cast(Exception) e !is null ? "Exception" : "Error", e.msg);
+            safeDispose();
+            agentDone(1);
+            sendExit(self_.address(), ExitReason.unhandledException);
+        }
+    }
+
+    private void startSetup() {
         makeDefaultFileStructure();
-        if (conf_.setupDirs)
+        if (app.conf_.setupDirs)
             makeLocalSetupFileStructure(LlmConfig.init);
-
-        llmConf = readConfig(uconf.config, !conf_.prompt.empty,
-                uconf.noCwdConfig, uconf.trustedConfig, conf_.workArea).userToLlmConfig(conf_);
-
-        // Load BEFORE the DialogueIndex ctor: the ctor spawns the worker,
-        // which needs the prompt as a spawn argument. Missing file falls
-        // back to the built-in default.
-        auto reasoningPrompt = loadReasoningPrompt(llmConf);
-
-        rag = createRag(llmConf);
-        if (rag is null)
-            return 1;
-
-        skillManager_ = makeSkillManager(llmConf);
-
-        // Process AGENTS.md (hybrid: summary in prompt, full content in RAG)
-        auto agentMdState = processAgentMd(llmConf, uconf.noCwdConfig, rag);
+        app.llmConf = readConfig(uconf.config, !app.conf_.prompt.empty,
+                uconf.noCwdConfig, uconf.trustedConfig, app.conf_.workArea).userToLlmConfig(
+                app.conf_);
+        auto reasoningPrompt = loadReasoningPrompt(app.llmConf);
+        app.rag = createRag(app.llmConf);
+        if (app.rag is null) {
+            app.dispose();
+            agentDone(1);
+            sendExit(self_.address(), ExitReason.userShutdown);
+            return;
+        }
+        app.skillManager_ = makeSkillManager(app.llmConf);
+        auto agentMdState = processAgentMd(app.llmConf, uconf.noCwdConfig, app.rag);
         if (agentMdState.isValid())
             logger.tracef("AGENTS.md processed, summary length: %s", agentMdState.summary.length);
-
-        monitor = new MetricMonitor(llmConf.dataDir ~ "monitor.jsonl");
-        agent_ = new Agent("main", llmConf, skillManager_, monitor, rag, llmConf.toolFilter.to());
-
-        // Create the DialogueIndex (spawns the worker actor on its own thread).
+        app.monitor = new MetricMonitor(app.llmConf.dataDir ~ "monitor.jsonl");
+        app.agent_ = new Agent("main", app.llmConf, app.skillManager_,
+                app.monitor, app.rag, app.llmConf.toolFilter.to());
         auto dialogueRagCfg = RagConfig(windowOverlapPercent: 10, nBatch: 1,
                 maxChunksPerTopic: 512);
-        dialogueIndex = new DialogueIndex(llmConf.dialogueDir.AbsolutePath, llmConf.embedConfig,
-                dialogueRagCfg, null, llmConf.summaryModel, reasoningPrompt, null);
-        agent_.addCompressionCheckpointListener(&dialogueIndex.onCheckpoint);
-        agent_.toolContext().setDialogueIndex(dialogueIndex);
+        // ownerTid = MAIN thread (task 4 param): DiDegraded reaches the
+        // supervisor, not this actor's worker.
+        app.dialogueIndex = new DialogueIndex(app.llmConf.dialogueDir.AbsolutePath,
+                app.llmConf.embedConfig, dialogueRagCfg, null,
+                app.llmConf.summaryModel, reasoningPrompt, null, mainTid);
+        app.agent_.addCompressionCheckpointListener(&app.dialogueIndex.onCheckpoint);
+        app.agent_.toolContext().setDialogueIndex(app.dialogueIndex);
+        app.reasoningIndex = new ReasoningIndex(app.llmConf.dialogueDir.AbsolutePath,
+                app.llmConf.summaryModel, app.dialogueIndex.workerTid);
+        app.agent_.addCompressionCheckpointListener(&app.reasoningIndex.onCheckpoint);
+        app.agent_.toolContext().setReasoningIndex(app.reasoningIndex);
 
-        // Second checkpoint listener on the shared worker (dialogue
-        // listener stays first, so DiJob keeps mailbox priority).
-        reasoningIndex = new ReasoningIndex(llmConf.dialogueDir.AbsolutePath,
-                llmConf.summaryModel, dialogueIndex.workerTid);
-        agent_.addCompressionCheckpointListener(&reasoningIndex.onCheckpoint);
-        agent_.toolContext().setReasoningIndex(reasoningIndex);
-
-        // Register BEFORE setupSession(): a throw in setupSession (e.g. an
-        // unusable session dir) must still run dispose(), which then finds
-        // sessionStore null while agent_ is set - the store guard inside
-        // dispose() covers exactly this production-reachable shape.
-        scope (exit)
-            this.dispose(); // Ensures cleanup on any exception after setup
-
-        setupSession(agentMdState);
-
-        // oneShotQuery: true  = CLI prompt mode (no UI thread, UiMessenger blocked)
-        //                 false = full UI mode (UI thread spawned, UiMessenger active)
-        oneShotQuery = !conf_.prompt.empty;
-
-        if (oneShotQuery) {
-            uiMsg = new UiMessenger(Tid.init, true);
-            this.runAgent(conf_.prompt);
-            return 0;
+        app.setupSession(agentMdState);
+        app.oneShotQuery = !app.conf_.prompt.empty;
+        if (app.oneShotQuery) {
+            app.runAgent(app.conf_.prompt);
+            app.dispose(); // D4: explicit, before AgentDone
+            agentDone(0);
+            sendExit(self_.address(), ExitReason.userShutdown);
+            return;
         }
 
-        // only update memory for non-oneshot: oneshot mode is assumed to need max speed/low latency
-        updateRagMemory();
+        app.updateRagMemory();
 
-        uiTid = spawn(&spawnUserInterface, thisTid, llmConf.tui.maxWidth);
-        uiMsg = new UiMessenger(uiTid, false);
-        uiMsg.setIniFile(llmConf.dataDir ~ "imgui.ini");
-        send(uiTid, UiInitHistory(agent_.getUserQueries.map!(a => a.content).array.idup));
-        send(uiTid, UiSetIniFile(llmConf.dataDir ~ "imgui.ini"));
-        agent_.setStreamUpdate(makeStreamCallback);
+        // Bounded-mailbox canary (task 12, design D13): the legacy
+        // std.concurrent TUI mailbox was bounded at 100; the actor path
+        // uses 1000 — deliberately higher, because 100 proved too
+        // restrictive. When the TUI mailbox is full, sends from actor
+        // workers are dropped — never blocked — and counted in
+        // `tui_.addr.get.dropped` (blocking a pool worker is the deadlock
+        // the bound prevents); only non-actor threads, like this
+        // supervisor, may block on a full mailbox. Residual, accepted:
+        // stream messages may be dropped during a real stall — the TUI
+        // renders frames anyway, so a dropped frame message is safe;
+        // control messages are low-rate and the mailbox drains at frame
+        // rate, so their drop probability is negligible.
+        tui_ = sys.spawnBounded!TextUserInterfaceActor(1000,
+                TypedAddress!TUIListener(self_.address().lock()), app.llmConf.tui.maxWidth);
+        app.uiMsg = new UiMessenger(new TuiChannelSink(tui_));
+        monitor(self_.address(), tui_);
+        app.uiMsg.setIniFile(app.llmConf.dataDir ~ "imgui.ini"); // ONCE (D7)
+        app.uiMsg.initHistory(app.agent_.getUserQueries.map!(a => a.content).array.idup);
+        app.agent_.setStreamUpdate(app.makeStreamCallback);
 
-        foreach (m; agent_.chat.getMessages()) {
-            this.processChatMessage(m, printUser: true);
+        foreach (m; app.agent_.chat.getMessages())
+            app.processChatMessage(m, printUser: true);
+
+        app.sendSessionList();
+        auto helpText = app.printHelp(app.conf_);
+        if (helpText !is null)
+            app.sendChatMessage(helpText, TuiChatMessageType_User);
+        if (app.llmConf.beginConsolidation) {
+            logger.infof("Memory consolidation pending at session #%s",
+                    app.llmConf.sessionCount + 1);
+            runMemoryConsolidation(app.llmConf, app.rag, app.monitor,
+                    (string msg, TuiChatMessageType t) => app.sendChatMessage(msg, t));
         }
+        app.setStatusText(true);
+    }
 
-        // Initial sidebar snapshot right after the message replay;
-        // guarded by uiMsg.isActive() so one-shot mode never sends.
-        sendSessionList();
-
-        auto helpText = this.printHelp(conf_);
-        if (helpText !is null) {
-            this.sendChatMessage(helpText, TuiChatMessageType_User);
+    // === TUIListener handlers ===
+    void userQuery(string s) {
+        auto query = s.strip;
+        if (!query.empty) {
+            app.sendChatMessage(query, TuiChatMessageType_User);
+            app.uiMsg.busy();
+            clearStopAgent();
+            app.setStatusText(false);
+            final switch (app.runAgent(query)) {
+            case AgentStatus.active:
+                break;
+            case AgentStatus.terminate:
+                app.uiMsg.terminate();
+                break;
+            }
+            app.uiMsg.ready();
+            app.sendSessionList();
         }
+    }
 
-        if (llmConf.beginConsolidation) {
-            logger.infof("Memory consolidation pending at session #%s", llmConf.sessionCount + 1);
-            runMemoryConsolidation(llmConf, rag, monitor, (string msg,
-                    TuiChatMessageType t) => this.sendChatMessage(msg, t));
+    void sessionSelect(SessionId id) {
+        app.doSidebarSelect(id);
+    }
+
+    void sessionNew() {
+        app.doSidebarNew();
+    }
+
+    void sessionRename(SessionId id, string title) {
+        app.doSidebarRename(id, title);
+    }
+
+    void sessionDelete(SessionId id) {
+        app.doSidebarDelete(id);
+    }
+
+    void uiTerminated() {
+        app.dispose();
+        agentDone(0);
+        sendExit(self_.address(), ExitReason.userShutdown);
+    }
+
+    // supervisor forwards DiDegraded here (task 6)
+    void diDegraded(string reason) {
+        // The dialogue worker sends this exactly once (its embedder is
+        // unavailable for the process lifetime). The worker already logged
+        // the cause; this owner-side line records the degradation state.
+        logger.warningf("dialogue index worker degraded: %s (dialogue indexing disabled for process lifetime)",
+                reason);
+    }
+
+    // === failure paths (D3/D4) ===
+    void onDownMessage(DownMsg d) {
+        logger.warningf("TUI actor terminated unexpectedly: %s", d.reason.to!string);
+        safeDispose();
+        agentDone(1);
+        sendExit(self_.address(), ExitReason.userShutdown);
+    }
+
+    void onException(Exception e) {
+        logger.warning("AppAgentActor exception: ", e.msg);
+        safeDispose();
+        agentDone(1);
+        sendExit(self_.address(), ExitReason.unhandledException);
+    }
+
+    void onError(ErrorMsg e) {
+        logger.warning("AppAgentActor error: ", e.reason.to!string);
+        safeDispose();
+        agentDone(1); // best-effort: mailbox send cannot throw here
+        sendExit(self_.address(), ExitReason.unhandledException);
+    }
+
+    // Review F2: dispose() does file I/O (commitActiveSession/saveState)
+    // and CAN throw. On a failure path a second throw would escape the
+    // hook as a nothrow violation and silently kill the scheduler worker
+    // (TaskPool.doJob swallows the Throwable) — the exact hang class the
+    // start() guard protects against.
+    private void safeDispose() {
+        try {
+            app.dispose();
+        } catch (Exception de) {
+            logger.errorf("dispose during failure path failed: %s", de.msg);
         }
+    }
 
-        bool running = true;
-        do {
-            this.setStatusText(true);
-            receive((UiUserQuery a) {
-                auto query = a.query.strip;
-                if (!query.empty) {
-                    this.sendChatMessage(query, TuiChatMessageType_User);
-                    uiMsg.busy();
-                    clearStopAgent();
-                    this.setStatusText(false);
-                    final switch (this.runAgent(query)) {
-                    case AgentStatus.active:
-                        break;
-                    case AgentStatus.terminate:
-                        uiMsg.terminate();
-                        break;
-                    }
-                    uiMsg.ready();
-                    // every completed query can change counts/preview and the
-                    // updatedAt sort order (commitActiveSession on save), so
-                    // refresh the sidebar snapshot.
-                    sendSessionList();
-                }
-            }, (UiSessionSelect a) { this.doSidebarSelect(a.id); }, (UiSessionNew _) {
-                this.doSidebarNew();
-            }, (UiSessionRename a) { this.doSidebarRename(a.id, a.title); }, (UiSessionDelete a) {
-                this.doSidebarDelete(a.id);
-            }, (UiTerminated _) { running = false; }, (DiDegraded d) {
-                // The dialogue worker sends this exactly once (its embedder
-                // is unavailable for the process lifetime). The worker already
-                // logged the cause; this owner-side line records the
-                // degradation state for the agent.
-                logger.warningf("dialogue index worker degraded: %s (dialogue indexing disabled for process lifetime)",
-                    d.reason);
-            });
-        }
-        while (running);
-
-        return 0;
+    private void agentDone(int code) {
+        send(mainTid, AgentDone(code));
     }
 }
 
 int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     import llm.subsystem : initLlmfunLocalModel, deinitLlmfunLocalModel;
+    import my.actor;
+    import std.parallelism : TaskPool;
 
     initLlmfunLocalModel();
     scope (exit)
         deinitLlmfunLocalModel();
 
+    // D1: explicit 2-worker pool — a run occupies one worker for its
+    // full duration; the TUI actor needs the other. Never default pool.
+    // D13 pool-size policy (a convention — the library does not check it —
+    // documented in the mylib actor README, "Bounded mailbox"):
+    // pool >= actor count + 1 — the two actors
+    // (AppAgentActor, TextUserInterfaceActor) take the two pool workers and
+    // this main thread (the supervisor loop below) is the +1: it holds no
+    // worker, so it is the only thread allowed to block on the TUI's
+    // bounded mailbox; pool workers never block (they drop instead).
+    // makeSystem(pool) does not own the pool, so sys.shutdown() never
+    // finishes it: daemon it so std.parallelism's static dtor stops and
+    // joins the pool threads at process exit (idle pool threads would
+    // otherwise block exit).
+    auto pool = new TaskPool(2);
+    pool.isDaemon = true;
+    auto sys = makeSystem(pool);
+    scope (exit)
+        sys.shutdown();
     try {
-        auto app = AgentApp(conf);
-        return app.run(uconf);
+        auto agent = sys.spawn!AppAgentActor(uconf, conf, &sys, thisTid);
+        dynSend(agent, "start");
+        int code = 1;
+        bool done = false;
+        while (!done) {
+            // This stdlib (DMD 2.112) has no value-returning receive!T, so
+            // the contract's `if (receive!T) { ... $1 ... }` form stands
+            // in as the legacy delegate idiom (one message per iteration —
+            // forward DiDegraded, capture AgentDone's code).
+            receive((DiDegraded d) {
+                dynSend(agent, "diDegraded", d.reason); // forward (design §3.1)
+            }, (AgentDone ad) { code = ad.code; done = true; });
+        }
+        return code;
     } catch (Exception e) {
         logger.warning(e.msg);
     }

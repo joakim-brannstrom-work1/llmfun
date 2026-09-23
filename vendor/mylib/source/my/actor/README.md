@@ -107,6 +107,43 @@ What is checked where:
 | `dynSend` / `dynRequest` / `dynDelayedSend` | none |
 | `sendExit`, `linkTo`, `monitor`, ... | address validity only (fixed system messages) |
 
+## Repeating self-tick
+
+An actor can have one repeating self-tick: at every interval the shell
+dispatches a message to the actor itself. Arm it from the actor (via the
+`ActorRef`), not from outside:
+
+```d
+void onSpawn(ActorRef self_) {
+    self_.scheduleRepeating(100.dur!"msecs", "tick", 1); // fire tick(1) every 100 ms
+}
+
+void tick(int n) { ... }
+```
+
+Semantics:
+
+- The first fire is `interval` after arming; each fire re-arms from the fire
+  time, so the period is drift-free with respect to work done in the handler.
+  At most one entry is ever pending.
+- The signature is resolved when arming (same as `dynSend`): a wrong name or
+  parameter list resolves to a message that is dropped on each fire (the
+  unhandled-message path) while the repeat continues. The tick method must be
+  a void message method; arming a request (non-void) method makes every fire
+  a no-op drop.
+- `self_.cancelTick()` stops the tick: the pending entry (if any) is dropped
+  without dispatch when it comes due, and an entry already firing will not
+  re-arm. A new `scheduleRepeating` call replaces any previous tick.
+- A handler that throws stops the repeat; the exception is delivered to
+  `onException` as for any other handler. Re-arm with `scheduleRepeating` if
+  the tick should continue.
+- No re-arm happens while the actor is shutting down: a pending entry is
+  dropped without re-arming, and in a graceful shutdown a due entry may fire
+  once during the final drain (the kill path clears it without firing).
+
+This is the preferred replacement for the pattern of re-arming a
+`dynDelayedSend(self_, ..., "tick")` at the end of the tick handler.
+
 ## Requests and replies
 
 `chan.method(args)` on a non-void message returns a request chain:
@@ -152,7 +189,49 @@ Optional class methods, called by the shell — they are never message targets.
 - An actor with at least one message method stays alive until it is shut down;
   it can shut itself down with `sendExit(self_.address, ...)`.
 
-## Untyped actors
+## Bounded mailbox
+
+By default an actor's incoming queue is unbounded — sends never block and
+never drop. `spawnBounded` opts in to a bound:
+
+```d
+auto ui = sys.spawnBounded!TuiActor(100); // at most 100 queued messages
+```
+
+The bound is installed before the actor is scheduled, so no message can
+outrun it. When a bounded incoming queue is full:
+
+- a send **from an actor worker** (a thread executing `process`) is
+  **dropped**, never blocked — blocking a pool worker is the deadlock the
+  bound exists to prevent: the worker holds a pool slot, and the only
+  threads that could free a mailbox slot may themselves be workers, so a
+  blocked worker can exhaust the pool and nothing ever drains the queue.
+  The drop is counted — see `Address.dropped` — so loss beyond the
+  declared policy is observable.
+- a send **from a non-actor thread** (your `main`, a supervisor, a test)
+  **blocks** until a slot frees or the target shuts down (the send then
+  returns `false`). Such a sender holds no worker, so blocking it cannot
+  exhaust the pool.
+
+Only one-shot `Msg`s (`send`, `dynSend`, `Channel` sends) are bounded.
+System messages (`sendExit`, monitor/link traffic), delayed messages and
+replies are never bounded, so a busy actor is always reachable for
+shutdown, and a bounded actor is guaranteed to drain — which in turn
+guarantees that a blocked non-actor sender always resolves (delivered, or
+`false` if the target shuts down).
+
+**Pool-size policy (a convention, not enforced by the library):** keep at least
+**actor count + 1** threads available — one worker per concurrently busy
+actor, plus one **non-pool thread** (e.g. the `main` supervisor) that may
+perform blocking sends. A pool worker must never be the thread that
+blocks on a full bounded mailbox.
+
+The semantics and the 2-worker deadlock scenario are covered by the
+unittests in `bounded_mailbox.d`.
+
+The blocking path relies on `core.sync.Mutex` being reentrant and on
+`Condition` waiting on the same lock — verified with ldc2 (1.42); this
+tree builds LDC-only.
 
 A class without an interface is still an actor (all its public methods are
 messages), but sends should use the dynamic path — unless the class type is in

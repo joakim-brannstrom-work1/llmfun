@@ -285,7 +285,7 @@ struct ActorShell {
         Behavior2!(MsgHandler)[ulong] incoming2;
         Behavior2!(RequestHandler)[ulong] reqBehavior2;
 
-        // callbacks for awaited responses key:ed on their id.
+        // callbacks for awaited responses keyed on their id.
         AwaitReponse[ulong] awaitedResponses;
         ReplyHandlerTimeout[] replyTimeouts;
 
@@ -330,6 +330,14 @@ struct ActorShell {
 
         /// One-shot launch hook (see `launchHandler`). Null if not set.
         void delegate() @safe launch_;
+
+        /// Repeating self-tick (see `scheduleRepeating`): a valid pending
+        /// entry (in the delayed mailbox queue or `delayed`) exists while
+        /// `tickPending_` and its `seq` equals `tickSeq_`. At most one such
+        /// entry exists at any time.
+        bool tickPending_;
+        ulong tickSeq_;
+        Duration tickInterval_;
     }
 
     invariant () {
@@ -459,6 +467,35 @@ package:
                 replyTimeouts.empty ? default_ : (replyTimeouts[0].timeout - now));
     }
 
+    /** Arm a repeating self-tick: a one-shot message to this actor's own
+     * `method` is staged in the delayed mailbox queue to fire at
+     * +`interval`; on fire the shell dispatches it directly and re-arms the
+     * entry at +`interval` (at most one pending entry at any time). The
+     * first fire is at +`interval`, never immediately. A re-schedule
+     * replaces the pending entry; see `cancelTick`. No-op if the actor is
+     * no longer accepting messages. */
+    package void scheduleRepeating(Duration interval, ulong signature, Variant data) @trusted {
+        if (!isAccepting)
+            return;
+        cancelTick;
+        tickSeq_++;
+        auto d = DelayedMsg(Msg(signature, MsgType(MsgOneShot(data))), Clock.currTime + interval);
+        d.repeating = true;
+        d.seq = tickSeq_;
+        tickPending_ = true;
+        tickInterval_ = interval;
+        addr.get.put(d);
+    }
+
+    /** Cancel a pending repeating tick (no-op if none). The entry is not
+     * removed eagerly; it is dropped without dispatch when it comes due
+     * (its `seq` no longer matches `tickSeq_`). Safe from inside the tick
+     * handler — the in-flight entry simply does not re-arm. */
+    package void cancelTick() @trusted {
+        tickPending_ = false;
+        tickSeq_++;
+    }
+
     bool waitingForReply() @safe pure nothrow const @nogc {
         return !awaitedResponses.empty;
     }
@@ -505,6 +542,8 @@ package:
     }
 
     void cleanupDelayed() @trusted nothrow scope {
+        tickPending_ = false;
+        tickSeq_++;
         foreach (const _; 0 .. delayed.length) {
             try {
                 delayed.front.msg = Msg.init;
@@ -554,12 +593,29 @@ package:
         return nextReplyId_++;
     }
 
-    void process(const SysTime now) @safe nothrow scope {
+    /// Public function to enable unittesting
+    public void process(const SysTime now) @safe nothrow scope {
         import core.memory : GC;
 
         assert(!GC.inFinalizer);
 
         messages_ = 0;
+
+        // Bounded mailbox support (see README, "Bounded mailbox"): mark this
+        // thread as an actor worker for the duration of the message loop so
+        // a full bounded mailbox drops our sends instead of blocking us —
+        // blocking a pool worker is the deadlock the bound exists to
+        // prevent. Unconditional (not gated on bounded mailboxes existing):
+        // a dispatch that started before the process's first spawnBounded
+        // must still count as a worker once that mailbox appears
+        // mid-dispatch, or its sends would take the blocking non-actor
+        // path. process() is re-entrant on one thread (the scoped actor
+        // request loop), so the mark is reference counted. The flag is a
+        // plain thread-local variable in mailbox.d, so the cost is an
+        // integer bump per dispatch, not per message.
+        setActorWorker(true);
+        scope (exit)
+            setActorWorker(false);
 
         void tick() @safe scope {
             // Timeouts are checked before processing a reply: a reply that
@@ -868,11 +924,43 @@ package:
 
         foreach (const i; 0 .. delayed.length) {
             if (now > delayed.front.triggerAt) {
-                addr.get.put(delayed.front.msg);
+                auto d = delayed.front;
                 delayed.removeFront;
+                if (d.repeating)
+                    fireRepeatingTick(d, now);
+                else
+                    addr.get.put(d.msg);
             } else {
                 break;
             }
+        }
+    }
+
+    /** Fire a repeating self-tick entry (see `scheduleRepeating`):
+     * dispatch the message directly on this actor (no mailbox round trip —
+     * a throwing handler must stop the re-arm) and re-arm at +interval
+     * unless cancelled, replaced, or shutting down. An exception escapes to
+     * the tick's catch → `onException`; the repeat stops. */
+    private void fireRepeatingTick(DelayedMsg* d, const SysTime now) @trusted scope {
+        if (!tickPending_ || d.seq != tickSeq_)
+            return; // cancelled or replaced: drop without dispatch
+        messages_++;
+
+        d.msg.type.match!((ref MsgOneShot a) {
+            if (auto v = d.msg.signature in incoming2)
+                v.behavior(context_, a.data);
+            else
+                defaultHandler_(this, a.data);
+        }, (ref MsgRequest a) {
+            // repeating entries are built as one-shots by scheduleRepeating;
+            // a request payload here is malformed — default handling drops it.
+            defaultHandler_(this, a.data);
+        });
+
+        if (tickPending_ && d.seq == tickSeq_ && state_.among(ActorState.waiting,
+                ActorState.active)) {
+            d.triggerAt = now + tickInterval_;
+            delayed.insert(d);
         }
     }
 
@@ -1906,4 +1994,215 @@ unittest {
     assert(handled == 1, "the exception routed through exceptionHandler_");
     kernel.process(Clock.currTime);
     assert(handled == 1, "launch is not retried");
+}
+
+@("repeating tick: first fire at +interval, then re-arms on the fire time")
+unittest {
+    static class TickCounter {
+        int ticks;
+
+        void tick() @safe {
+            ticks++;
+        }
+    }
+
+    auto kernel = ActorShell(makeAddress);
+    auto a = new TickCounter;
+    implActor(a, &kernel);
+    auto selfRef = ActorRef(&kernel);
+
+    const I = 10.dur!"msecs";
+    auto t0 = Clock.currTime;
+    selfRef.scheduleRepeating(I, "tick");
+
+    kernel.process(t0);
+    kernel.process(t0 + I / 2);
+    kernel.process(t0 + I - 1.dur!"msecs");
+    assert(a.ticks == 0, "no fire before +interval (first fire is never immediate)");
+
+    kernel.process(t0 + I + 1.dur!"msecs");
+    assert(a.ticks == 1, "exactly one fire once +interval has passed");
+
+    // the re-arm is anchored on the fire time, not the schedule time.
+    kernel.process(t0 + 2 * I);
+    assert(a.ticks == 1, "no second fire before fire-time + interval");
+    kernel.process(t0 + 2 * I + 2.dur!"msecs");
+    assert(a.ticks == 2, "second fire at fire-time + interval");
+
+    sendExit(kernel.address, ExitReason.kill);
+    int guard;
+    while (kernel.isAlive() && guard++ < 100)
+        kernel.process(Clock.currTime);
+    assert(!kernel.isAlive());
+}
+
+@("repeating tick: a throwing handler stops the repeat and fires onException")
+unittest {
+    static class ThrowingTick {
+        int fires;
+        int exceptions;
+
+        void tick() {
+            if (fires++ == 0)
+                throw new Exception("boom");
+        }
+
+        void onException(Exception e) @safe {
+            exceptions++;
+        }
+    }
+
+    auto kernel = ActorShell(makeAddress);
+    auto a = new ThrowingTick;
+    implActor(a, &kernel);
+    auto selfRef = ActorRef(&kernel);
+
+    const I = 10.dur!"msecs";
+    auto t0 = Clock.currTime;
+    selfRef.scheduleRepeating(I, "tick");
+
+    kernel.process(t0);
+    kernel.process(t0 + I + 1.dur!"msecs");
+    assert(a.fires == 1, "the first tick ran and threw");
+    assert(a.exceptions == 1, "the throw fired the onException hook");
+    assert(kernel.isAlive(), "a log-only onException does not shut the actor down");
+
+    // the repeat is stopped: no re-arm after a throwing handler.
+    foreach (const k; 1 .. 5) {
+        kernel.process(t0 + (k + 1) * I + 1.dur!"msecs");
+    }
+    assert(a.fires == 1, "no further tick fires after the throw");
+    assert(a.exceptions == 1, "no further onException");
+
+    sendExit(kernel.address, ExitReason.kill);
+    int guard;
+    while (kernel.isAlive() && guard++ < 100)
+        kernel.process(Clock.currTime);
+    assert(!kernel.isAlive());
+}
+
+@("repeating tick: cancelTick from inside the handler stops the repeat")
+unittest {
+    static class SelfCancel {
+        int fires;
+        private ActorRef self_;
+
+        void onSpawn(ActorRef self) @safe {
+            self_ = self;
+        }
+
+        void tick() {
+            fires++;
+            self_.cancelTick();
+        }
+    }
+
+    auto kernel = ActorShell(makeAddress);
+    auto a = new SelfCancel;
+    implActor(a, &kernel);
+    auto selfRef = ActorRef(&kernel);
+
+    const I = 10.dur!"msecs";
+    auto t0 = Clock.currTime;
+    selfRef.scheduleRepeating(I, "tick");
+
+    kernel.process(t0); // runs onSpawn, stages the entry
+    assert(a.fires == 0);
+
+    kernel.process(t0 + I + 1.dur!"msecs");
+    assert(a.fires == 1, "the first tick ran and cancelled the repeat");
+
+    foreach (const k; 2 .. 5) {
+        kernel.process(t0 + k * I + 1.dur!"msecs");
+    }
+    assert(a.fires == 1, "no fire after the in-handler cancelTick");
+
+    sendExit(kernel.address, ExitReason.kill);
+    int guard;
+    while (kernel.isAlive() && guard++ < 100)
+        kernel.process(Clock.currTime);
+    assert(!kernel.isAlive());
+}
+
+@("repeating tick: a pending entry is dropped at shutdown, never firing")
+unittest {
+    static class TickCounter {
+        int ticks;
+
+        void tick() @safe {
+            ticks++;
+        }
+    }
+
+    auto kernel = ActorShell(makeAddress);
+    auto a = new TickCounter;
+    implActor(a, &kernel);
+    auto selfRef = ActorRef(&kernel);
+
+    const I = 10.dur!"msecs";
+    auto t0 = Clock.currTime;
+    selfRef.scheduleRepeating(I, "tick");
+
+    kernel.process(t0);
+    kernel.process(t0 + I + 1.dur!"msecs");
+    assert(a.ticks == 1, "one fire before the exit");
+
+    sendExit(kernel.address, ExitReason.kill);
+    int guard;
+    while (kernel.isAlive() && guard++ < 100)
+        kernel.process(Clock.currTime);
+    assert(!kernel.isAlive());
+    // The shell's delayed tree is destroyed in cleanupDelayed and is not
+    // safe to inspect after shutdown; the observable pin is the fire count.
+    assert(a.ticks == 1, "no tick fire after the exit message");
+
+    // a later tick at a much later time cannot resurrect the entry.
+    kernel.process(Clock.currTime + 100.dur!"msecs");
+    assert(a.ticks == 1);
+}
+
+@system @("repeating tick: fires independently of mailbox activity (maxThroughput=1)")
+unittest {
+    import std.conv : to;
+    import std.parallelism : TaskPool;
+    import my.actor.system : SystemConfig;
+    import my.optional : some;
+
+    static class TickingActor {
+        private RefCounted!int ticks;
+        private ActorRef self_;
+
+        this(RefCounted!int counter) {
+            ticks = counter;
+        }
+
+        void onSpawn(ActorRef self) @safe {
+            self_ = self;
+            self_.scheduleRepeating(20.dur!"msecs", "tick");
+        }
+
+        void tick() {
+            ticks.get++;
+        }
+    }
+
+    // maxThroughput=1: a scheduled run consumes at most one message, so a
+    // tick that had to wait behind the mailbox for its own delivery would
+    // starve here. Direct dispatch must keep the cadence.
+    auto conf = SystemConfig.init;
+    conf.scheduler.maxThroughput = some(1uL);
+    auto sys = System(conf, new TaskPool(1), true);
+
+    auto counter = refCounted(0);
+    auto addr = sys.spawn!TickingActor(counter);
+
+    // ~25 ticks in 500msecs at 20msecs; allow a wide margin for scheduling
+    // jitter — the point is that the tick runs AT ALL under throughput=1.
+    const failAfter = Clock.currTime + 3.dur!"seconds";
+    while (counter.get < 3 && Clock.currTime < failAfter) {
+        Thread.sleep(10.dur!"msecs");
+    }
+    assert(counter.get >= 3,
+            "repeating tick should fire under maxThroughput=1 but got " ~ to!string(counter.get));
+    sys.shutdown;
 }

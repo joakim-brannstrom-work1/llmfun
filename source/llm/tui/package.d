@@ -4,9 +4,9 @@ import logger = std.logger;
 import std.algorithm : filter, among, min, max;
 import std.array : appender, Appender, empty, array;
 import std.logger;
-import std.concurrency;
 
 import my.path : Path;
+import my.actor;
 
 import llm.session : SessionId;
 
@@ -138,8 +138,14 @@ struct TextUserInterface {
         TuiState* tuiState;
         TuiScreen* tuiScreen;
         TuiLogSwap logSwap;
-        string query_;
         bool userTerminated_;
+    }
+
+    // Package-visible state: read/write seam for the llm.tui.tests driver
+    // (the test module lives in package llm.tui, so package members are
+    // reachable; plan task 9).
+    package {
+        string query_;
         string statusText;
     }
 
@@ -279,6 +285,13 @@ struct TextUserInterface {
     void render() {
         import std.string : strip;
 
+        // Headless (null screen, e.g. the test seam): no ImGui backend was
+        // initialized, so the C++ core render would dereference a null
+        // context. Backend-level calls are null-safe; the core render is not.
+        if (tuiScreen is null) {
+            return;
+        }
+
         tuiBackendNewFrame();
 
         if (tuiRender(tuiState) == 0) {
@@ -301,11 +314,253 @@ struct TextUserInterface {
     }
 }
 
-auto makeTui() {
-    return TextUserInterface(tuiCreateState(), tuiInit());
+interface TUIListener {
+    void userQuery(string s);
+    void sessionSelect(SessionId id);
+    void sessionNew();
+    void sessionRename(SessionId id, string title);
+    void sessionDelete(SessionId id);
+    void uiTerminated();
 }
 
-struct UiShutdown {
+interface TUICommands {
+    void uiMsg(UiSetIniFile m);
+    void uiMsg(UiChatMessage m);
+    void uiMsg(UiChatThinkMessage m);
+    void uiMsg(UiFinalAnswer m);
+    void uiMsg(UiStatusText m);
+    void uiMsg(UiInitHistory m);
+    void uiMsg(UiSessionList m);
+    void uiMsg(UiStreamChatMessage m);
+    void uiMsg(UiLogFile m);
+    void uiMsg(UiPipelineStreamChatMessage m);
+    void uiMsg(UiPipelineStreamDone m);
+    void uiStreamChatDone();
+    void uiPipelineClear();
+    void uiClearChat();
+    void uiAgentBusy();
+    void uiAgentReady();
+    void uiTerminate();
+}
+
+class TextUserInterfaceActor : TUICommands {
+    import std.string : strip;
+    import std.datetime : dur, Clock, Duration, SysTime;
+    import llm.utility : stopAgent, playNotification;
+    import std.conv : to;
+
+    private {
+        ActorRef selfRef;
+
+        TypedAddress!TUIListener listenerAddress;
+        Channel!TUIListener listener;
+
+        immutable UpdateInterval = 10.dur!"msecs";
+
+        // Guards uiTick(): a due tick entry may still be dispatched after
+        // uiTerminate (cancelTick drops the pending one; an in-flight one
+        // runs once) - skip the poll/render work rather than touch the
+        // torn-down UI.
+        bool running = true;
+    }
+
+    // Package-visible state: read/write seam for the llm.tui.tests driver
+    // (see the TextUserInterface block above).
+    package {
+        TextUserInterface ui;
+
+        TuiSessionActionType pendingAction = TuiSessionAction_None;
+
+        string pendingActionId;
+        string pendingActionTitle;
+
+        SysTime nextUpdate;
+    }
+
+    this(TypedAddress!TUIListener listener, long maxWidth) {
+        this(listener, maxWidth, tuiCreateState(), tuiInit());
+    }
+
+    // Headless injection seam (tests): raw C pointers, because a by-value
+    // TextUserInterface parameter would double-free the state (its copy's
+    // dtor runs at ctor exit, then the field's dtor runs again in onExit).
+    // Ownership of state/screen transfers on successful return only; a
+    // throw (assert) leaves them with the caller.
+    this(TypedAddress!TUIListener listener, long maxWidth, TuiState* state, TuiScreen* screen) {
+        assert(maxWidth >= 0 && maxWidth <= 10_000,
+                "maxWidth out of int-safe range: " ~ maxWidth.to!string);
+        this.listenerAddress = listener;
+        ui = TextUserInterface(state, screen);
+        ui.setMaxWidth(cast(int) maxWidth);
+        ui.setUiAsStdLogger;
+    }
+
+    void onSpawn(ActorRef selfRef) {
+        this.selfRef = selfRef;
+        listener = typeof(listener)(listenerAddress, this.selfRef);
+        selfRef.scheduleRepeating(UpdateInterval, "uiTick");
+    }
+
+    void onExit(ExitMsg _) {
+        ui = TextUserInterface.init; // dtor: tuiDestroyState + tuiShutdown
+    }
+
+    void onException(Exception e) {
+        logger.warning("TUI actor exception: ", e.msg);
+    }
+
+    void onError(ErrorMsg e) {
+        logger.warning("TUI actor error: ", e.reason.to!string);
+    }
+
+    // Must be called by every message handler except uiTerminate. Polls the
+    // pending user query and at most one session action, then renders if due.
+    private void postProcess() {
+        auto query = ui.userQuery();
+
+        if (!query.strip.empty) {
+            if (query == "/stop") {
+                stopAgent();
+                ui.setStatusText("Stopping agent");
+            } else {
+                listener.userQuery(query);
+            }
+        }
+
+        if (pendingAction != TuiSessionAction_None) {
+            switch (pendingAction) {
+            case TuiSessionAction_Select:
+                listener.sessionSelect(SessionId(pendingActionId));
+                break;
+            case TuiSessionAction_New:
+                listener.sessionNew();
+                break;
+            case TuiSessionAction_Rename:
+                listener.sessionRename(SessionId(pendingActionId), pendingActionTitle);
+                break;
+            case TuiSessionAction_Delete:
+                listener.sessionDelete(SessionId(pendingActionId));
+                break;
+            default:
+                logger.warningf("Unknown session action type %s", pendingAction);
+                break;
+            }
+            pendingAction = TuiSessionAction_None;
+            pendingActionId = null;
+            pendingActionTitle = null;
+        }
+
+        if (Clock.currTime > nextUpdate) {
+            ui.render();
+            nextUpdate = Clock.currTime + UpdateInterval;
+            // Poll one session action per frame; never overwrite an
+            // action still awaiting forward.
+            if (pendingAction == TuiSessionAction_None) {
+                ui.pollSessionAction(pendingAction, pendingActionId, pendingActionTitle);
+            }
+        }
+    }
+
+    // Repeating self-tick target (armed in onSpawn). The shell dispatches
+    // this at every interval and re-arms after each fire; the render cadence
+    // is still gated by nextUpdate inside postProcess.
+    void uiTick() {
+        if (running)
+            postProcess();
+    }
+
+    void uiMsg(UiSetIniFile a) {
+        // do not call postProcess because this is only an initialization
+        ui.setIniFile(a.path);
+    }
+
+    void uiMsg(UiChatMessage a) {
+        ui.addChatMessage(a.msg, null, a.type);
+        postProcess;
+    }
+
+    void uiMsg(UiChatThinkMessage a) {
+        ui.addChatMessage(a.msg, a.thinking, a.type);
+        postProcess;
+    }
+
+    void uiMsg(UiFinalAnswer a) {
+        ui.addChatMessage(a.msg, null, TuiChatMessageType_FinalAnswer);
+        postProcess;
+    }
+
+    void uiMsg(UiStatusText a) {
+        ui.setStatusText(a.status);
+        postProcess;
+    }
+
+    void uiMsg(UiInitHistory m) {
+        ui.setHistory(m.queries);
+        postProcess();
+    }
+
+    void uiMsg(UiSessionList m) {
+        ui.setSessionList(m.items);
+        postProcess();
+    }
+
+    void uiMsg(UiStreamChatMessage m) {
+        ui.streamChat(m.msg, m.thinking);
+        postProcess();
+    }
+
+    void uiMsg(UiLogFile a) {
+        // do not call postProcess because this is only an initialization
+        ui.useUiLogFile(a.useFile);
+    }
+
+    void uiMsg(UiPipelineStreamChatMessage m) {
+        ui.pipelineMessage(m);
+        postProcess();
+    }
+
+    void uiMsg(UiPipelineStreamDone m) {
+        ui.pipelineMessage(m);
+        postProcess();
+    }
+
+    void uiStreamChatDone() {
+        ui.streamChatDone();
+        postProcess();
+    }
+
+    void uiPipelineClear() {
+        ui.pipelineClear();
+        postProcess();
+    }
+
+    void uiClearChat() {
+        ui.clearChat;
+        postProcess;
+    }
+
+    void uiAgentBusy() {
+        ui.setReadyStatus(false);
+        postProcess;
+    }
+
+    void uiAgentReady() {
+        ui.setReadyStatus(true);
+        playNotification();
+        postProcess;
+    }
+
+    // Termination handshake: final render, async-notify the agent, exit.
+    // cancelTick keeps the zombie quiescent: without it the shell would
+    // keep re-arming due ticks (uiTick no-ops via `running`) until the
+    // system shuts the actor down at process exit.
+    void uiTerminate() {
+        running = false;
+        selfRef.cancelTick();
+        ui.render();
+        listener.uiTerminated();
+        sendExit(selfRef.address, ExitReason.userShutdown);
+    }
 }
 
 struct UiSetIniFile {
@@ -346,18 +601,11 @@ struct UiStatusText {
     string status;
 }
 
-struct UiUserQuery {
-    string query;
-}
-
 struct UiLogFile {
     bool useFile;
 }
 
 struct UiTerminate {
-}
-
-struct UiTerminated {
 }
 
 struct UiAgentBusy {
@@ -391,121 +639,5 @@ struct UiSessionItem {
 }
 
 struct UiSessionList {
-    UiSessionItem[] items;
-}
-
-// Session sidebar actions (UI -> D), consumed by the agent receive loop.
-struct UiSessionSelect {
-    SessionId id;
-}
-
-struct UiSessionNew {
-}
-
-struct UiSessionRename {
-    SessionId id;
-    string title;
-}
-
-struct UiSessionDelete {
-    SessionId id;
-}
-
-void spawnUserInterface(Tid ownerTid, long maxWidth) {
-    import std.string : strip;
-    import std.datetime : dur, Clock, Duration;
-    import llm.utility : stopAgent, playNotification;
-    import std.conv : to;
-
-    setMaxMailboxSize(thisTid, 100, OnCrowding.block);
-    register("llmfun_tui", thisTid);
-
-    auto ui = makeTui();
-    assert(maxWidth >= 0 && maxWidth <= 10_000,
-            "maxWidth out of int-safe range: " ~ maxWidth.to!string);
-    ui.setMaxWidth(cast(int) maxWidth);
-    ui.setUiAsStdLogger;
-    bool running = true;
-    TuiSessionActionType pendingAction = TuiSessionAction_None;
-    string pendingActionId;
-    string pendingActionTitle;
-
-    immutable UpdateInterval = 10.dur!"msecs";
-    auto nextUpdate = Clock.currTime;
-    do {
-        try {
-            // dfmt off
-            receiveTimeout(UpdateInterval,
-                (UiShutdown _) { running = false; },
-                (UiSetIniFile a) { ui.setIniFile(a.path); },
-                (UiChatMessage a) { ui.addChatMessage(a.msg, null, a.type); },
-                (UiChatThinkMessage a) { ui.addChatMessage(a.msg, a.thinking, a.type); },
-                (UiFinalAnswer a) { ui.addChatMessage(a.msg, null, TuiChatMessageType_FinalAnswer); },
-                (UiClearChat _) { ui.clearChat; },
-                (UiStatusText a) { ui.setStatusText(a.status); },
-                (UiLogFile a) { ui.useUiLogFile(a.useFile); },
-                (UiTerminate _) { running = false; },
-                (UiAgentBusy _) { ui.setReadyStatus(false); },
-                (UiAgentReady _) { ui.setReadyStatus(true); playNotification(); },
-                (UiStreamChatMessage a) { ui.streamChat(a.msg, a.thinking); },
-                (UiStreamChatDone _) { ui.streamChatDone; },
-                (UiInitHistory a) { ui.setHistory(a.queries); },
-                (UiPipelineStreamChatMessage a) { ui.pipelineMessage(a); },
-                (UiPipelineStreamDone a) { ui.pipelineMessage(a); },
-                (UiPipelineClear _) { ui.pipelineClear; },
-                (immutable UiSessionList a) { ui.setSessionList(a.items); }
-            );
-            // dfmt on
-
-            auto query = ui.userQuery;
-
-            if (!query.strip.empty) {
-                if (query == "/stop") {
-                    stopAgent();
-                    ui.setStatusText("Stopping agent");
-                } else {
-                    send(ownerTid, UiUserQuery(query));
-                }
-            }
-
-            if (pendingAction != TuiSessionAction_None) {
-                switch (pendingAction) {
-                case TuiSessionAction_Select:
-                    send(ownerTid, UiSessionSelect(SessionId(pendingActionId)));
-                    break;
-                case TuiSessionAction_New:
-                    send(ownerTid, UiSessionNew.init);
-                    break;
-                case TuiSessionAction_Rename:
-                    send(ownerTid, UiSessionRename(SessionId(pendingActionId),
-                            pendingActionTitle));
-                    break;
-                case TuiSessionAction_Delete:
-                    send(ownerTid, UiSessionDelete(SessionId(pendingActionId)));
-                    break;
-                default:
-                    logger.warningf("Unknown session action type %d", pendingAction);
-                    break;
-                }
-                pendingAction = TuiSessionAction_None;
-                pendingActionId = null;
-                pendingActionTitle = null;
-            }
-
-            if (Clock.currTime > nextUpdate) {
-                ui.render();
-                nextUpdate = Clock.currTime + UpdateInterval;
-                // Poll one session action per frame into the stash; never
-                // overwrite an action that is still awaiting forward.
-                if (pendingAction == TuiSessionAction_None) {
-                    ui.pollSessionAction(pendingAction, pendingActionId, pendingActionTitle);
-                }
-            }
-        } catch (Exception e) {
-            logger.trace(e);
-            logger.warning(e.msg);
-        }
-    }
-    while (running);
-    send(ownerTid, UiTerminated.init);
+    const(UiSessionItem)[] items;
 }

@@ -231,14 +231,16 @@ class DialogueIndex {
     /// it to create its own embedder instead of consulting the process-global
     /// factory registry; null means the worker resolves the embedder from the
     /// registry (createEmbedder) as before.
-    /// The last three params configure the worker's reasoning path:
+    /// Three params configure the worker's reasoning path:
     /// the summary model config, the reasoning prompt, and an optional
-    /// summarizer DI override; all defaultable, so existing call sites are
-    /// unchanged.
+    /// summarizer DI override. `ownerTid` (default: the calling thread) is
+    /// the Tid the worker sends its one-shot DiDegraded notice to when its
+    /// embedder is unavailable; the default preserves the pre-existing behavior.
+    /// All params defaultable, so existing call sites are unchanged.
     this(AbsolutePath dialogueDir, EmbedConfig embedConfig,
             RagConfig dialogueRagCfg, EmbedderFactory embedderFactory = null,
             SummaryModelConfig summaryCfg = SummaryModelConfig.init,
-            string reasoningPrompt = "", SummarizerFn summarizerFn = null) {
+            string reasoningPrompt = "", SummarizerFn summarizerFn = null, Tid ownerTid = thisTid()) {
         import std.file : exists;
 
         if (!dialogueDir.toString.exists) {
@@ -251,7 +253,7 @@ class DialogueIndex {
         this.dialogueDir = dialogueDir;
         this.embedConfig = embedConfig;
         this.dialogueRagCfg = dialogueRagCfg;
-        this.workerTid = spawn(&dialogueWorker, thisTid, dialogueDir, embedConfig,
+        this.workerTid = spawn(&dialogueWorker, ownerTid, dialogueDir, embedConfig,
                 dialogueRagCfg, embedderFactory, summaryCfg, reasoningPrompt, summarizerFn);
         logger.tracef("DialogueIndex: spawned worker for dir '%s'", dialogueDir);
     }
@@ -739,9 +741,9 @@ unittest {
     }
 }
 
-// P2 codec: r_ round-trip, kind decode, cross-prefix, unknown prefix
+// codec: r_ round-trip, kind decode, cross-prefix, unknown prefix
 unittest {
-    // existing d_ tests at 633-670 stay UNMODIFIED and green
+    // the existing d_ tests above stay UNMODIFIED and green
     auto r = encodeTopicName("20240101-120000-abcd", 5, 5, 1700000000000, Kind.reasoning);
     assert(r == "r_20240101_120000_abcd__t5_5__1700000000000");
     auto dr = decodeTopicName(r);

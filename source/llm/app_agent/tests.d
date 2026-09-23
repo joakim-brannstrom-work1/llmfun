@@ -1,38 +1,40 @@
 /// Integration tests for AgentApp: slash dispatch, session persistence, and sidebar actions.
 module llm.app_agent.tests;
 
-import llm.app_agent;
-import llm.app_agent.slash;
-import llm.app_config : UserConfig, userToLlmConfig, createRag;
-import std.string : startsWith, strip, join;
-import llm.session : SessionId, SessionMeta, SessionFile, SessionStore, isValidId;
-import my.path : Path, AbsolutePath;
-import my.optional : Optional, hasValue, orElse;
-import std.concurrency;
-import llm.config;
 import logger = std.logger;
 import std.algorithm;
 import std.array : empty, array, appender;
 import std.conv : to, text;
+import std.concurrency : Tid, receiveTimeout, send, thisTid;
+import std.datetime : dur;
 import std.exception : collectException;
-import std.datetime : Clock, SysTime, DateTime, UTC, dur;
 import std.format : format;
 import std.json : JSONType, JSONValue;
+import std.string : startsWith, strip, join;
 import std.sumtype : match;
+
+import my.actor;
+import my.path : Path, AbsolutePath;
+import my.optional : Optional, hasValue, orElse;
+
 import llm.agent;
 import llm.agent_md;
+import llm.app_agent.slash;
 import llm.app_agent.ui;
+import llm.app_agent;
+import llm.app_config : UserConfig, userToLlmConfig, createRag;
 import llm.chat;
 import llm.config : RagConfig;
+import llm.config;
 import llm.memory;
 import llm.metric.monitor : MetricMonitor;
 import llm.query;
 import llm.rag.dialogue_index : DialogueIndex;
 import llm.rag.dialogue_worker : DiDegraded;
-import llm.rag.reasoning_index : ReasoningIndex, loadReasoningPrompt;
 import llm.rag.rag : RAG;
+import llm.rag.reasoning_index : ReasoningIndex, loadReasoningPrompt;
+import llm.session : SessionId, SessionMeta, SessionFile, SessionStore, isValidId;
 import llm.skill;
-import llm.tui;
 import llm.types : ServerStat, IStreamCallback;
 import llm.utility;
 import llmfun_tui;
@@ -103,7 +105,7 @@ unittest {
     assert(reg.execute(app, "/code") == AgentStatus.active);
 }
 
-// TurnID header round-trip: the high-water mark written by `commitActiveSession` survives a `SessionStore.save` and seeds the counter on reload. Exercises the same chain commitActiveSession uses (`extra["next_turn_id"]` -> save -> load -> `Chat.load`) without a live Agent: `Chat` and `SessionStore` cover the whole seam."
+// TurnID header round-trip: the high-water mark written by `commitActiveSession` survives a `SessionStore.save` and seeds the counter on reload. Exercises the same chain commitActiveSession uses (`extra["next_turn_id"]` -> save -> load -> `Chat.load`) without a live Agent: `Chat` and `SessionStore` cover the whole seam.
 @("TurnID header round-trip: high-water mark")
 unittest {
     import std.datetime : Clock;
@@ -198,7 +200,7 @@ unittest {
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     app.llmConf = cfg;
     app.sessionStore = store;
-    // AgentApp's ctor leaves agent_ null (created lazily in run(): private int run, `agent_ = new Agent(...)`); tests that drive the Agent assign it manually, as the production run flow does and the sibling tests below.
+    // AgentApp's ctor leaves agent_ null (production creates it in AppAgentActor.startSetup); tests that drive the Agent assign it manually, as the sibling tests below.
     app.agent_ = new Agent("main", cfg, null, null, null, ReFilter.init);
 
     // The session as it looks after a committed query: one user message, persisted directly through the store, then activated. Loading resets the app's dirty flag (activateSession, before its replay loop), so the turn below starts from a clean, persisted state.
@@ -286,7 +288,7 @@ unittest {
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     app.llmConf = cfg;
     app.sessionStore = store;
-    // AgentApp's ctor leaves agent_ null (created lazily in run(): private int run, `agent_ = new Agent(...)`); tests that drive the Agent assign it manually, as the production run flow does and the sibling tests below.
+    // AgentApp's ctor leaves agent_ null (production creates it in AppAgentActor.startSetup); tests that drive the Agent assign it manually, as the sibling tests below.
     app.agent_ = new Agent("main", cfg, null, null, null, ReFilter.init);
 
     // Establish the active session the way production does: create() writes the file with messages: [], then switchToSession activates it (clean loaded chat, flag false, activeSession set). Without this the turn commits below would write under a default (empty) SessionId.
@@ -396,7 +398,7 @@ unittest {
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     app.llmConf = cfg;
     app.sessionStore = store;
-    // AgentApp's ctor leaves agent_ null (created lazily in run()); tests that drive the Agent assign it manually, as the sibling tests do.
+    // AgentApp's ctor leaves agent_ null (production creates it in AppAgentActor.startSetup); tests that drive the Agent assign it manually, as the sibling tests do.
     app.agent_ = new Agent("main", cfg, null, null, null, ReFilter.init);
 
     // Startup simulation: setupSession's setSystemPrompt call site is the only place that assigns the cache, so the test seeds cache and chat the same way startup does (setupSession itself is private and needs a full run()).
@@ -616,42 +618,29 @@ unittest {
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     app.sessionStore = store;
     app.activeSession = meta;
-    // Active UiMessenger pointed at this thread: the handler's error chat message and the sendSessionList() refresh both land in this thread's own mailbox, so the test can observe "error emitted" and "list still refreshed" without spawning a thread.
-    app.uiMsg = new UiMessenger(thisTid, false);
-    app.uiTid = thisTid;
+    // Recording sink: the handler's error chat message and the sendSessionList() refresh are recorded synchronously, so the test can observe "error emitted" and "list still refreshed" without a UI thread or a mailbox.
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
 
     // Unknown id (valid format, no file): rename -> none -> error message, active meta unchanged, list still refreshed.
     auto unknown = SessionId("20260618-153045-ffff");
     app.doSidebarRename(unknown, "New title");
-    bool gotError = false;
-    receiveTimeout(dur!"seconds"(1), (UiChatMessage m) {
-        gotError = m.msg == "error: Failed to rename session 'ffff'.";
-    });
-    assert(gotError, "rename-none must emit the error chat message");
+    assert(sink.lastChatMessage() == "error: Failed to rename session 'ffff'.",
+            "rename-none must emit the error chat message");
     assert(app.activeSession.id == meta.id, "rename-none must keep the active meta");
     assert(app.activeSession.title == meta.title);
-    bool gotList = false;
-    receiveTimeout(dur!"seconds"(1), (immutable UiSessionList l) {
-        gotList = true;
-        assert(l.items.length == 1, "list still refreshed on rename-none");
-    });
-    assert(gotList, "rename-none must still refresh the sidebar list");
+    assert(sink.lastSessionList().length == 1, "list still refreshed on rename-none");
+    assert(sink.countOf("sessionList") == 1, "rename-none must still refresh the sidebar list");
 
     // Corrupt file (valid id, garbage JSON): same none path.
     write(buildPath(tmpDir, "20260618-153046-0bad.json"), "{ not json !!!");
     auto corrupt = SessionId("20260618-153046-0bad");
     app.doSidebarRename(corrupt, "New title");
-    gotError = false;
-    receiveTimeout(dur!"seconds"(1), (UiChatMessage m) {
-        gotError = m.msg == "error: Failed to rename session '0bad'.";
-    });
-    assert(gotError, "corrupt-file rename must emit the error chat message");
+    assert(sink.lastChatMessage() == "error: Failed to rename session '0bad'.",
+            "corrupt-file rename must emit the error chat message");
     assert(app.activeSession.id == meta.id, "corrupt-file rename must keep the active meta");
-    gotList = false;
-    receiveTimeout(dur!"seconds"(1), (immutable UiSessionList l) {
-        gotList = true;
-    });
-    assert(gotList, "corrupt-file rename must still refresh the sidebar list");
+    assert(sink.countOf("sessionList") == 2,
+            "corrupt-file rename must still refresh the sidebar list (one refresh per rename call)");
 }
 
 @(
@@ -724,58 +713,46 @@ unittest {
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     app.sessionStore = store;
     app.activeSession.id = c; // the middle one is active
-    // Active UiMessenger pointed at this thread: sendSessionList() lands in this thread's own mailbox (same pattern as the rename-none test).
-    app.uiMsg = new UiMessenger(thisTid, false);
-    app.uiTid = thisTid;
+    // Recording sink: each sendSessionList() snapshot is recorded synchronously (same pattern as the rename-none test).
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
 
     // Active session stays in store order, only marked active.
     app.sendSessionList();
-    bool gotList = false;
-    receiveTimeout(dur!"seconds"(1), (immutable UiSessionList l) {
-        gotList = true;
-        assert(l.items.length == 3);
-        assert(l.items[0].id == b && !l.items[0].isActive,
+    auto snap = sink.lastSessionList();
+    assert(snap.length == 3);
+    assert(snap[0].id == b && !snap[0].isActive,
             "most recent session leads regardless of the active marker");
-        assert(l.items[1].id == c && l.items[1].isActive,
+    assert(snap[1].id == c && snap[1].isActive,
             "the active session must stay at its store position");
-        assert(l.items[2].id == a && !l.items[2].isActive);
-    });
-    assert(gotList, "sendSessionList must emit the store-ordered snapshot");
+    assert(snap[2].id == a && !snap[2].isActive);
+    assert(sink.countOf("sessionList") == 1, "sendSessionList must emit the store-ordered snapshot");
 
     // Active at index 0 (store order): order unchanged, marked active.
     app.activeSession.id = b;
     app.sendSessionList();
-    gotList = false;
-    receiveTimeout(dur!"seconds"(1), (immutable UiSessionList l) {
-        gotList = true;
-        assert(l.items.length == 3);
-        assert(l.items[0].id == b && l.items[0].isActive);
-        assert(l.items[1].id == c && l.items[2].id == a, "snapshot must keep the store order");
-    });
-    assert(gotList, "sendSessionList must emit the store-ordered snapshot");
+    snap = sink.lastSessionList();
+    assert(snap.length == 3);
+    assert(snap[0].id == b && snap[0].isActive);
+    assert(snap[1].id == c && snap[2].id == a, "snapshot must keep the store order");
+    assert(sink.countOf("sessionList") == 2, "sendSessionList must emit the store-ordered snapshot");
 
     // Active absent from the list: snapshot keeps the store order.
     app.activeSession.id = SessionId("20260618-153045-9999");
     app.sendSessionList();
-    gotList = false;
-    receiveTimeout(dur!"seconds"(1), (immutable UiSessionList l) {
-        gotList = true;
-        assert(l.items.length == 3);
-        assert(l.items[0].id == b && l.items[1].id == c && l.items[2].id == a,
+    snap = sink.lastSessionList();
+    assert(snap.length == 3);
+    assert(snap[0].id == b && snap[1].id == c && snap[2].id == a,
             "absent active id must leave the snapshot in store order");
-        assert(!l.items[0].isActive && !l.items[1].isActive && !l.items[2].isActive);
-    });
-    assert(gotList, "sendSessionList must emit the store-ordered snapshot");
+    assert(!snap[0].isActive && !snap[1].isActive && !snap[2].isActive);
+    assert(sink.countOf("sessionList") == 3, "sendSessionList must emit the store-ordered snapshot");
 
     // Empty store: empty snapshot, no throw.
     app.sessionStore = new SessionStore(buildPath(tmpDir, "empty_sub").Path);
     app.sendSessionList();
-    gotList = false;
-    receiveTimeout(dur!"seconds"(1), (immutable UiSessionList l) {
-        gotList = true;
-        assert(l.items.length == 0, "empty store must produce an empty snapshot");
-    });
-    assert(gotList, "sendSessionList must emit the empty snapshot");
+    snap = sink.lastSessionList();
+    assert(snap.length == 0, "empty store must produce an empty snapshot");
+    assert(sink.countOf("sessionList") == 4, "sendSessionList must emit the empty snapshot");
 }
 
 // navigation never rewrites a session (updatedAt unchanged) and a dirty chat commits with an updatedAt bump
@@ -1071,9 +1048,9 @@ unittest {
     auto aFile = store.load(a);
     assert(hasValue(aFile), "setup: active session file must load");
     app.activeSession = orElse(aFile, SessionFile()).meta;
-    // Active UiMessenger pointed at this thread: the fallback activation's sendSessionList() and the confirmation chat message land in this thread's own mailbox (same pattern as the rename-none test).
-    app.uiMsg = new UiMessenger(thisTid, false);
-    app.uiTid = thisTid;
+    // Recording sink: the fallback activation's sendSessionList() and the confirmation chat message are recorded synchronously (same pattern as the rename-none test).
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
 
     app.doDeleteSession(a);
 
@@ -1087,37 +1064,20 @@ unittest {
             "the other remaining session file must survive");
 
     // Snapshot: deleted id absent; the fallback is the most recently updated remaining session, so it leads the store order and is marked active.
-    bool gotList = false;
-    receiveTimeout(dur!"seconds"(1), (immutable UiSessionList l) {
-        gotList = true;
-        assert(l.items.length == 2, "snapshot must exclude the deleted id");
-        assert(l.items[0].id == b && l.items[0].isActive,
+    auto snap = sink.lastSessionList();
+    assert(snap.length == 2, "snapshot must exclude the deleted id");
+    assert(snap[0].id == b && snap[0].isActive,
             "fallback session must lead the snapshot and be active");
-        assert(l.items[1].id == c && !l.items[1].isActive);
-    });
-    assert(gotList, "delete-active must refresh the sidebar snapshot");
+    assert(snap[1].id == c && !snap[1].isActive);
+    assert(sink.countOf("sessionList") == 1, "delete-active must refresh the sidebar snapshot");
 
-    // Confirmation chat message on the fallback path (the exact string locks the user-facing wording).
-    bool gotDeleted = false;
-    string lastChatMsg;
-    receiveTimeout(dur!"seconds"(1), (UiChatMessage m) {
-        gotDeleted = m.msg == "Session deleted: a1b2. Switched to 'T'.";
-        lastChatMsg = m.msg; // keep for the diagnostic below
-    });
-    assert(gotDeleted, "delete-active must emit the switch confirmation, got: " ~ lastChatMsg);
-
-    // Drain the remaining UI messages so this thread's mailbox stays clean for subsequent unittests (receiveTimeout scans past unmatched types, but other tests in this binary may match on them). The snapshot handler uses the immutable variant: UiSessionList is sent as cast(immutable), so a mutable handler would never match. INVARIANT: keep this handler list in sync with everything activateSession/sendSessionList/setStatusText can emit (a new UI message type added there would silently stay in the mailbox here).
-    foreach (_; 0 .. 20) {
-        bool drained = receiveTimeout(dur!"msecs"(50), (UiClearChat _) {}, (UiPipelineClear _) {
-        }, (UiChatThinkMessage _) {}, (UiInitHistory _) {}, (UiStatusText _) {}, (UiChatMessage _) {
-        }, (immutable UiSessionList _) {});
-        if (!drained)
-            break;
-    }
+    // Confirmation chat message on the fallback path (the exact string locks the user-facing wording). The replayed history went through chatThinkMessage, so the confirmation is the only recorded chatMessage.
+    assert(sink.chatMessages.length == 1 && sink.chatMessages[0] == "Session deleted: a1b2. Switched to 'T'.",
+            "delete-active must emit the switch confirmation, got: " ~ sink.lastChatMessage());
 }
 
 // corrupt session files are skipped by listing and the sweep, and switchToSession keeps the current session on load failure
-
+@("corrupt session files are skipped by listing and the sweep")
 unittest {
     import my.filter : ReFilter;
     import std.file : exists, mkdirRecurse, rmdirRecurse, write;
@@ -1153,36 +1113,30 @@ unittest {
     auto goodFile = store.load(good.id);
     assert(hasValue(goodFile), "setup: good session file must load");
     app.activeSession = orElse(goodFile, SessionFile()).meta;
-    app.uiMsg = new UiMessenger(thisTid, false);
-    app.uiTid = thisTid;
+    // Recording sink: snapshots and chat messages are observed synchronously (same pattern as the rename-none test).
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
 
     // Snapshot excludes the corrupt file. Both remaining sessions were created in the same second (updatedAt tie, id-desc tiebreak), so the exact order is not asserted here - only membership and the active marker (order semantics are covered by the snapshot-order test).
     app.sendSessionList();
-    bool gotList = false;
-    receiveTimeout(dur!"seconds"(1), (immutable UiSessionList l) {
-        gotList = true;
-        assert(l.items.length == 2, "snapshot must exclude the corrupt file");
-        auto ids = l.items.map!(i => i.id).array;
-        assert(ids.canFind(good.id) && ids.canFind(emptyOther.id),
+    auto snap = sink.lastSessionList();
+    assert(snap.length == 2, "snapshot must exclude the corrupt file");
+    auto ids = snap.map!(i => i.id).array;
+    assert(ids.canFind(good.id) && ids.canFind(emptyOther.id),
             "snapshot must list both remaining sessions");
-        foreach (item; l.items) {
-            if (item.id == good.id) {
-                assert(item.isActive, "the active session must be marked active");
-            } else {
-                assert(!item.isActive, "only the active session is marked");
-            }
+    foreach (item; snap) {
+        if (item.id == good.id) {
+            assert(item.isActive, "the active session must be marked active");
+        } else {
+            assert(!item.isActive, "only the active session is marked");
         }
-    });
-    assert(gotList, "sendSessionList must emit the snapshot");
+    }
+    assert(sink.countOf("sessionList") == 1, "sendSessionList must emit the snapshot");
 
     // switchToSession on the corrupt id: error message, current session kept (the exact string locks the user-facing wording).
     app.switchToSession(corrupt);
-    bool gotError = false;
-    receiveTimeout(dur!"seconds"(1), (UiChatMessage m) {
-        gotError = m.msg
-            == "error: Cannot load session '20260618-153046-0bad' (not found or corrupt). Staying in current session.";
-    });
-    assert(gotError, "switchToSession must emit the cannot-load error");
+    assert(sink.lastChatMessage() == "error: Cannot load session '20260618-153046-0bad' (not found or corrupt). Staying in current session.",
+            "switchToSession must emit the cannot-load error");
     assert(app.activeSession.id == good.id, "a failed load must keep the current session unchanged");
 
     // The sweep removes only list() candidates: the corrupt file is never a candidate and survives untouched, the empty non-active session is removed, and the kept (active) id is exempted. Note: good is empty from creation (store.create() writes messages: []); the failed switch commits nothing (the chat is clean), so the keep-exemption is what protects it here; non-empty survival is covered by the store-level tests.
@@ -1194,4 +1148,145 @@ unittest {
     assert(exists(corruptPath), "the sweep must leave the corrupt file untouched");
     assert(exists(buildPath(tmpDir, "chat", good.id.get ~ ".json")),
             "the kept session file must survive the sweep");
+}
+
+// ---------------------------------------------------------------------------
+// AppAgentActor integration (plan task 9, tests 6-9)
+//
+// Exercise the actor shell around AgentApp on a real my.actor System. The
+// actor reports completion over a std.concurrency mailbox to the test
+// thread (the pattern established in llm.rag and llm.mcp_server); every
+// test creates the System with the no-arg makeSystem() and shuts it down
+// in scope(exit) so no pool thread outlives the test.
+// ---------------------------------------------------------------------------
+
+/// Mirrors the onException body AppAgentActor uses when a handler throws:
+/// report the failure to the main thread, then exit with
+/// unhandledException. The real hook is a private member of
+/// AppAgentActor, so the test drives a shell with the same body.
+private final class TestExceptionActor {
+    private ActorRef self_;
+    private Tid mainTid;
+
+    this(Tid mainTid) {
+        this.mainTid = mainTid;
+    }
+
+    void onSpawn(ActorRef self) {
+        self_ = self;
+    }
+
+    void boom() {
+        throw new Exception("test exception");
+    }
+
+    void onException(Exception e) {
+        logger.warning("TestExceptionActor exception: ", e.msg);
+        send(mainTid, AgentDone(1));
+        sendExit(self_.address(), ExitReason.unhandledException);
+    }
+}
+
+/// Watches `b`: when b shuts down, the DownMsg reports "down" to the main
+/// thread.
+private final class TestWatcher {
+    private ActorRef self_;
+    private WeakAddress b;
+    private Tid mainTid;
+
+    this(Tid mainTid, WeakAddress b) {
+        this.mainTid = mainTid;
+        this.b = b;
+    }
+
+    void onSpawn(ActorRef self) {
+        self_ = self;
+        monitor(self.address(), b);
+        send(mainTid, "watching");
+    }
+
+    void onDownMessage(DownMsg d) {
+        send(mainTid, "down");
+    }
+}
+
+/// A plain victim: die() exits with kill so watchers receive the DownMsg.
+private final class TestVictim {
+    private ActorRef self_;
+
+    void onSpawn(ActorRef self) {
+        self_ = self;
+    }
+
+    void die() {
+        sendExit(self_.address(), ExitReason.kill);
+    }
+}
+
+@("agent actor: uiTerminated sends AgentDone(0)")
+unittest {
+    auto sys = makeSystem();
+    scope (exit)
+        sys.shutdown();
+
+    auto conf = UserConfig.AgentChatConfig.init;
+    auto a = sys.spawn!AppAgentActor(UserConfig.init, conf, &sys, thisTid());
+
+    dynSend(a, "uiTerminated");
+    int code = -1;
+    bool got = receiveTimeout(5.dur!"seconds", (AgentDone ad) { code = ad.code; });
+    assert(got && code == 0, "expected AgentDone(0) within 5s");
+}
+
+@("agent actor: diDegraded leaves the actor alive")
+unittest {
+    auto sys = makeSystem();
+    scope (exit)
+        sys.shutdown();
+
+    auto conf = UserConfig.AgentChatConfig.init;
+    auto a = sys.spawn!AppAgentActor(UserConfig.init, conf, &sys, thisTid());
+
+    // The degraded hook only logs; a follow-up message must still be
+    // answered (actor alive).
+    dynSend(a, "diDegraded", "no embedder available");
+    dynSend(a, "uiTerminated");
+
+    int code = -1;
+    bool got = receiveTimeout(5.dur!"seconds", (AgentDone ad) { code = ad.code; });
+    assert(got && code == 0, "expected AgentDone(0) within 5s");
+}
+
+@("agent actor: onException sends AgentDone(1)")
+unittest {
+    auto sys = makeSystem();
+    scope (exit)
+        sys.shutdown();
+
+    auto a = sys.spawn!TestExceptionActor(thisTid());
+    dynSend(a, "boom");
+
+    int code = -1;
+    bool got = receiveTimeout(5.dur!"seconds", (AgentDone ad) { code = ad.code; });
+    assert(got && code == 1, "expected AgentDone(1) within 5s");
+}
+
+@("agent actor: monitor receives DownMsg on kill")
+unittest {
+    auto sys = makeSystem();
+    scope (exit)
+        sys.shutdown();
+
+    auto b = sys.spawn!TestVictim();
+    auto a = sys.spawn!TestWatcher(thisTid(), b.weakRef);
+
+    // "watching" proves the MonitorRequest was queued on b before "die".
+    string marker = "";
+    bool got = receiveTimeout(5.dur!"seconds", (string s) { marker = s; });
+    assert(got && marker == "watching", "watcher must monitor before B dies");
+
+    dynSend(b, "die");
+    marker = "";
+    got = receiveTimeout(5.dur!"seconds", (string s) { marker = s; });
+    assert(got && marker == "down", "watcher must receive DownMsg within 5s");
 }

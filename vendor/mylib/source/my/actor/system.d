@@ -19,7 +19,6 @@ public import my.actor.actor : ActorShell, makePromise, Promise, scopedActor, Er
 public import my.actor.mailbox : Address, makeAddress, StrongAddress, TypedAddress, WeakAddress;
 public import my.actor.msg;
 import my.actor.common;
-import my.actor.memory : ActorAlloc;
 import my.actor.registration : implActor;
 
 System makeSystem(TaskPool pool) @safe {
@@ -100,11 +99,32 @@ struct System {
 
     /// spawn a plain-class actor; the ctor runs first (on the calling thread),
     /// then wiring, then the launch (onSpawn) on first execution.
-    /// If the ctor or wiring throws, the allocated shell is disposed and the
+    /// If the ctor or wiring throws, the shell is run to stopped and the
     /// exception propagates. Returns the typed address, which pairs with
     /// `Channel!I` at compile time.
+    ///
+    /// The incoming mailbox is unbounded (the default; see README,
+    /// "Bounded mailbox"). Use `spawnBounded` for a bounded mailbox.
     TypedAddress!T spawn(T, Args...)(auto ref Args args) if (is(T == class)) {
-        auto actor = bg.alloc.make(makeAddress);
+        return spawnImpl!T(0UL, args);
+    }
+
+    /// Like `spawn`, but the actor's incoming mailbox is bounded to `bound`
+    /// messages (see README, "Bounded mailbox"). The bound is installed
+    /// before the actor is scheduled, so no message can outrun it. When the
+    /// mailbox is full: a send from an actor worker is dropped (it never
+    /// blocks — that is the deadlock the bound prevents) and counted in
+    /// `Address.dropped`; a send from a non-actor thread blocks until a slot
+    /// frees or the actor shuts down. `bound <= 0` behaves like `spawn`.
+    TypedAddress!T spawnBounded(T, Args...)(size_t bound, auto ref Args args)
+            if (is(T == class)) {
+        return spawnImpl!T(bound, args);
+    }
+
+    private TypedAddress!T spawnImpl(T, Args...)(size_t bound, auto ref Args args) {
+        auto actor = new ActorShell(makeAddress);
+        if (bound > 0)
+            actor.addr.get.setMailboxBound(bound);
         T instance;
         try {
             instance = () @trusted { return new T(args); }();
@@ -112,12 +132,11 @@ struct System {
             schedule(actor);
         } catch (Throwable e) {
             // the ctor or wiring threw before the actor entered the scheduler:
-            // run the shell down to stopped and dispose it through the
-            // scheduler's own path so nothing leaks.
+            // run the shell down to stopped; once it is out of every queue
+            // and unreachable, the GC reclaims it.
             actor.forceShutdown;
             while (actor.isAlive)
                 actor.process(Clock.currTime);
-            bg.alloc.dispose(actor);
             throw e;
         }
         return TypedAddress!T(actor.addr);
@@ -561,13 +580,9 @@ private:
 
 struct Backend {
     Scheduler scheduler;
-    ActorAlloc alloc;
 
-    // trusted: the ref to alloc on the assumption that the actor system is the
-    // last to terminate. the backend is owned by the system and correctly
-    // shutdown.
     void start(TaskPool pool, ulong workers) @trusted {
-        scheduler.start(pool, workers, &alloc);
+        scheduler.start(pool, workers);
     }
 
     void shutdown() {
@@ -594,8 +609,6 @@ class Scheduler {
     import core.atomic : atomicOp, atomicLoad;
 
     SystemConfig.Scheduler conf;
-
-    ActorAlloc* alloc;
 
     /// Workers will shutdown cleanly if it is false.
     bool isActive;
@@ -726,8 +739,6 @@ class Scheduler {
                         alive++;
                         a.process(Clock.currTime);
                         sched.inShutdown.put(a);
-                    } else {
-                        sched.alloc.dispose(a);
                     }
                 }
             }
@@ -746,8 +757,6 @@ class Scheduler {
                     sendSystemMsgIfEmpty(a.address, SystemExitMsg(ExitReason.kill));
                     a.process(Clock.currTime);
                     sched.inShutdown.put(a);
-                } else {
-                    sched.alloc.dispose(a);
                 }
             }
         }
@@ -814,8 +823,7 @@ class Scheduler {
     }
 
     /// Start the workers.
-    void start(TaskPool pool, const ulong nr, ActorAlloc* alloc) {
-        this.alloc = alloc;
+    void start(TaskPool pool, const ulong nr) {
         foreach (const id; 0 .. nr) {
             auto t = task!worker(this, id);
             workers ~= t;
@@ -860,10 +868,8 @@ class Scheduler {
             waiting.put(a);
         } else if (a.isAlive) {
             inShutdown.put(a);
-        } else {
-            // TODO: should terminated actors be logged?
-            alloc.dispose(a);
         }
+        // TODO: should terminated actors be logged?
     }
 
     void putInactive(ActorShell* a) @safe {
@@ -871,9 +877,7 @@ class Scheduler {
             inactive.put(a);
         } else if (a.isAlive) {
             inShutdown.put(a);
-        } else {
-            // TODO: should terminated actors be logged?
-            alloc.dispose(a);
         }
+        // TODO: should terminated actors be logged?
     }
 }
