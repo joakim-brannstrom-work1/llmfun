@@ -313,8 +313,7 @@ unittest {
     auto sys = makeSystem;
 
     auto inner = new AClassWithInnerPtr(42);
-    // the spawn handle is stored typed; the channel pairs with it at compile
-    // time (this resolves the former TODO: dynRequest is now Channel!A1).
+    // the spawn handle is stored typed; the channel pairs with it at compile time.
     TypedAddress!A1[] actors;
     foreach (_; 0 .. 10)
         actors ~= sys.spawn!A1(inner);

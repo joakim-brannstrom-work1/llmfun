@@ -94,7 +94,9 @@ dynDelayedSend(counter, delay(100.dur!"msecs"), "add", 1);
 ```
 
 A wrong name or parameter list produces a different signature: the message is
-silently dropped (observable via `onUnhandledMessage`).
+silently dropped (observable via `onUnhandledMessage`). The `dyn*` overloads
+accept a typed handle as well — the type is erased to the weak form before
+sending, so the call stays unchecked.
 
 What is checked where:
 

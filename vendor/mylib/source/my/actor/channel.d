@@ -302,7 +302,7 @@ unittest {
         }
     }
 
-    // Hook names are never message methods; ordinary methods are counted as before.
+    // Hook names are never message methods; ordinary methods are counted.
     static assert(countMethods!(Multi, "onSpawn")() == 0);
     static assert(countMethods!(Lifecycle, "onSpawn")() == 0);
     static assert(countMethods!(Bare, "onSpawn")() == 0);
@@ -413,7 +413,7 @@ unittest {
         auto actor4V = ActorShell(addr4);
         auto bare = new Bare;
         implActor(bare, &actor4V);
-        actor4V.process(Clock.currTime); // framework passes the self-handle
+        actor4V.process(Clock.currTime); // first tick: onSpawn saves the self handle
 
         auto chan4 = Channel!ICount(addr4.weakRef, &actor4V, infTimeout());
         chan4.kick();
