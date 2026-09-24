@@ -4,7 +4,7 @@ authors "Joakim Brännström"
 copyright "Copyright © 2026, Joakim Brännström"
 license "MPL-2.0"
 
-dependency "mylib" version="~>0.0.49"
+dependency "mylib" path="../vendor/mylib"
 
 targetPath "build"
 targetType "library"

@@ -30,8 +30,8 @@ ENV DC="ldc2"
 
 RUN mkdir /opt/deps
 COPY dub.sdl /opt/deps
-RUN cd /opt/deps && dub fetch
-RUN cd /opt/deps && dub build || true
+RUN cd /opt/deps && dub fetch --cache=system
+RUN cd /opt/deps && dub build --cache=system || true
 
 RUN mkdir /workarea
 WORKDIR /workarea
