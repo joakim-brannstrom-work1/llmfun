@@ -483,7 +483,7 @@ private Optional!DialogueSessionStats sessionStats(AbsolutePath dbPath) {
 /// All valid per-session database files directly under dir.
 ///
 /// std.file's DirEntry.name is the full path, so baseName() must be applied
-/// before any session-id handling. Only D12-valid names pass (path-traversal
+/// before any session-id handling. Only format-valid names pass (path-traversal
 /// guard); anything else is silently ignored.
 private AbsolutePath[] validSessionDatabases(AbsolutePath dir) {
     import llm.session.types : SessionId, isValidId;
@@ -657,7 +657,7 @@ unittest {
     seed("20240101-120000-abcd", 4, 6);
     seed("20240102-000000-beef", 7, 9);
 
-    // A file with a non-D12 session name must be ignored by the report.
+    // A file with a non-conforming session name must be ignored by the report.
     write(dir ~ "not_a_session.db", "junk");
 
     // The report must see exactly the two valid session databases
@@ -743,7 +743,7 @@ unittest {
 }
 
 unittest {
-    // Missing dialogue directory: info line, exit 0 (N3).
+    // Missing dialogue directory: info line, exit 0.
     import my.path : Path;
 
     auto conf = LlmConfig.init;
@@ -752,7 +752,7 @@ unittest {
 }
 
 unittest {
-    // Existing but empty directory: info line, exit 0 (N3).
+    // Existing but empty directory: info line, exit 0.
     import my.path : AbsolutePath, Path;
     import std.file : rmdirRecurse;
 

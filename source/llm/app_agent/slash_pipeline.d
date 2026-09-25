@@ -1,7 +1,7 @@
 /// Pipeline slash commands: /plan and /code.
 /// Self-contained pipeline dispatch (System Designer → Implementation
 /// Planner for /plan; Coder → Code Reviewer loop for /code. Both are `SlashArgMode.required` — bare `/plan`/`/code` take the
-/// unknown-command path (W1); the handler receives the raw unstripped arg.
+/// unknown-command path; the handler receives the raw unstripped arg.
 module llm.app_agent.slash_pipeline;
 
 import std.conv : text;
@@ -26,7 +26,7 @@ package void registerPipelineCommands(ref SlashCommandRegistry registry) {
 
 /// `/plan <arg>`: run the plan pipeline (System Designer → Implementation
 /// Planner). `arg` is the raw remainder after "/plan " (registry
-/// tokenization, no strip — W1's required rule supplies the empty-arg guard).
+/// tokenization, no strip — the required rule supplies the empty-arg guard).
 private AgentStatus planHandler(ref AgentApp app, string arg) {
     app.uiMsg.pipelineClear;
     auto q = arg;
@@ -62,7 +62,7 @@ unittest {
     import std.algorithm.searching : canFind;
     import std.string : indexOf;
 
-    // AgentApp's constructor installs a blocked UiMessenger (W5); the
+    // AgentApp's constructor installs a blocked UiMessenger; the
     // unknown-command path dereferences uiMsg, so a real instance is needed.
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     SlashCommandRegistry reg;
@@ -73,7 +73,7 @@ unittest {
     // registry test in slash.d pins the required-rule mechanics). The
     // execute calls below are the behavioral fallback: bare /plan and /code
     // (with or without a trailing space — the registry tokenizes "/plan "
-    // as an empty arg) take the unknown-command path (W1). Dispatching WITH
+    // as an empty arg) take the unknown-command path. Dispatching WITH
     // an argument is not exercised here: the handlers call
     // runPlanPipeline/runCoderPipeline via makePipelineStreamCallback, which
     // dereferences agent_ (only created in run()).

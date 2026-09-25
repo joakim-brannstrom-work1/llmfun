@@ -110,6 +110,52 @@ codeModels:
     contextSize: 128000
     maxTokens: -1
 
+# Nudge policy: global defaults (usually all you need)
+# Model stopped generating without calling a tool (needMoreThinking).
+nudges:
+  keepReasoning:
+    # enabled: false silences the kind entirely: no nudge is emitted, the
+    # strike counter is untouched, and the prompt files are not loaded
+    # (loop-safety backstops govern the turn).
+    enabled: true
+    # Soft-phase prompt files, resolved through promptDir (same as AGENT.md).
+    # Strike s uses entry min(s, len)-1; the last entry repeats.
+    softNudges: [NUDGE_KEEP_REASONING_SOFT.md]
+    softStrikes: 2     # soft nudges on strikes 1..2; the hard phase starts at strike 3
+    hardNudges: [NUDGE_KEEP_REASONING_HARD.md]
+    # Final nudges before the turn fails (agentStuckInLoop). 0 = unlimited
+    # (legacy: last hard nudge repeats; loop-safety backstop governs).
+    hardStrikes: 1
+  recovery:            # model asks to continue after a failed/interrupted turn
+    enabled: true
+    softNudges: [NUDGE_RECOVERY_SOFT.md]
+    softStrikes: 2
+    hardNudges: [NUDGE_RECOVERY_HARD.md]
+    hardStrikes: 1
+  compression:        # context-usage advisory (one-shot per compress cycle)
+    enabled: true
+    # Trigger fraction, in (0.0, 1.0). A value >= 0.9 only draws a config
+    # warning: the one-shot nudge could then never fire (forced compression
+    # takes over at 90% anyway).
+    threshold: 0.8
+    # Empty/omitted = the shipped NUDGE_COMPRESSION.md.
+    prompt: NUDGE_COMPRESSION.md
+  feedback:            # FeedbackEngine warnings after tool calls (gating only)
+    enabled: true
+    intervalSecs: 900  # seconds between feedback warnings
+    minToolCalls: 50   # tool calls between feedback warnings
+
+# Per-model override (inside a codeModels: entry) REPLACES the whole policy
+# for that model (wholesale): restate every field the model should differ
+# in — fields not restated fall back to struct defaults, NOT to the global
+# policy above. Omit the block entirely to inherit the global policy.
+#   codeModels:
+#     - display: opus
+#       modelName: claude-opus-4
+#       server: { url: https://api.example.com }
+#       nudges:
+#         keepReasoning:
+#           softStrikes: 1   # this model gets the hard nudge immediately
 summaryModel:
   server:
     url: http://127.0.0.1:1234

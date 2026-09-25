@@ -401,7 +401,7 @@ void reasoningThread(Tid workerTid, SummaryModelConfig summaryCfg,
 
 version (unittest) {
     import std.file : mkdirRecurse;
-    import llm.test_util : TestArea, testArea;
+    import llm.test_util : TestArea, testArea, sharedLogSwapMutex;
 
     // Test embedder factories. Defined at module scope (not nested in a unittest) as plain `Embedder f(EmbedConfig)` functions: each test passes one by reference into dialogueWorker (the DI seam), and the address of a module-scope function (`&f`) converts to the plain EmbedderFactory pointer.
 
@@ -639,8 +639,11 @@ version (unittest) {
         }
     }
 
-    /// Serializes the process-wide `logger.sharedLog` swap between the two D7LogCapture tests: silly runs unittests in parallel (TaskPool), so two tests that install a capture and spawn a worker would otherwise race --the second install replaces the global before the first test's worker emits, sending the trace line into the WRONG capture. Hold this mutex from install through takeLines() to make the swap+drain critical section atomic.
-    private __gshared Object d7SharedLogMutex = new Object;
+    /// Serializes this module's swap+drain critical sections with the other
+    /// capture tests (llm.config, llm.rag.reasoning_index) through test_util's
+    /// sharedLogSwapMutex: silly runs unittests in parallel (TaskPool), so
+    /// overlapping swap windows would send log lines into the WRONG capture.
+    alias d7SharedLogMutex = sharedLogSwapMutex;
     /// Per-worker result of the isolation test (test 1). Carried back to the main thread; std.concurrency cannot send a local float[] result.
     private struct NtsDone {
         int idx;

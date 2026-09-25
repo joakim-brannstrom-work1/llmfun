@@ -1635,8 +1635,8 @@ unittest {
 unittest {
     auto chat = Chat();
     chat.addUserQuery("q");
-    // addContinue / addKeepReasoning nudges and feedback warnings
-    // (agent:189/220/533) are user-role Messages with userQuery == false.
+    // addContinue / addKeepReasoning nudges and feedback warnings (in
+    // llm.agent) are user-role Messages with userQuery == false.
     chat.add(Message(Role.user, userQuery: false, content: "SYSTEM NUDGE", thinking: null));
     chat.add(Message(Role.user, userQuery: false, content: "feedback warning", thinking: null));
     // Categorical: even a harness nudge that carried thinking stays out.

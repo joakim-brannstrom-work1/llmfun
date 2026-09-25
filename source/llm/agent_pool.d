@@ -459,7 +459,8 @@ unittest {
     // Verify isRunning returns false after stop
     assert(!pool.isRunning(), "Pool should not be running after stop");
 }
-/// Test: exception resilience - pool survives agent and callback exceptions (Task 12)
+
+/// Test: exception resilience - pool survives agent and callback exceptions
 unittest {
     auto pool = new AgentExecutionPool();
     scope (exit)

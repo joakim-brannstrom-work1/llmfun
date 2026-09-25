@@ -55,7 +55,7 @@ unittest {
     import llm.app_config : UserConfig;
     import std.algorithm.searching : canFind;
 
-    // AgentApp's constructor installs a blocked UiMessenger (W5); the
+    // AgentApp's constructor installs a blocked UiMessenger; the
     // unknown-command path dereferences uiMsg, so a real instance is needed.
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     SlashCommandRegistry reg;

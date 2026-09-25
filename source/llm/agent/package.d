@@ -21,6 +21,8 @@ import std.typecons : Nullable, nullable;
 import my.filter : ReFilter;
 import my.path;
 
+import llm.agent.nudges : NudgeTexts, loadNudgeTexts, nudgeFor,
+    resolvedNudgeFiles, substituteNudgeVars;
 import llm.chat;
 import llm.config;
 import llm.metric.feedback : FeedbackEngine;
@@ -59,13 +61,29 @@ class Agent : IBasicAgent {
 
         bool compressNudgeSent;
 
-        SysTime lastToolCallWarning;
-        static immutable ToolCallWarnInterval = 15.dur!"minutes";
+        // Package: the feedback-gating regression tests rewind the sentinel
+        // start (SysTime.init) between handleToolCalls calls — same reason as
+        // the strike counters below.
+        package SysTime lastToolCallWarning;
         int toolCallWarnCounter = -1;
-        static immutable MinToolCallInterval = 50;
-        static immutable MaxStrikes = 3;
-        int keepReasoningStrikes;
-        int continueStrikes;
+        // Nudge policy state, package-visible for the sibling regression tests
+        // (llm.agent.tests asserts resolution after construction / model switch,
+        // the escalation ladder, and the per-kind strike counters). `package`, not
+        // `private`: a package.d module's package symbols are visible only inside
+        // its own subtree — the same rule that lets llm.agent.tests see
+        // makeAgentTestConfig.
+        package {
+            NudgeConfig defaultNudges_; // llmConf.nudges at construction
+            NudgeConfig nudges_; // resolved for the current model
+            NudgeTexts nudgeTexts_;
+            Path[] promptDir_; // copied from llmConf at construction
+            // Per-kind strike counters (they map onto NudgeKind) —
+            // keepReasoningStrikes drives NudgeKind.keepReasoning, continueStrikes
+            // NudgeKind.recovery. Package-visible for the same reason as the fields
+            // above; the per-turn reset lifecycle (resetStrikes) is unchanged.
+            int keepReasoningStrikes;
+            int continueStrikes;
+        }
 
         ReFilter toolFilter;
         bool waitingForVisionResponse;
@@ -92,6 +110,11 @@ class Agent : IBasicAgent {
         toolCtx.setSkillManager(mgr);
         toolCtx.setTaskDoneHandler(&this.taskDone);
 
+        // Nudge policy: the global default and prompt dir must be stored BEFORE
+        // resetModel resolves the active model's policy and eagerly loads its
+        // templates (missing files throw here).
+        defaultNudges_ = llmConf.nudges;
+        promptDir_ = llmConf.promptDir;
         resetModel(llmConf.activeCodeModel);
 
         this.summary = SummaryAgent(llmConf.summaryModel);
@@ -136,6 +159,12 @@ class Agent : IBasicAgent {
 
         logger.tracef("Agent model reset: %s -> %s, context: %s", oldModel,
                 modelConfig.modelName, this.contextSize_);
+        // Resolve the model's whole-block nudge policy: wholesale swap of
+        // the global default; eagerly load its templates through the same
+        // FlatVfs path as the system prompt — a missing file fails the model
+        // switch here.
+        nudges_ = modelConfig.nudges.get(defaultNudges_);
+        nudgeTexts_ = loadNudgeTexts(promptDir_, nudges_);
     }
 
     Message[] getUserQueries() @safe nothrow {
@@ -163,82 +192,99 @@ class Agent : IBasicAgent {
     void addContinueMessage(string msg) @safe nothrow {
         chat.add(Message(Role.user, userQuery: false, content: msg, thinking: null));
     }
-
-    void addKeepReasoning() @safe nothrow {
-        keepReasoningStrikes++;
-
-        string msg;
-        if (keepReasoningStrikes < MaxStrikes) {
-            // STRIKE 1 or 2: Gentle diagnostic (but explicitly forbids plain‑text diagnosis)
-            msg = "[SYSTEM NUDGE - NOT USER INPUT]
-You stopped generating without calling a tool.
-
-You have two possible states (choose ONLY ONE):
-1. BLOCKED: You asked a question or need user input.
-2. COMPLETE: You have fully solved the user's request.
-
-EXECUTION RULES:
-- If BLOCKED: Call taskDone immediately with your question.
-- If COMPLETE: Call taskDone immediately with your final answer.
-
-IMPORTANT: Do NOT describe your state in plain text. Your very next output MUST be a tool call (taskDone) or your next reasoning step/tool call. If you need to continue working, just output the next tool call right now.";
-        } else {
-            // STRIKE 3+: Strict JSON force (breaks the loop)
-            msg = q"([SYSTEM OVERRIDE - NOT USER INPUT - FINAL WARNING]
-You have repeatedly stopped without calling a tool.
-
-Your state is BLOCKED. Do not re-diagnose.
-
-YOUR ENTIRE NEXT RESPONSE MUST BE EXACTLY THIS JSON (output ONLY this, no extra text):
-{"name": "taskDone", "arguments": {"answer": "<Put your exact question here>"}}
-
-ABSOLUTELY NO OTHER TEXT. Do not explain, apologise, or write anything outside this JSON. Output ONLY the tool call.)";
+    /// Emits the strike-appropriate nudge for `kind`. Package-visible:
+    /// llm.agent.tests drive the ladder through this seam. Delegates the ladder
+    /// step to escalateNudge and reports whether the turn may continue — `false`
+    /// means this kind's ladder is exhausted and the caller must fail the turn
+    /// (Status.agentStuckInLoop).
+    package bool addEscalatedNudge(NudgeKind kind) @safe {
+        final switch (kind) with (NudgeKind) {
+        case keepReasoning:
+            return escalateNudge(nudges_.keepReasoning, kind, keepReasoningStrikes);
+        case recovery:
+            return escalateNudge(nudges_.recovery, kind, continueStrikes);
         }
-
-        chat.add(Message(role: Role.user, userQuery: false, content: msg, thinking: null));
     }
 
-    void addContinue() @safe nothrow {
-        continueStrikes++;
+    /// One ladder step: with `enabled: false` returns true immediately —
+    /// the counter is untouched (no hidden strike-N failure can occur). Otherwise
+    /// increments `strike` and emits the strike-appropriate template: soft while
+    /// `strike <= softStrikes` (nudgeFor clamps to the ladder end, repeat-last),
+    /// then hard with h = strike - softStrikes. `h > hardStrikes` exhausts the
+    /// ladder (hardStrikes: 0 = legacy unlimited behaviour, governed by the loop
+    /// backstops) and returns false — the caller must fail the turn.
 
-        string msg;
-
-        if (continueStrikes < MaxStrikes) {
-            msg = "[SYSTEM RECOVERY - NOT USER INPUT]
-You stopped without calling a tool.
-
-This is a harness control message. Do not treat it as a user reply.
-Do not assume any pending question was answered.
-
-If you still have unfinished work or need another tool call, continue now.
-
-Otherwise call taskDone:
-- If you need user input: answer = the exact question you just asked.
-- If you are finished: answer = your final answer.
-
-Do not include anything else in taskDone.answer.";
-        } else {
-            msg = "[FINAL RECOVERY - NOT USER INPUT]
-Call taskDone now.
-
-answer = your final answer, or the exact question you just asked if you need user input.
-
-Output only the taskDone tool call. No other text.";
-        }
-
-        chat.add(Message(Role.user, userQuery: false, thinking: null, content: msg));
+    /// Trace-log source file for one ladder step: the file the emitted
+    /// template came from — resolvedNudgeFiles in nudges.d supplies the file
+    /// list (the single source of the empty→default fallback, shared with
+    /// loadNudgeTexts), and the `min(stepNo, $) - 1` repeat-last selection of
+    /// nudgeFor picks the entry. Static + pure: no state access, so it stays a
+    /// leaf. Only reachable for enabled kinds (escalateNudge returns first for
+    /// a disabled one); the resolved list is non-empty there, while the
+    /// configured lists may be empty — that is what the fallback resolves.
+    private static string nudgeSourceFile(in EscalationConfig esc, NudgeKind kind,
+            bool hard, in long stepNo) @safe pure {
+        const names = resolvedNudgeFiles(esc, kind, hard);
+        return names[min(stepNo, cast(long) names.length) - 1];
     }
 
+    private bool escalateNudge(const(EscalationConfig) esc, NudgeKind kind, ref int strike) @safe {
+        if (!esc.enabled)
+            return true;
+
+        strike++;
+        immutable inSoftPhase = strike <= esc.softStrikes;
+        if (!inSoftPhase && esc.hardStrikes > 0 && strike - esc.softStrikes > esc.hardStrikes) {
+            logger.warningf("agent %s: %s nudge ladder exhausted at strike %s - failing the turn (agentStuckInLoop)",
+                    modelName_, kind, strike);
+            return false; // ladder exhausted: the caller fails the turn
+        }
+
+        auto ladder = inSoftPhase ? nudgeTexts_.soft[kind] : nudgeTexts_.hard[kind];
+        // nudgeFor asserts on an empty ladder — a precondition loadNudgeTexts
+        // guarantees for every enabled kind, pinned with an assert here.
+        assert(!ladder.empty, "escalateNudge: empty ladder for an enabled kind");
+        immutable phaseNo = inSoftPhase ? strike : strike - esc.softStrikes;
+        // One trace line per escalation: kind, strike number, phase, and the
+        // source file. This function is not nothrow, so no try/catch is needed.
+        logger.tracef("agent %s: nudge %s strike %s (soft=%s) from %s", modelName_, kind,
+                strike, inSoftPhase, nudgeSourceFile(esc, kind, !inSoftPhase, phaseNo));
+        chat.add(Message(Role.user, userQuery: false, thinking: null, content: nudgeFor(ladder,
+                phaseNo)));
+        return true;
+    }
+
+    /// Emits the strike-appropriate keep-reasoning nudge. Thin legacy wrapper
+    /// delegates to addEscalatedNudge — the process loop owns
+    /// exhaustion handling (it fails the turn when this kind's ladder is
+    /// exhausted).
+    void addKeepReasoning() @safe {
+        addEscalatedNudge(NudgeKind.keepReasoning);
+    }
+
+    /// Emits the strike-appropriate continue/recovery nudge. Thin legacy wrapper
+    /// delegates to addEscalatedNudge — the process loop owns
+    /// exhaustion handling.
+    void addContinue() @safe {
+        addEscalatedNudge(NudgeKind.recovery);
+    }
+
+    /// Canonical compression-nudge gate (enabled + one-shot + threshold all
+    /// checked here). Callers must not re-check the threshold — a duplicate
+    /// caller-side predicate existed once and could drift from this one.
     void addCompressionNudge() @safe nothrow {
-        if (!nudgeAgentCompression || compressNudgeSent)
+        if (!nudges_.compression.enabled || compressNudgeSent)
+            return;
+        if (prevStat.context <= nudges_.compression.threshold * contextSize_)
             return;
         compressNudgeSent = true;
 
         try {
-            auto msg = format("[SYSTEM NUDGE - NOT USER INPUT]\n\nYour context is at %.1f%%. Forced compression will automatically trigger at 90%%, and it may discard information without your control.
-
-Call `requestCompression` now to compress on your own terms. Write a self-contained message to your future self covering: current goal, decisions, open questions, constraints, and next steps. (See parameter description for full details.)",
+            auto percent = format("%.1f",
                     cast(double) prevStat.context / cast(double) contextSize_ * 100.0);
+            auto msg = substituteNudgeVars(nudgeTexts_.compression, [
+                "context_percent": percent
+            ]);
             chat.add(Message(Role.user, userQuery: false, thinking: null, content: msg));
         } catch (Exception e) {
             try {
@@ -339,10 +385,6 @@ Call `requestCompression` now to compress on your own terms. Write a self-contai
         return rval;
     }
 
-    bool nudgeAgentCompression(double threshold = 0.8) @safe pure nothrow const @nogc {
-        return needCompression(threshold);
-    }
-
     bool needCompression(double threshold = 0.9) @safe pure nothrow const @nogc {
         return prevStat.context > contextSize_ * threshold;
     }
@@ -439,9 +481,20 @@ Continue your work from where you left off.";
                     keepRunning = true;
                     resetStrikes;
                 } else if (!result.hasToolCall) {
-                    addContinue;
+                    // No tool call: continue the turn via the configurable
+                    // recovery ladder; exhaustion fails the turn
+                    // deterministically — the config-driven primary failure
+                    // path for this kind.
+                    if (!addEscalatedNudge(NudgeKind.recovery)) {
+                        result.status = ProcessResult.Status.agentStuckInLoop;
+                        keepRunning = false;
+                        break;
+                    }
                     keepRunning = true;
                 } else {
+                    // ok WITH tool calls: a fresh round — strike counters
+                    // reset (per-turn lifecycle).
+                    keepRunning = true;
                     resetStrikes;
                 }
                 break;
@@ -460,11 +513,17 @@ Continue your work from where you left off.";
                 keepRunning = false;
                 break;
             case needMoreThinking:
-                this.addKeepReasoning();
+                if (!addEscalatedNudge(NudgeKind.keepReasoning)) {
+                    result.status = ProcessResult.Status.agentStuckInLoop;
+                    keepRunning = false;
+                    break;
+                }
                 keepRunning = true;
                 break;
             case agentStuckInLoop:
-                // dead code because the only place this status can be set is in this function after this switch statement.
+                // unreachable: the only place this status is set is inside this
+                // very switch (ladder exhaustion), which ends the turn in the
+                // same pass (keepRunning = false).
                 keepRunning = false;
             }
 
@@ -497,7 +556,10 @@ Continue your work from where you left off.";
             if (needCompression || toolCtx.agentCompressionRequest) {
                 // compress at the end because it could be filled with junk
                 this.compress(callback: compressCallback);
-            } else if (nudgeAgentCompression) {
+            } else {
+                // No re-check here: addCompressionNudge is the canonical gate
+                // (enabled + one-shot + threshold); a caller-side copy of the
+                // threshold predicate existed once and could drift from it.
                 addCompressionNudge();
             }
         }
@@ -621,16 +683,18 @@ private:
         return ProcessResult.Status.unknownFailure;
     }
 
-    void handleToolCalls(string thinking, ref StreamResponse.ToolCall[long] toolCalls) {
+    package void handleToolCalls(string thinking, ref StreamResponse.ToolCall[long] toolCalls) {
         import llm.tool_call : executeFunc;
         import llm.utility : sanitizeUtf8;
 
         foreach (call; toolCalls.byValue) {
             try {
-                if (monitor !is null && (Clock.currTime > lastToolCallWarning
-                        && toolCallWarnCounter > MinToolCallInterval || toolCallWarnCounter == -1)) {
+                if (monitor !is null && nudges_.feedback.enabled && (Clock.currTime > lastToolCallWarning
+                        && toolCallWarnCounter > nudges_.feedback.minToolCalls
+                        || toolCallWarnCounter == -1)) {
                     toolCallWarnCounter = 0;
-                    lastToolCallWarning = Clock.currTime + ToolCallWarnInterval;
+                    lastToolCallWarning = Clock.currTime + dur!"seconds"(
+                            nudges_.feedback.intervalSecs);
 
                     feedbackEngine.setEvents(monitor.getRecentEvents(100));
                     auto warnings = feedbackEngine.getWarnings();
@@ -1002,6 +1066,33 @@ version (unittest) {
         return llmConf;
     }
 
+    /// Agent construction eagerly loads every enabled nudge template, so a
+    /// test prompt dir needs them alongside SUMMARY.md — each fixture writes
+    /// that file the same way. Byte-identical copies: emission is rewired to
+    /// the loaded texts, and the guards pin the shipped files.
+    ///
+    /// `public`, not `package`: llm.agent's package symbols are visible only
+    /// inside the llm.agent subtree (a package.d module's package IS itself),
+    /// and llm.app_agent's fixtures call this from a sibling subtree — the same
+    /// reason sharedLogSwapMutex (nudges.d) is public. version(unittest) keeps
+    /// it out of production builds.
+    public void writeDefaultNudgeFiles(string promptDir) {
+        import std.file : write;
+        import std.path : buildPath;
+        import std.traits : EnumMembers;
+
+        import llm.config : DefaultCompressionNudge, NudgeKind, defaultNudgeFiles;
+
+        const srcDir = "llmfun/config/prompt";
+        foreach (kind; EnumMembers!NudgeKind) {
+            foreach (file; defaultNudgeFiles(kind, false) ~ defaultNudgeFiles(kind, true)) {
+                write(buildPath(promptDir, file), readText(buildPath(srcDir, file)));
+            }
+        }
+
+        write(buildPath(promptDir, DefaultCompressionNudge),
+                readText(buildPath(srcDir, DefaultCompressionNudge)));
+    }
     /// Test hygiene: remove the temp prompt dir; failures only log.
     package void cleanupAgentTestDir(string dir) {
         import std.exception : collectException;

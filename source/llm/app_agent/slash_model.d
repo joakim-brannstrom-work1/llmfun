@@ -73,7 +73,7 @@ unittest {
     import std.algorithm.searching : canFind;
     import std.string : indexOf;
 
-    // AgentApp's constructor installs a blocked UiMessenger (W5); the
+    // AgentApp's constructor installs a blocked UiMessenger; the
     // unknown-command path dereferences uiMsg, so a real instance is needed.
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     SlashCommandRegistry reg;

@@ -1091,6 +1091,8 @@ unittest {
     // Missing file: readPromptFile throws, loadReasoningPrompt falls back to
     // the built-in default with a warning — startup never hard-fails on this
     // file.
+    import llm.test_util : sharedLogSwapMutex;
+
     auto s = setupTest("loadReasoningPrompt_fallback");
     scope (exit)
         teardownTest(s);
@@ -1107,25 +1109,30 @@ unittest {
     assert(threw, "readPromptFile must throw when the prompt file is missing");
 
     // Capture the fallback warning via the std.logger sharedLog seam
-    // (restored on exit).
-    auto prevLog = logger.sharedLog;
-    auto prevLevel = logger.globalLogLevel;
-    auto cap = cast(shared) new T6LogCapture();
-    logger.sharedLog = cap;
-    logger.globalLogLevel = logger.LogLevel.trace;
-    scope (exit) {
-        logger.globalLogLevel = prevLevel;
-        logger.sharedLog = prevLog;
-    }
+    // (restored on exit). The swap+drain window is serialized against the
+    // other capture tests (llm.config, llm.rag.dialogue_worker) through
+    // test_util's sharedLogSwapMutex: silly runs unittests in parallel, so
+    // overlapping windows would send log lines into the WRONG capture.
+    synchronized (sharedLogSwapMutex) {
+        auto prevLog = logger.sharedLog;
+        auto prevLevel = logger.globalLogLevel;
+        auto cap = cast(shared) new T6LogCapture();
+        logger.sharedLog = cap;
+        logger.globalLogLevel = logger.LogLevel.trace;
+        scope (exit) {
+            logger.globalLogLevel = prevLevel;
+            logger.sharedLog = prevLog;
+        }
 
-    string loaded = loadReasoningPrompt(conf); // must not throw
-    assert(loaded == defaultReasoningPrompt,
-            "missing file must fall back to the built-in default prompt");
-    bool warned = false;
-    foreach (l; (cast() cap).takeLines())
-        if (l.canFind("loadReasoningPrompt: using built-in default"))
-            warned = true;
-    assert(warned, "fallback must log a warning");
+        string loaded = loadReasoningPrompt(conf); // must not throw
+        assert(loaded == defaultReasoningPrompt,
+                "missing file must fall back to the built-in default prompt");
+        bool warned = false;
+        foreach (l; (cast() cap).takeLines())
+            if (l.canFind("loadReasoningPrompt: using built-in default"))
+                warned = true;
+        assert(warned, "fallback must log a warning");
+    }
 }
 
 unittest {

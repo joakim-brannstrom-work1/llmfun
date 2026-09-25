@@ -1029,7 +1029,7 @@ unittest {
 
     string sid = "20240401-100000-dead";
 
-    // A harness nudge (user role but NOT userQuery) should be excluded by A4
+    // A harness nudge (user role but NOT userQuery) should be excluded
     auto nudge = Message(Role.user, false, "System nudge continue", "");
     nudge.turnId = 1;
 
@@ -1057,7 +1057,7 @@ unittest {
 
     // The nudge text should NOT appear in the indexed content
     auto result = di.query(qEmb(), SessionId(sid), "nudge", "");
-    // The nudge was excluded by A4, so "nudge" should not be found
+    // The nudge was excluded, so "nudge" should not be found
     if (result.hasHistory && result.matches.length > 0) {
         foreach (m; result.matches) {
             assert(indexOf(m.text, "System nudge") == size_t.max,

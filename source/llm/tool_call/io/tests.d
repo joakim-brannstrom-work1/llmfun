@@ -639,7 +639,7 @@ unittest {
 }
 
 unittest {
-    // Structured logging helpers (Task 6).
+    // Structured logging helpers.
     assert(sanitizeLogPath("a/b/c.txt") == "a/b/c.txt");
     assert(sanitizeLogPath("./a/b.txt") == "a/b.txt");
     assert(sanitizeLogPath("../secret/../x.txt") == "secret/x.txt");
@@ -697,7 +697,7 @@ unittest {
     assert(targetingMethodOf(UnifiedEditFileParams("p.txt", "x", "replace",
             marker: "m", scopeStart: 5, scopeEnd: 10)) == "byMarker");
 
-    // Scope helpers (Task 10).
+    // Scope helpers.
     assert(scopeDescription(10, 20) == "within scope [10, 20]");
     assert(scopeDescription(10, -1) == "within scope from line 10");
     assert(scopeDescription(-1, 20) == "within scope up to line 20");
@@ -2976,7 +2976,7 @@ unittest {
     assert(content == original, content); // dryRun never writes
 }
 
-// === Task 5: verifyContent match — edit proceeds normally ===
+// === verifyContent match — edit proceeds normally ===
 unittest {
     string[] fileLines = ["header", "line1", "line2", "line3", "footer"];
     auto outcome = executeByLine(fileLines, EditMode.replace, "new", 2, 2, false, "line1\nline2");
@@ -2984,7 +2984,7 @@ unittest {
     assert(outcome.linesChanged == -1); // 1 content line replaces 2 lines
 }
 
-// === Task 5: verifyContent mismatch — throws with actual content ===
+// === verifyContent mismatch — throws with actual content ===
 unittest {
     string[] fileLines = ["header", "line1", "line2", "line3", "footer"];
     bool threw = false;
@@ -2999,7 +2999,7 @@ unittest {
     assert(threw);
 }
 
-// === Task 5: verifyContent with startLine past end of file ===
+// === verifyContent with startLine past end of file ===
 unittest {
     string[] fileLines = ["header"];
     bool threw = false;
@@ -3013,7 +3013,7 @@ unittest {
     assert(threw);
 }
 
-// === Task 5: lineShift in success response via editFileUnifiedMemory ===
+// === lineShift in success response via editFileUnifiedMemory ===
 unittest {
     // Replace: contentLineCount=3, matchedLines=2 -> linesChanged=1
     auto outcome = editFileUnifiedMemory(["a", "b", "c", "d"],
@@ -3032,7 +3032,7 @@ unittest {
     assert(outcome4.linesChanged == 2);
 }
 
-// === Task 6: empty-line symmetric matching — file has blank line, search does not ===
+// === empty-line symmetric matching — file has blank line, search does not ===
 unittest {
     // File has empty line between "foo" and "bar", search skips it
     string[] fileLines = ["foo", "", "bar"];
@@ -3043,7 +3043,7 @@ unittest {
     assert(result.end == 3); // range includes the empty line
 }
 
-// === Task 6: empty-line symmetric matching — search has blank line, file does not ===
+// === empty-line symmetric matching — search has blank line, file does not ===
 unittest {
     // Search has empty line, file doesn't — empty search line is skipped
     string[] fileLines = ["foo", "bar"];
@@ -3054,7 +3054,7 @@ unittest {
     assert(result.end == 2);
 }
 
-// === Task 6: empty-line symmetric matching — both have blank lines ===
+// === empty-line symmetric matching — both have blank lines ===
 unittest {
     string[] fileLines = ["foo", "", "bar"];
     string[] searchLines = ["foo", "", "bar"];
@@ -3064,7 +3064,7 @@ unittest {
     assert(result.end == 3);
 }
 
-// === Task 6: empty-line symmetric matching — asymmetric blanks ===
+// === empty-line symmetric matching — asymmetric blanks ===
 unittest {
     // Two empty lines in file, one in search — all skipped
     string[] fileLines = ["foo", "", "", "bar"];
@@ -3075,7 +3075,7 @@ unittest {
     assert(result.end == 4); // range includes both empty lines
 }
 
-// === Task 6: empty-line symmetric matching — non-matching file line after skipped empties ===
+// === empty-line symmetric matching — non-matching file line after skipped empties ===
 unittest {
     // The second non-empty file line doesn't match search — should fail
     string[] fileLines = ["foo", "", "wrong", "bar"];
@@ -3084,7 +3084,7 @@ unittest {
     assert(!result.found); // "wrong" != "bar" — no false match
 }
 
-// === Task 9: multi-line marker success — 3-line marker matches consecutive file lines ===
+// === multi-line marker success — 3-line marker matches consecutive file lines ===
 unittest {
     string[] fileLines = [
         "header", "void setTimer(int ms) {", "    // TODO: implement",
@@ -3103,7 +3103,7 @@ unittest {
     assert(outcome.linesChanged == 1); // 3 content lines replace 2 matched lines
 }
 
-// === Task 9: multi-line marker partial fail — first line found, second line doesn't match ===
+// === multi-line marker partial fail — first line found, second line doesn't match ===
 unittest {
     // First marker line "foo" matches at index 1; second marker line "wrong" does
     // NOT match "bar" → continues search. Eventually no full match is found.
@@ -3118,7 +3118,7 @@ unittest {
     assert(threw);
 }
 
-// === Task 9: multi-line marker not found — first anchor line never found ===
+// === multi-line marker not found — first anchor line never found ===
 unittest {
     string[] fileLines = ["a", "b", "c"];
     bool threw = false;
@@ -3131,7 +3131,7 @@ unittest {
     assert(threw);
 }
 
-// === Task 9: multi-line marker with replaceAll — only full-anchor positions replaced ===
+// === multi-line marker with replaceAll — only full-anchor positions replaced ===
 unittest {
     // Three "foo" lines, but only two have the matching second line "bar".
     // The middle "foo" has "baz" as the next line, so it is skipped.
@@ -3142,7 +3142,7 @@ unittest {
     assert(outcome.operations == 2);
 }
 
-// === Task 9: multi-line marker with scope — search limited to scope, anchor inside ===
+// === multi-line marker with scope — search limited to scope, anchor inside ===
 unittest {
     // "foo\nbar" appears at lines 1-2 and 4-5. scopeStart=3, scopeEnd=5
     // restricts the anchor search to [2..5) (0-based), so only the second
@@ -3154,7 +3154,7 @@ unittest {
     assert(outcome.matched.matchedAt == 4);
 }
 
-// === Task 9: multi-line marker > 20 lines — rejected ===
+// === multi-line marker > 20 lines — rejected ===
 unittest {
     import std.algorithm : map;
     import std.array : join;
@@ -3173,7 +3173,7 @@ unittest {
     assert(threw);
 }
 
-// === Task 9: auto-count note — note describes marker-line auto-count ===
+// === auto-count note — note describes marker-line auto-count ===
 unittest {
     // Multi-line marker: count auto-derived from marker line count (2 lines)
     string[] fileLines = ["a", "step1", "    // details", "b"];
@@ -3184,7 +3184,7 @@ unittest {
     assert(outcome.matched.matchedLines == 2);
 }
 
-// === Task 9: auto-count note — note describes content-line auto-count ===
+// === auto-count note — note describes content-line auto-count ===
 unittest {
     // Single-line marker with 2-line content: count auto-derived from content
     string[] fileLines = ["a", "marker", "old1", "old2", "b"];
@@ -3195,7 +3195,7 @@ unittest {
     assert(outcome.matched.matchedLines == 2);
 }
 
-// === Task 9: byLine count missing — error message includes suggestion ===
+// === byLine count missing — error message includes suggestion ===
 unittest {
     bool threw = false;
     try {
@@ -3210,7 +3210,7 @@ unittest {
     assert(threw);
 }
 
-// === Task 9: multi-line marker with explicit count — autoCountUsed is false ===
+// === multi-line marker with explicit count — autoCountUsed is false ===
 unittest {
     string[] fileLines = ["a", "step1", "    // details", "extra", "b"];
     auto outcome = editFileUnifiedMemory(fileLines, EditMode.replace, "X\nY",
