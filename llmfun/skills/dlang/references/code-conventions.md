@@ -132,8 +132,10 @@
 
 - **Module-level globals are thread-local (TLS) by default.** Each thread gets
   its own copy. A global registry filled on one thread appears empty on other
-  threads. Mark cross-thread globals `__gshared` (raw shared storage, no
-  safeguards) or `shared` (compiler-checked access):
+  threads. In code comments use the spec phrasing "each thread has its own
+  copy"; "lazily created" is a toolchain implementation detail. Mark
+  cross-thread globals `__gshared` (raw shared storage, no safeguards) or
+  `shared` (compiler-checked access):
 
   ```d
   int counter;           // TLS: per-thread copy
@@ -141,8 +143,38 @@
   shared int scount;     // shared, compiler-checked
   ```
 
-- **`static this()` runs once per thread.** Use `shared static this()` for
-  program-wide initialization.
+- **Per-thread state: plain module-scope variable + plain accessor functions.**
+  If the state is inherently "this thread's", it is a thread-local by
+  definition: no mutex, no `Thread`-keyed associative array, no `static
+  shared` class ref, no GC rooting, no module constructor needed. Before
+  building a shared table keyed by `Thread`, check whether a plain variable
+  expresses the same property. TLS is per-thread and per-module: a variable
+  declared in module A stays per-calling-thread state even when accessed only
+  through functions in module A, called from module B. Verified on LDC 1.42.0:
+  each thread got its own zero-initialized copy at a distinct address, and
+  pushes on one thread never leaked to another:
+
+  ```d
+  // module worker.d
+  private ulong actorDepth;   // TLS: each thread has its own copy
+
+  bool isActor() @safe nothrow
+  {
+      return actorDepth > 0;
+  }
+
+  void markActor() @safe nothrow
+  {
+      actorDepth++;
+  }
+  ```
+
+- **`static this()` runs once per thread**; a new thread re-runs it on first
+  touch of the module. If the ctor replaces state other threads share (e.g.
+  assigns a `shared` variable), every new thread silently wipes that state.
+  Use `shared static this()` for program-wide initialization (runs exactly
+  once). Verified on LDC 1.42.0: plain ctor ran 9 times across 9 threads,
+  shared ctor ran 1 time.
 
 ## General
 

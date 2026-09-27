@@ -5,7 +5,7 @@ description: >-
   D programs, compiling D code, running D tests, or managing D project dependencies.
   Triggers on: dlang, d language, d programming, dub, dub.sdl, dub.json,
   D project, D build, D test, compile D, run D.
-version: 1.3.0
+version: 1.4.0
 ---
 
 # D Language Skill
@@ -72,7 +72,7 @@ Full details in `references/code-conventions.md`. Key rules:
 
 ### Global State & Threading
 
-- **Globals are thread-local (TLS) by default**: each thread gets its own copy; a registry filled on one thread is empty on others. Use `__gshared` or `shared` for cross-thread state. Details: `references/code-conventions.md`.
+- **Globals are thread-local (TLS) by default**: each thread gets its own copy; a registry filled on one thread is empty on others. Per-thread state = plain module variable + accessors, no mutex or `Thread`-keyed table. Use `__gshared` or `shared` for cross-thread state. Details: `references/code-conventions.md`.
 
 ### General
 
