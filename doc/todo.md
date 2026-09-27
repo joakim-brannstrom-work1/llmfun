@@ -24,6 +24,7 @@
 - Sometimes the agent stop after a compression. It starts working again with a /c
 - memory consolidation is too slow. It has to be more automated. Maybe something like a configured max number of memories that can be kept? Or that it tells the LLM that it will remove the "10 oldes" so if there is any information worth keeping in them the LLM has to "write one new memory" containing the important facts.
 - when the context is at 90% only a call to requestCompression should be accepted. Everything else is blocked.
+- implement a tool broker
 
 # ui
 - change the background color for the input field to dark grey
