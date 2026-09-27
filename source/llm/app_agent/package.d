@@ -943,6 +943,11 @@ class AppAgentActor {
             }
             app.uiMsg.ready();
             app.sendSessionList();
+            // uiAgentReady only clears the busy flag (Thinking indicator,
+            // session-panel gating); without this rewrite the status bar
+            // keeps the last "Busy" text (legacy loop-top setStatusText(true)
+            // parity).
+            app.setStatusText(true);
         }
     }
 
