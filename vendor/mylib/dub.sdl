@@ -7,6 +7,13 @@ license "BSL-1.0"
 targetPath "build"
 targetType "library"
 
+configuration "default" {
+}
+
+configuration "actor_trace" {
+    versions "mylib_actor_trace"
+}
+
 configuration "unittest" {
     dependency "nusilly" version="~>1.0.0"
     dflags "-verrors=context" platform="dmd"
