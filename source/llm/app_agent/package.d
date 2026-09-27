@@ -1041,14 +1041,26 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     // worker, so it is the only thread allowed to block on the TUI's
     // bounded mailbox; pool workers never block (they drop instead).
     // makeSystem(pool) does not own the pool, so sys.shutdown() never
-    // finishes it: daemon it so std.parallelism's static dtor stops and
-    // joins the pool threads at process exit (idle pool threads would
-    // otherwise block exit).
+    // finishes it. Daemon the pool so its idle worker threads do not block
+    // the runtime's exit join by themselves, and finish it explicitly in
+    // the shutdown scope below -- the daemon flag only exempts the threads
+    // from that join, it does not terminate them.
     auto pool = new TaskPool(2);
     pool.isDaemon = true;
     auto sys = makeSystem(pool);
-    scope (exit)
+    scope (exit) {
+        // Stop the scheduler, then stop and join the external pool.
+        // Without finish(true) the pool worker threads outlive shutdown,
+        // so a std.concurrency worker spawned from an actor handler (the
+        // dialogue index worker) never receives OwnerTerminated: that
+        // notification is delivered only when its owning pool worker
+        // exits. The worker is not a daemon thread, so process exit then
+        // hangs in the runtime's thread_joinAll even though sys.shutdown()
+        // returned. finish(true) makes the owner threads exit, which
+        // releases such workers.
         sys.shutdown();
+        pool.finish(true);
+    }
     try {
         auto agent = sys.spawn!AppAgentActor(uconf, conf, &sys, thisTid);
         dynSend(agent, "start");
