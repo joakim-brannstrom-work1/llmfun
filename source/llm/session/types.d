@@ -1,6 +1,6 @@
 /// Chat session data types and id helpers: `SessionMeta` describes the header
 /// fields of a session file, `SessionFile` carries the full parsed document,
-/// and the helpers generate and validate the D10 id format.
+/// and the helpers generate and validate the id format.
 module llm.session.types;
 
 import std.conv : text;
@@ -12,7 +12,7 @@ import std.string : format;
 
 import my.named_type : Comparable, ForwardStringable, Lengthable, NamedType, Tag;
 
-/// Maximum number of attempts (initial + retries) when a generated id collides (D10).
+/// Maximum number of attempts (initial + retries) when a generated id collides.
 enum MaxIdRetries = 5;
 
 /// Maximum length of the preview string extracted from the first user message.
@@ -23,7 +23,7 @@ enum PreviewMaxChars = 25;
 alias SessionId = NamedType!(string, Tag!"SessionId", null, Comparable,
         ForwardStringable, Lengthable);
 
-/// Regex for valid session ids (D12): YYYYMMDD-HHMMSS-4hex.
+/// Regex for valid session ids: YYYYMMDD-HHMMSS-4hex.
 private Regex!char IdPattern;
 
 static this() {
@@ -35,7 +35,7 @@ static this() {
  *
  * Fields `messageCount`, `userMessageCount`, and `preview` are computed from
  * the messages array on load/list/save. The `extra` field preserves any header
- * keys that the store does not understand, enabling future extensions (D2).
+ * keys that the store does not understand, enabling future extensions.
  */
 struct SessionMeta {
     SessionId id; // immutable; == filename (no extension)
@@ -45,7 +45,7 @@ struct SessionMeta {
     size_t messageCount; // total entries in messages[]
     size_t userMessageCount; // entries with role == "user"
     string preview; // first string-content user message, truncated
-    JSONValue extra; // unknown header keys, preserved on save (D2)
+    JSONValue extra; // unknown header keys, preserved on save
 }
 
 /** A loaded session file: metadata header plus the full JSON document. */
@@ -54,11 +54,11 @@ struct SessionFile {
     JSONValue doc; // full file JSON: header keys + "messages"
 }
 
-/** Generate a new session id in the format YYYYMMDD-HHMMSS-NNNN (D10).
+/** Generate a new session id in the format YYYYMMDD-HHMMSS-NNNN.
  *
  * The hex suffix is generated randomly. The `exists` delegate is called to
  * check for collisions; on collision the suffix is regenerated, bounded by
- * `MaxIdRetries` attempts in total (D10).
+ * `MaxIdRetries` attempts in total.
  *
  * Params:
  *   exists = delegate that returns true if the id already exists on disk
@@ -90,10 +90,10 @@ package string generateDateTitle() @safe {
     return format("%04d-%02d-%02d", now.year, now.month, now.day);
 }
 
-/** Validate a session id against the D12 format (YYYYMMDD-HHMMSS-4hex).
+/** Validate a session id against the format (YYYYMMDD-HHMMSS-4hex).
  *
  * Public so the UI boundary (`llm.app_agent` receive loop) can validate
- * sidebar-supplied ids before any store access (A3). Pure format check.
+ * sidebar-supplied ids before any store access. Pure format check.
  */
 public bool isValidId(SessionId id) @safe {
     import std.regex : match;
@@ -102,7 +102,7 @@ public bool isValidId(SessionId id) @safe {
     return !id.get.match(IdPattern).empty;
 }
 
-/// Known header keys preserved on save; unknown keys go into `meta.extra` (D2).
+/// Known header keys preserved on save; unknown keys go into `meta.extra`.
 package immutable(string[]) KnownHeaderKeys = [
     "id", "title", "createdAt", "updatedAt", "messageCount",
     "userMessageCount", "preview", "messages"

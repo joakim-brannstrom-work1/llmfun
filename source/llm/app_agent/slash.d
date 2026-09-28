@@ -109,7 +109,7 @@ struct SlashCommandRegistry {
         auto sp = input.indexOf(' ');
         auto arg = sp == -1 ? "" : input[sp + 1 .. $];
 
-        auto pcmd = name in byName_; // AA lookup returns a pointer (W6)
+        auto pcmd = name in byName_; // AA lookup returns a pointer
         if (pcmd is null) {
             unknownCommand(app, input);
             return AgentStatus.active;
@@ -120,7 +120,7 @@ struct SlashCommandRegistry {
             return AgentStatus.active;
         }
         if (cmd.argMode == SlashArgMode.required && arg.empty) {
-            unknownCommand(app, input); // W1: bare /plan, /code, /switch, /rename
+            unknownCommand(app, input); // bare /plan, /code, /switch, /rename
             return AgentStatus.active;
         }
         try {
@@ -162,7 +162,7 @@ struct SlashCommandRegistry {
     }
 
     /** Render the `/help` text: header + bare-query line + every command's
-     * help lines, sorted stably by `(order asc, registration index asc)` (W8).
+     * help lines, sorted stably by `(order asc, registration index asc)`.
      * The golden test in `tests.d` locks the exact byte-for-byte output.
      *
      * Sorting uses an index array: `SlashCommand` holds a delegate, so
@@ -195,11 +195,11 @@ struct SlashCommandRegistry {
      * unaffected.
      */
     package SlashArgMode argModeOf(string name) const {
-        auto pcmd = name in byName_; // AA lookup returns a pointer (W6)
+        auto pcmd = name in byName_; // AA lookup returns a pointer
         return pcmd is null ? SlashArgMode.none : pcmd.argMode;
     }
 
-    /** Format a plugin help line using the W4 padding formula: descriptions
+    /** Format a plugin help line using the padding formula: descriptions
      * start at column 22 for usage ≤ 19 chars, with a two-space gap (column
      * 25) only when usage exceeds 19.
      */
@@ -266,7 +266,7 @@ unittest {
     import llm.app_config : UserConfig;
     import std.exception : assertThrown;
 
-    // Real AgentApp with a blocked UiMessenger (W5): execute's unknown path
+    // Real AgentApp with a blocked UiMessenger: execute's unknown path
     // calls sendChatMessage, which routes to writeln in blocked mode — never
     // a null uiMsg dereference.
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
@@ -313,7 +313,7 @@ unittest {
     // ArgMode.none + arg -> unknown (exact-match semantics)
     assert(reg.execute(app, "/ping now") == AgentStatus.active);
 
-    // ArgMode.required + empty arg -> unknown (W1)
+    // ArgMode.required + empty arg -> unknown
     assert(reg.execute(app, "/plan") == AgentStatus.active);
     // ArgMode.required + arg -> handler
     assert(reg.execute(app, "/plan do-it") == AgentStatus.terminate);
@@ -352,7 +352,7 @@ unittest {
     assert(help.indexOf("   /ping") < help.indexOf("   /model"));
     assert(help.indexOf("   /model") < help.indexOf("   /plan"));
 
-    // formatHelpLine padding (W4): description at column 22 for usage <= 19,
+    // formatHelpLine padding: description at column 22 for usage <= 19,
     // with a two-space gap (column 25) when usage exceeds 19
     auto shortLine = SlashCommandRegistry.formatHelpLine("/ping", "Test");
     assert(shortLine.length >= 22 && shortLine[22 .. $] == "Test");
@@ -361,7 +361,7 @@ unittest {
 }
 
 unittest {
-    // Help ordering tiebreak (W8): equal order values keep registration order
+    // Help ordering tiebreak: equal order values keep registration order
     import llm.app_config : UserConfig;
 
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
@@ -397,7 +397,7 @@ unittest {
     // (`query.startsWith("/delete") && !isRegistered(query)`) depends on it.
     import llm.app_config : UserConfig;
 
-    auto app = AgentApp(UserConfig.AgentChatConfig.init); // blocked UiMessenger (W5)
+    auto app = AgentApp(UserConfig.AgentChatConfig.init); // blocked UiMessenger
     SlashCommandRegistry reg;
     registerBuiltinCommands(reg);
 

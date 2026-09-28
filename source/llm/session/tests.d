@@ -216,7 +216,7 @@ unittest {
         cleanupDir(tmpDir);
 
     auto store = new SessionStore(tmpDir.Path);
-    store.remove(SessionId("nonexistent-id")); // D12-invalid: no-op
+    store.remove(SessionId("nonexistent-id")); // invalid: no-op
     store.remove(SessionId("20250101-120000-abcd")); // valid format, file absent: silent no-op
 }
 
@@ -257,7 +257,7 @@ unittest {
     assert(sessions[0].id == meta.id, "should only list valid session");
 }
 
-// --- Test: D12 ID validation rejects invalid formats ---
+// --- Test: ID validation rejects invalid formats ---
 
 unittest {
     assert(isValidId(SessionId("20250101-120000-abcd")), "valid id should pass");
@@ -273,7 +273,7 @@ unittest {
     assert(!isValidId(SessionId("20250101-120000-ABCD")), "uppercase hex should fail");
 }
 
-// --- Test: save() rejects invalid D12 id ---
+// --- Test: save() rejects an invalid id ---
 
 unittest {
     auto tmpDir = makeTempDir("save_invalid_id");
@@ -371,7 +371,7 @@ unittest {
             "preview should skip non-string content and find next user message");
 }
 
-// --- Test: preview truncation is grapheme-safe (A17) ---
+// --- Test: preview truncation is grapheme-safe ---
 
 unittest {
     auto tmpDir = makeTempDir("preview_grapheme");
@@ -418,7 +418,7 @@ unittest {
             "combining grapheme must stay whole: got '" ~ savedMeta2.preview ~ "'");
 }
 
-// --- Test: preview normalizes newlines/tabs/control bytes to spaces (A17) ---
+// --- Test: preview normalizes newlines/tabs/control bytes to spaces ---
 
 unittest {
     auto tmpDir = makeTempDir("preview_single_line");
@@ -455,7 +455,7 @@ unittest {
 
     auto store = new SessionStore(tmpDir.Path);
 
-    // Active session stays empty on purpose: keep must exempt it (W15).
+    // Active session stays empty on purpose: keep must exempt it.
     auto active = store.create();
     auto emptyNonActive = store.create();
 

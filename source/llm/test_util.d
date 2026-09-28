@@ -81,6 +81,11 @@ version (unittest) {
         auto p = AbsolutePath(TestBaseDir) ~ format("%s_%s_%s", baseName(file), line, testName);
         return TestArea(p);
     }
+
+    /// Cross-module serialization for the sharedLog-swapping capture tests:
+    /// the canonical mutex lives in llm.agent.nudges (see there for why it
+    /// must NOT live in a module inside the llm.chat/llm.rag import cycle).
+    public import llm.agent.nudges : sharedLogSwapMutex;
 }
 
 /// Bounded spinSql.

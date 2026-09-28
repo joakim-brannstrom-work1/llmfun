@@ -833,7 +833,7 @@ class AppAgentActor {
             // Throwable into task.exception, thread returns to idle) and
             // this actor is orphaned — no AgentDone, supervisor hangs
             // forever. Catching every Throwable here turns any start
-            // failure into a logged, clean exit (D3).
+            // failure into a logged, clean exit.
             logger.errorf("AppAgentActor start failed (%s): %s",
                     cast(Exception) e !is null ? "Exception" : "Error", e.msg);
             safeDispose();
@@ -866,7 +866,7 @@ class AppAgentActor {
                 app.monitor, app.rag, app.llmConf.toolFilter.to());
         auto dialogueRagCfg = RagConfig(windowOverlapPercent: 10, nBatch: 1,
                 maxChunksPerTopic: 512);
-        // ownerTid = MAIN thread (task 4 param): DiDegraded reaches the
+        // ownerTid = MAIN thread: DiDegraded reaches the
         // supervisor, not this actor's worker.
         app.dialogueIndex = new DialogueIndex(app.llmConf.dialogueDir.AbsolutePath,
                 app.llmConf.embedConfig, dialogueRagCfg, null,
@@ -882,7 +882,7 @@ class AppAgentActor {
         app.oneShotQuery = !app.conf_.prompt.empty;
         if (app.oneShotQuery) {
             app.runAgent(app.conf_.prompt);
-            app.dispose(); // D4: explicit, before AgentDone
+            app.dispose(); // explicit, before AgentDone
             agentDone(0);
             sendExit(self_.address(), ExitReason.userShutdown);
             return;
@@ -890,7 +890,7 @@ class AppAgentActor {
 
         app.updateRagMemory();
 
-        // Bounded-mailbox canary (task 12, design D13): the legacy
+        // Bounded-mailbox canary: the legacy
         // std.concurrent TUI mailbox was bounded at 100; the actor path
         // uses 1000 — deliberately higher, because 100 proved too
         // restrictive. When the TUI mailbox is full, sends from actor
@@ -906,7 +906,7 @@ class AppAgentActor {
                 TypedAddress!TUIListener(self_.address().lock()), app.llmConf.tui.maxWidth);
         app.uiMsg = new UiMessenger(new TuiChannelSink(tui_));
         monitor(self_.address(), tui_);
-        app.uiMsg.setIniFile(app.llmConf.dataDir ~ "imgui.ini"); // ONCE (D7)
+        app.uiMsg.setIniFile(app.llmConf.dataDir ~ "imgui.ini"); // ONCE
         app.uiMsg.initHistory(app.agent_.getUserQueries.map!(a => a.content).array.idup);
         app.agent_.setStreamUpdate(app.makeStreamCallback);
 
@@ -973,7 +973,7 @@ class AppAgentActor {
         sendExit(self_.address(), ExitReason.userShutdown);
     }
 
-    // supervisor forwards DiDegraded here (task 6)
+    // supervisor forwards DiDegraded here
     void diDegraded(string reason) {
         // The dialogue worker sends this exactly once (its embedder is
         // unavailable for the process lifetime). The worker already logged
@@ -982,7 +982,7 @@ class AppAgentActor {
                 reason);
     }
 
-    // === failure paths (D3/D4) ===
+    // === failure paths ===
     void onDownMessage(DownMsg d) {
         logger.warningf("TUI actor terminated unexpectedly: %s", d.reason.to!string);
         safeDispose();
@@ -1004,7 +1004,7 @@ class AppAgentActor {
         sendExit(self_.address(), ExitReason.unhandledException);
     }
 
-    // Review F2: dispose() does file I/O (commitActiveSession/saveState)
+    // Review: dispose() does file I/O (commitActiveSession/saveState)
     // and CAN throw. On a failure path a second throw would escape the
     // hook as a nothrow violation and silently kill the scheduler worker
     // (TaskPool.doJob swallows the Throwable) — the exact hang class the
@@ -1031,9 +1031,9 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
     scope (exit)
         deinitLlmfunLocalModel();
 
-    // D1: explicit 2-worker pool — a run occupies one worker for its
+    // Explicit 2-worker pool — a run occupies one worker for its
     // full duration; the TUI actor needs the other. Never default pool.
-    // D13 pool-size policy (a convention — the library does not check it —
+    // Pool-size policy (a convention — the library does not check it —
     // documented in the mylib actor README, "Bounded mailbox"):
     // pool >= actor count + 1 — the two actors
     // (AppAgentActor, TextUserInterfaceActor) take the two pool workers and
@@ -1072,7 +1072,7 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
             // in as the legacy delegate idiom (one message per iteration —
             // forward DiDegraded, capture AgentDone's code).
             receive((DiDegraded d) {
-                dynSend(agent, "diDegraded", d.reason); // forward (design §3.1)
+                dynSend(agent, "diDegraded", d.reason); // forward
             }, (AgentDone ad) { code = ad.code; done = true; });
         }
         return code;

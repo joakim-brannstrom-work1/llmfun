@@ -598,7 +598,7 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
 
             // unpinned flush steps the whole window. Unpinned happens at 0%
             // overlap (advance >= nBatch, pin can never fire), for the final short
-            // window, or a pathological oversized word (R9).
+            // window, or a pathological oversized word.
             if (halfIndex == 0) {
                 halfIndex = textChunk.length;
                 pinTokenPos = tokens.length;
@@ -645,7 +645,7 @@ RagAddResult addToDatabase(ref Database db, Embedder embedder, Document doc,
             startLine += countLines(advStep);
             // The tail is the token suffix past the pin (O(1) slice, no
             // re-tokenization). tokens is the per-word concatenation over
-            // textChunk's words (C3) and the pin is a word boundary in both
+            // textChunk's words and the pin is a word boundary in both
             // coordinates, so the retained tail is exactly tokens[pinTokenPos .. $].
             tokens = tokens[pinTokenPos .. $];
             halfIndex = 0;
@@ -948,7 +948,7 @@ version (unittest) {
     }
 }
 
-// Test 4: randomizeRanks is deterministic per query and seed-sensitive.
+// randomizeRanks is deterministic per query and seed-sensitive.
 // Same query -> same shuffle (the agent contract); different query ->
 // different seed, so the orderings differ.
 unittest {
@@ -977,7 +977,7 @@ unittest {
     assert(differs, "different queries should shuffle differently (1/120 collision)");
 }
 
-// Test 5: randomizeRanks is a permutation (rank multiset preserved) and the
+// randomizeRanks is a permutation (rank multiset preserved) and the
 // query seed changes the shuffle.
 unittest {
     import std.conv : to;
@@ -1013,7 +1013,7 @@ unittest {
             "different queries should shuffle differently, distinct firsts: " ~ distinct.to!string);
 }
 
-// Test 6: addToDatabase indexes a scratch DB; overlap honored; re-add no-op
+// addToDatabase indexes a scratch DB; overlap honored; re-add no-op
 unittest {
     import std.conv : to;
     import llm.rag.database : openDatabase, Search;
@@ -1069,7 +1069,7 @@ unittest {
     db0.destroy;
 }
 
-// Test 6b: addToDatabase dedup salt (FX1/B4). The same content under two
+// addToDatabase dedup salt. The same content under two
 // different topic/salt pairs indexes as two distinct sources (content-only
 // dedup would collapse them to one); a re-add under the same salt is still a
 // no-op; and a salt-less add keeps today's bare-content identity (a third
@@ -1125,7 +1125,7 @@ unittest {
                 .length.to!string);
 }
 
-// Test 7: re-adding a changed source purges stale chunks
+// re-adding a changed source purges stale chunks
 // (removeSource-then-add order inside one transaction)
 // The FTS5 index is external-content (database.d FTSChunksSql): it is not
 // maintained by the indexing path, so the test rebuilds it explicitly,
@@ -1184,7 +1184,7 @@ unittest {
     assert(fresh != null && fresh.length > 0, "new chunks must be queryable");
 }
 
-// Test 8: add(rag, ...) and addToDatabase(rag.db, rag.embedder, ...)
+// add(rag, ...) and addToDatabase(rag.db, rag.embedder, ...)
 // produce identical database contents
 unittest {
     import std.conv : to;
@@ -1254,7 +1254,7 @@ unittest {
     }
 }
 
-// Test 9: token path, 10% overlap — uniform token-based steps (F1).
+// Token path, 10% overlap — uniform token-based steps.
 // 100 one-letter words (200 graphemes); 1 token/word; the 3-token topic
 // prefix is reserved out of the 50-token budget → nBatch 47, advance 42.
 // The stored text is the full window; the step advances to the pin, so the
@@ -1299,7 +1299,7 @@ unittest {
     assert(chunks[1].text == wordsRange(44, 90), "chunk 1 text");
     assert(chunks[2].text == wordsRange(87, 100), "chunk 2 text");
 
-    // F1: every chunk-start advance in [advance, advance + W_max]
+    // every chunk-start advance in [advance, advance + W_max]
     // words; here W_max == 1 (one token per word), advance == 42.
     foreach (i; 0 .. 2) {
         long stepWords = (cast(long) chunks[i + 1].offset.begin - cast(long) chunks[i].offset.begin) / 2;
@@ -1309,9 +1309,9 @@ unittest {
     db.destroy;
 }
 
-// Test 10: token path, 0% overlap — contiguous, non-overlapping (F3).
+// Token path at 0% overlap — contiguous, non-overlapping.
 // advance == nBatch (47 after the 3-token prefix reservation) so the pin
-// never fires and the D2 whole-window step yields contiguous,
+// never fires and the whole-window step yields contiguous,
 // non-overlapping chunks: [1..47], [48..94], [95..100] → offsets (0,94),
 // (94,188), (188,200); embedded tokens 50+50+9 (window + 3 prefix).
 unittest {
@@ -1355,8 +1355,8 @@ unittest {
     db.destroy;
 }
 
-// Test 11: token path dedup — re-adding the unchanged document is a
-// no-op (hasSource short-circuit; same behavior as runOnText Test 6).
+// Token path dedup — re-adding the unchanged document is a
+// no-op (hasSource short-circuit; same behavior as runOnText).
 unittest {
     import llm.rag.database : openDatabase;
     import my.optional;

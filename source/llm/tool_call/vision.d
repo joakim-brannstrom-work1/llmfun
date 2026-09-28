@@ -172,9 +172,9 @@ class DedicatedVisionAgent : IAgent {
         // The agent is created per-request by AgentContext.getVisionAgent(), so no shared state persists.
         chat.clear();
 
-        // A vision turn opens explicitly (Task 6): VisionMessages never start
+        // A vision turn opens explicitly: VisionMessages never start
         // a turn themselves (they are not Messages), so beginNewTurn() is the
-        // only allocation path (A3). clear() reset only currentTurnId_; the
+        // only allocation path. clear() reset only currentTurnId_; the
         // counter keeps climbing, so consecutive images get distinct IDs.
         chat.beginNewTurn();
 
@@ -281,12 +281,12 @@ ExecuteFuncResult loadImageApi(Context baseCtx, LoadImageApiParams params) nothr
     }
 }
 
-// --- Task 6 test: single-turn vision opens a real turn (beginNewTurn) ---
+// --- single-turn vision opens a real turn (beginNewTurn) ---
 
 // processImage() must fail against a closed localhost port, but the turn
 // opens BEFORE the request: system prompt stamps 0, the VisionMessage stamps
 // 1, and a second image (after clear()) gets turn 2 — the counter never
-// re-uses IDs (I4).
+// re-uses IDs.
 unittest {
     import llm.chat : turnIdOf;
 

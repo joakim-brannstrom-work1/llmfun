@@ -99,6 +99,62 @@ struct TuiConfig {
     long maxWidth = 0;
 }
 
+enum NudgeKind {
+    keepReasoning,
+    recovery
+}
+
+public immutable DefaultCompressionNudge = "NUDGE_COMPRESSION.md";
+
+struct EscalationConfig {
+    /// Soft-phase nudge files resolved through promptDir. Empty = kind default.
+    string[] softNudges;
+    /// Soft strikes before the hard phase. 0 = skip soft phase.
+    long softStrikes = 2;
+    /// Hard-phase nudge files. Empty = kind default.
+    string[] hardNudges;
+    /// Hard strikes before the turn fails. 0 = unlimited (backstop governs).
+    long hardStrikes = 1;
+    /// Master switch for the kind's ladder. False = no nudge, counter untouched, files not loaded (turn ends via backstops).
+    bool enabled = true;
+}
+
+struct CompressionNudgeConfig {
+    /// Gates the one-shot compression nudge. False = no nudge at any usage, template not loaded (the 90% forced point is not gated).
+    bool enabled = true;
+    /// Fraction of the context window that triggers the one-shot nudge.
+    double threshold = 0.8;
+    string prompt; // empty = shipped default file
+}
+
+struct FeedbackNudgeConfig {
+    /// Gates the tool-call feedback warning. False = no warnings; intervalSecs/minToolCalls ignored.
+    bool enabled = true;
+    long intervalSecs = 900;
+    long minToolCalls = 50;
+}
+
+struct NudgeConfig {
+    EscalationConfig keepReasoning; // default files differ per kind:
+    EscalationConfig recovery; // resolved by defaultNudgeFiles(kind)
+    CompressionNudgeConfig compression;
+    FeedbackNudgeConfig feedback;
+}
+
+/// Kind -> shipped default file names (config/prompt/):
+///   keepReasoning: soft NUDGE_KEEP_REASONING_SOFT.md  hard NUDGE_KEEP_REASONING_HARD.md
+///   recovery:      soft NUDGE_RECOVERY_SOFT.md        hard NUDGE_RECOVERY_HARD.md
+string[] defaultNudgeFiles(NudgeKind kind, bool hard) @safe pure {
+    final switch (kind) with (NudgeKind) {
+    case keepReasoning:
+        return hard ? ["NUDGE_KEEP_REASONING_HARD.md"] : [
+            "NUDGE_KEEP_REASONING_SOFT.md"
+        ];
+    case recovery:
+        return hard ? ["NUDGE_RECOVERY_HARD.md"] : ["NUDGE_RECOVERY_SOFT.md"];
+    }
+}
+
 struct LlmConfig {
     Path dataDir = ProgramName ~ "/data";
 
@@ -195,6 +251,17 @@ struct LlmConfig {
                 dialogueDir = a.get;
             }, (_) { dialogueDir = localDialogue; });
         }
+
+        if (nudges.keepReasoning.softNudges.empty)
+            nudges.keepReasoning.softNudges = defaultNudgeFiles(NudgeKind.keepReasoning, false);
+        if (nudges.keepReasoning.hardNudges.empty)
+            nudges.keepReasoning.hardNudges = defaultNudgeFiles(NudgeKind.keepReasoning, true);
+        if (nudges.recovery.softNudges.empty)
+            nudges.recovery.softNudges = defaultNudgeFiles(NudgeKind.recovery, false);
+        if (nudges.recovery.hardNudges.empty)
+            nudges.recovery.hardNudges = defaultNudgeFiles(NudgeKind.recovery, true);
+        if (nudges.compression.prompt.empty)
+            nudges.compression.prompt = DefaultCompressionNudge;
     }
 
     /// Directory where the LLM can work with assets, create files etc.
@@ -234,6 +301,8 @@ struct LlmConfig {
     /// delegates to a separate model specialized for vision tasks.
     Nullable!VisionModelConfig visionModel;
 
+    NudgeConfig nudges;
+
     invariant {
         assert(maxManifestSkills > 0, i"maxManifestSkills must be positive, got $(maxManifestSkills)"
                 .text);
@@ -248,7 +317,11 @@ struct LlmConfig {
     }
 
     /// Return: the currently active code model config (value copy, no mutex needed).
-    CodeModelConfig activeCodeModel() const @safe {
+    /// Non-const on purpose: a const accessor could not return a mutable value
+    /// copy once CodeModelConfig grew a member with mutable indirections
+    /// (Nullable!NudgeConfig - string[] ladders) — const(CodeModelConfig) does
+    /// not implicitly convert to CodeModelConfig.
+    CodeModelConfig activeCodeModel() @safe {
         if (codeModels.length == 0)
             throw new Exception("No code models configured");
         if (activeCodeModelIndex < 0 || activeCodeModelIndex >= codeModels.length)
@@ -258,12 +331,12 @@ struct LlmConfig {
     }
 
     /// Return: the name of the active model.
-    string activeModelName() @safe const {
+    string activeModelName() @safe {
         return activeCodeModel().modelName;
     }
 
-    /// Return: the name of the active model.
-    string activeModelDisplayName() @safe const {
+    /// Return: the display name of the active model.
+    string activeModelDisplayName() @safe {
         return activeCodeModel().display;
     }
 
@@ -590,6 +663,11 @@ struct CodeModelConfig {
     double temp = 0.0;
     long contextSize;
     long maxTokens;
+    /// Per-model nudge override. Whole-block semantics: when set,
+    /// this is the model's ENTIRE policy - fields not restated here fall
+    /// back to struct defaults, NOT to the global LlmConfig.nudges.
+    /// Omit the block entirely to inherit the global policy.
+    Nullable!NudgeConfig nudges;
 }
 
 struct SummaryModelConfig {
@@ -1047,6 +1125,60 @@ private void checkApiKeyWarnings(LlmConfig conf) {
     }
 }
 
+/// Validate one escalation ladder of the nudge policy:
+/// non-negative strike counts, and — only when the kind is enabled —
+/// non-empty user-supplied file names. Empty lists are allowed (they resolve
+/// to the kind's shipped defaults at load time); files of disabled kinds are
+/// not validated here. `keyPath` names the offending block in messages
+/// (e.g. "nudges.keepReasoning").
+private void validateNudgeEscalation(string keyPath, in EscalationConfig esc) {
+    if (esc.softStrikes < 0)
+        throw new Exception(i"$(keyPath).softStrikes must be >= 0, got $(esc.softStrikes)".text);
+    if (esc.hardStrikes < 0)
+        throw new Exception(i"$(keyPath).hardStrikes must be >= 0, got $(esc.hardStrikes)".text);
+    if (esc.softStrikes == 0 && esc.hardStrikes == 0)
+        throw new Exception(keyPath
+                ~ ": softStrikes and hardStrikes must not both be 0 (the escalation ladder would fail on the first strike)");
+    if (esc.enabled) {
+        import std.string : strip;
+
+        foreach (i, file; esc.softNudges)
+            if (file.strip().empty)
+                throw new Exception(i"$(keyPath).softNudges[$(i)] must not be an empty file name"
+                        .text);
+        foreach (i, file; esc.hardNudges)
+            if (file.strip().empty)
+                throw new Exception(i"$(keyPath).hardNudges[$(i)] must not be an empty file name"
+                        .text);
+    }
+}
+
+/// Validate a whole nudge policy (NudgeConfig structs): both escalation
+/// ladders, the compression threshold range and its `>= 0.9` warning, and the
+/// feedback floors. `keyPath` names the block in messages (e.g. "nudges" for
+/// the global default, "codeModels[0].nudges" for a per-model wholesale
+/// override). Files of disabled kinds are neither loaded nor validated here.
+private void validateNudgeConfig(string keyPath, in NudgeConfig n) {
+    validateNudgeEscalation(keyPath ~ ".keepReasoning", n.keepReasoning);
+    validateNudgeEscalation(keyPath ~ ".recovery", n.recovery);
+
+    immutable forcedCompression = 0.9; // the hard-coded forced point
+    if (!(n.compression.threshold > 0.0) || !(n.compression.threshold < 1.0))
+        throw new Exception(i"$(keyPath).compression.threshold must be in (0.0, 1.0) and below 0.9 to ever fire (values in [0.9, 1.0) only warn), got $(
+                n.compression.threshold)".text);
+    if (n.compression.enabled && n.compression.threshold >= forcedCompression)
+        logger.warningf("%s.compression.threshold %s is at or above the forced-compression point %.1f — the advisory compression nudge can never fire",
+                keyPath, n.compression.threshold, forcedCompression);
+
+    if (n.feedback.intervalSecs < 1)
+        throw new Exception(i"$(keyPath).feedback.intervalSecs must be >= 1, got $(
+                n.feedback.intervalSecs) (with enabled: false the value is ignored; 0 would warn after every tool call)"
+                .text);
+    if (n.feedback.minToolCalls < 1)
+        throw new Exception(i"$(keyPath).feedback.minToolCalls must be >= 1, got $(
+                n.feedback.minToolCalls) (with enabled: false the value is ignored; 0 would warn after every tool call)"
+                .text);
+}
 /// Validate LlmConfig after JSON parsing. Throws on validation failure.
 void validateConfig(LlmConfig conf) {
     if (conf.codeModels.length <= 0)
@@ -1094,6 +1226,14 @@ void validateConfig(LlmConfig conf) {
     if (conf.tui.maxWidth != 0 && (conf.tui.maxWidth < 40 || conf.tui.maxWidth > 10_000))
         throw new Exception(i"tui.maxWidth must be 0 or in [40, 10000], got $(conf.tui.maxWidth)"
                 .text);
+
+    // Nudge policy (NudgeConfig structs), global default and per-model
+    // wholesale overrides. Files of disabled kinds are neither loaded
+    // nor validated here.
+    validateNudgeConfig("nudges", conf.nudges);
+    foreach (i, model; conf.codeModels)
+        if (!model.nudges.isNull)
+            validateNudgeConfig(i"codeModels[$(i)].nudges".text, model.nudges.get);
 
     // Emit warnings for missing API keys (after all hard validation)
     checkApiKeyWarnings(conf);
@@ -1606,4 +1746,566 @@ unittest {
     // A safe explicit value is accepted.
     conf.dialogueDir = (Path("llmfun/data/dialogue"));
     validateConfig(conf);
+}
+
+version (unittest) {
+    /// Test seam: a Logger that captures formatted messages so a test can
+    /// assert on emitted log lines. Installed via the std.logger `sharedLog`
+    /// swap (same pattern as D7LogCapture in llm.rag.dialogue_worker).
+    private class CfgLogCapture : logger.Logger {
+        import core.sync.mutex : Mutex;
+        import std.array : Appender;
+
+        private {
+            Appender!(string[]) lines;
+            Mutex mtx;
+        }
+
+        this(const logger.LogLevel lvl = logger.LogLevel.all) {
+            super(lvl);
+            this.mtx = new Mutex;
+        }
+
+        override void writeLogMsg(ref LogEntry payload) @trusted {
+            mtx.lock_nothrow();
+            scope (exit)
+                mtx.unlock_nothrow();
+            lines.put(payload.msg);
+        }
+
+        string[] takeLines() {
+            mtx.lock_nothrow();
+            scope (exit)
+                mtx.unlock_nothrow();
+            auto tmp = lines[];
+            lines.clear();
+            return tmp;
+        }
+    }
+
+    /// Minimal LlmConfig that passes validateConfig's non-nudge checks, so
+    /// nudge-policy tests can mutate only the nudges block.
+    private LlmConfig nudgesValidateTestConfig() {
+        LlmConfig conf;
+        conf.codeModels ~= CodeModelConfig(server: ServerConfig(url: "http://localhost:8080",
+                warnIfNoApiKey: false), display: "test", modelName: "test");
+        return conf;
+    }
+}
+
+/// a global default `nudges:` block parses; every field lands in
+/// LlmConfig.nudges (the config schema).
+@("global nudges block parses into LlmConfig.nudges")
+unittest {
+    import std.path : buildPath;
+    import std.stdio : File;
+
+    auto tmpDir = buildPath("llmfun_test", "config_nudges_global");
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        rmdirRecurse(tmpDir);
+
+    auto tmpFile = buildPath(tmpDir, "test.yaml");
+    string yaml = `nudges:
+  keepReasoning:
+    enabled: true
+    softNudges: [NUDGE_KEEP_REASONING_SOFT.md]
+    softStrikes: 2
+    hardNudges: [NUDGE_KEEP_REASONING_HARD.md]
+    hardStrikes: 1
+  recovery:
+    softNudges: [NUDGE_RECOVERY_SOFT.md]
+    softStrikes: 2
+    hardNudges: [NUDGE_RECOVERY_HARD.md]
+    hardStrikes: 1
+  compression:
+    enabled: true
+    threshold: 0.8
+    prompt: NUDGE_COMPRESSION.md
+  feedback:
+    enabled: true
+    intervalSecs: 900
+    minToolCalls: 50
+codeModels:
+  - modelName: test
+    display: test42
+    server:
+      url: http://localhost:8080
+`;
+    File(tmpFile, "w").write(yaml);
+
+    auto conf = applyLlmConfig(LlmConfig.init, loadYamlValue(Path(tmpFile)));
+    auto n = conf.nudges;
+    assert(n.keepReasoning.enabled);
+    assert(n.keepReasoning.softNudges == ["NUDGE_KEEP_REASONING_SOFT.md"]);
+    assert(n.keepReasoning.softStrikes == 2);
+    assert(n.keepReasoning.hardNudges == ["NUDGE_KEEP_REASONING_HARD.md"]);
+    assert(n.keepReasoning.hardStrikes == 1);
+    assert(n.recovery.softNudges == ["NUDGE_RECOVERY_SOFT.md"]);
+    assert(n.recovery.softStrikes == 2);
+    assert(n.recovery.hardNudges == ["NUDGE_RECOVERY_HARD.md"]);
+    assert(n.recovery.hardStrikes == 1);
+    assert(n.compression.enabled);
+    assert(n.compression.threshold == 0.8);
+    assert(n.compression.prompt == "NUDGE_COMPRESSION.md");
+    assert(n.feedback.enabled);
+    assert(n.feedback.intervalSecs == 900);
+    assert(n.feedback.minToolCalls == 50);
+}
+
+/// `nudges` absent everywhere → the struct defaults survive.
+@("nudges absent everywhere keeps the struct defaults") unittest {
+    import std.path : buildPath;
+    import std.stdio : File;
+
+    auto tmpDir = buildPath("llmfun_test", "config_nudges_defaults");
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        rmdirRecurse(tmpDir);
+
+    auto tmpFile = buildPath(tmpDir, "test.yaml");
+    string yaml = `codeModels:
+  - modelName: test
+    display: test42
+    server:
+      url: http://localhost:8080
+`;
+    File(tmpFile, "w").write(yaml);
+
+    auto conf = applyLlmConfig(LlmConfig.init, loadYamlValue(Path(tmpFile)));
+    auto n = conf.nudges;
+    assert(n.keepReasoning.enabled);
+    assert(n.keepReasoning.softNudges.empty);
+    assert(n.keepReasoning.softStrikes == 2);
+    assert(n.keepReasoning.hardStrikes == 1);
+    assert(n.recovery.softNudges.empty);
+    assert(n.recovery.softStrikes == 2);
+    assert(n.recovery.hardNudges.empty);
+    assert(n.recovery.hardStrikes == 1);
+    assert(n.compression.enabled);
+    assert(n.compression.threshold == 0.8);
+    assert(n.compression.prompt.empty);
+    assert(n.feedback.enabled);
+    assert(n.feedback.intervalSecs == 900);
+    assert(n.feedback.minToolCalls == 50);
+}
+
+/// `nudges` absent everywhere -> readConfig still materializes the shipped
+/// default prompt files (resolvePaths), unlike the raw struct defaults above.
+@("readConfig materializes the shipped default nudge files") unittest {
+    import std.path : buildPath;
+    import std.stdio : File;
+
+    auto tmpDir = buildPath("llmfun_test", "config_nudges_resolved");
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        rmdirRecurse(tmpDir);
+
+    auto tmpFile = buildPath(tmpDir, "test.yaml");
+    string yaml = `codeModels:
+  - modelName: test
+    display: test42
+    server:
+      url: http://localhost:8080
+      warnIfNoApiKey: false
+embedConfig:
+  type: remote
+  server:
+    warnIfNoApiKey: false
+`;
+    File(tmpFile, "w").write(yaml);
+
+    auto conf = readConfigInternal(Path(tmpFile), silent: true, noCwdConfig: true,
+            trustedConfig: false, userCliWorkArea: Path.init, cwd: Path.init,
+            systemConfigPath: Path.init);
+    auto n = conf.nudges;
+    assert(n.keepReasoning.softNudges == ["NUDGE_KEEP_REASONING_SOFT.md"]);
+    assert(n.keepReasoning.hardNudges == ["NUDGE_KEEP_REASONING_HARD.md"]);
+    assert(n.recovery.softNudges == ["NUDGE_RECOVERY_SOFT.md"]);
+    assert(n.recovery.hardNudges == ["NUDGE_RECOVERY_HARD.md"]);
+    assert(n.compression.prompt == "NUDGE_COMPRESSION.md");
+    assert(n.keepReasoning.softStrikes == 2);
+    assert(n.recovery.hardStrikes == 1);
+}
+
+/// a model without its own `nudges:` block stays null (inherit the
+/// global policy) even when the global default is customized.
+@("model without its own nudges block inherits the global policy") unittest {
+    import std.path : buildPath;
+    import std.stdio : File;
+
+    auto tmpDir = buildPath("llmfun_test", "config_nudges_inherit");
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        rmdirRecurse(tmpDir);
+
+    auto tmpFile = buildPath(tmpDir, "test.yaml");
+    string yaml = `nudges:
+  keepReasoning:
+    softStrikes: 7
+codeModels:
+  - modelName: test
+    display: test42
+    server:
+      url: http://localhost:8080
+`;
+    File(tmpFile, "w").write(yaml);
+
+    auto conf = applyLlmConfig(LlmConfig.init, loadYamlValue(Path(tmpFile)));
+    assert(conf.nudges.keepReasoning.softStrikes == 7);
+    assert(conf.codeModels[0].nudges.isNull,
+            "model without its own nudges block must inherit the global policy");
+}
+
+/// Test: a per-model `nudges:` block parses through the Nullable!NudgeConfig
+/// branch and is WHOLESALE: restated fields win over the global default,
+/// fields not restated fall back to struct defaults, NOT to the global values.
+@(
+        "per-model nudges block parses wholesale; restated wins, missing fields fall back to struct defaults") unittest {
+    import std.path : buildPath;
+    import std.stdio : File;
+
+    auto tmpDir = buildPath("llmfun_test", "config_nudges_permodel");
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        rmdirRecurse(tmpDir);
+
+    auto tmpFile = buildPath(tmpDir, "test.yaml");
+    string yaml = `nudges:
+  keepReasoning:
+    softStrikes: 7
+  recovery:
+    softStrikes: 3
+codeModels:
+  - modelName: test
+    display: test42
+    server:
+      url: http://localhost:8080
+    nudges:
+      keepReasoning:
+        softNudges: [MY_SOFT.md]
+        softStrikes: 5
+`;
+    File(tmpFile, "w").write(yaml);
+
+    auto conf = applyLlmConfig(LlmConfig.init, loadYamlValue(Path(tmpFile)));
+    // Global default customized...
+    assert(conf.nudges.keepReasoning.softStrikes == 7);
+    assert(conf.nudges.recovery.softStrikes == 3);
+
+    // ...but the model's block is its ENTIRE policy:
+    auto mn = conf.codeModels[0].nudges;
+    assert(!mn.isNull, "per-model nudges must parse into the Nullable field");
+    // Restated fields take the per-model values, not the global ones.
+    assert(mn.get.keepReasoning.softStrikes == 5, "per-model value must win over the global 7");
+    assert(mn.get.keepReasoning.softNudges == ["MY_SOFT.md"]);
+    // Fields not restated in the model block fall back to STRUCT defaults,
+    // NOT to the customized global values (recovery.softStrikes: global 3).
+    assert(mn.get.recovery.softStrikes == 2,
+            "unrestated fields must use struct defaults, not the global 3");
+    assert(mn.get.recovery.softNudges.empty);
+    assert(mn.get.keepReasoning.hardStrikes == 1);
+    assert(mn.get.compression.threshold == 0.8);
+    assert(mn.get.feedback.intervalSecs == 900);
+    assert(mn.get.feedback.minToolCalls == 50);
+}
+
+/// an unknown key inside `nudges:` logs the existing "Unknown
+/// configuration key" warning (applyConfig) instead of throwing; recognized
+/// sibling keys still land.
+@("unknown key inside nudges warns instead of throwing") unittest {
+    import llm.agent.nudges : sharedLogSwapMutex;
+    import std.algorithm : canFind;
+    import std.path : buildPath;
+    import std.stdio : File;
+
+    auto tmpDir = buildPath("llmfun_test", "config_nudges_unknownkey");
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        rmdirRecurse(tmpDir);
+
+    auto tmpFile = buildPath(tmpDir, "test.yaml");
+    string yaml = `nudges:
+  keepReasoning:
+    softStrikes: 2
+  bogusKey: 1
+codeModels:
+  - modelName: test
+    display: test42
+    server:
+      url: http://localhost:8080
+`;
+    File(tmpFile, "w").write(yaml);
+
+    synchronized (sharedLogSwapMutex) {
+        auto prevLog = logger.sharedLog;
+        auto cap = cast(shared) new CfgLogCapture();
+        logger.sharedLog = cap;
+        scope (exit)
+            logger.sharedLog = prevLog;
+
+        auto conf = applyLlmConfig(LlmConfig.init, loadYamlValue(Path(tmpFile)));
+        assert(conf.nudges.keepReasoning.softStrikes == 2);
+        assert(conf.nudges.keepReasoning.hardStrikes == 1);
+        assert(conf.codeModels[0].nudges.isNull);
+        assert(canFind((cast() cap).takeLines(), "Unknown configuration key NudgeConfig.bogusKey"),
+                "unknown key inside nudges: must warn, not throw");
+    }
+}
+
+/// validateConfig accepts the default (untouched) nudge policy shape —
+/// shipped defaults 2/1, threshold 0.8, feedback 900/50, empty prompt/ladders
+/// (baseline; empty prompt = shipped default file, resolved at load time).
+@("default nudge policy shape passes validateConfig") unittest {
+    validateConfig(nudgesValidateTestConfig());
+}
+
+/// a 0/0 escalation ladder is rejected — the ladder would fail on the
+/// first strike (the math makes this a foot-gun, not a policy).
+@("0/0 escalation ladder is rejected") unittest {
+    import std.algorithm : canFind;
+
+    auto conf = nudgesValidateTestConfig();
+    conf.nudges.keepReasoning.softStrikes = 0;
+    conf.nudges.keepReasoning.hardStrikes = 0;
+
+    bool threw;
+    string msg;
+    try {
+        validateConfig(conf);
+    } catch (Exception e) {
+        threw = true;
+        msg = e.msg;
+    }
+    assert(threw, "validateConfig must throw for a 0/0 escalation ladder");
+    assert(canFind(msg, "nudges.keepReasoning"),
+            "error message must name the offending key path, got: " ~ msg);
+}
+
+/// negative strike counts are rejected, with the offending key path
+/// named in the message.
+@("negative strike counts are rejected with the key path named") unittest {
+    import std.algorithm : canFind;
+
+    auto conf = nudgesValidateTestConfig();
+    conf.nudges.recovery.softStrikes = -1;
+
+    bool threw;
+    string msg;
+    try {
+        validateConfig(conf);
+    } catch (Exception e) {
+        threw = true;
+        msg = e.msg;
+    }
+    assert(threw, "validateConfig must throw for a negative softStrikes");
+    assert(canFind(msg, "nudges.recovery.softStrikes"),
+            "error message must name the offending key path, got: " ~ msg);
+
+    conf = nudgesValidateTestConfig();
+    conf.nudges.recovery.hardStrikes = -3;
+    threw = false;
+    try {
+        validateConfig(conf);
+    } catch (Exception e) {
+        threw = true;
+        msg = e.msg;
+    }
+    assert(threw, "validateConfig must throw for a negative hardStrikes");
+    assert(canFind(msg, "nudges.recovery.hardStrikes"),
+            "error message must name the offending key path, got: " ~ msg);
+}
+
+/// Test: user-supplied EMPTY file names are rejected only for enabled kinds;
+/// files of disabled kinds are not validated (semantics: disabled kind
+/// loads nothing and nudges nothing).
+@("empty file names rejected only for enabled kinds") unittest {
+    auto conf = nudgesValidateTestConfig();
+    conf.nudges.keepReasoning.enabled = false;
+    conf.nudges.keepReasoning.softNudges = ["", "GARBAGE.md"];
+    conf.nudges.keepReasoning.hardNudges = [" "];
+    validateConfig(conf); // must not throw
+
+    conf = nudgesValidateTestConfig();
+    conf.nudges.keepReasoning.enabled = true;
+    conf.nudges.keepReasoning.softNudges = ["OK.md", ""];
+    bool threw;
+    string msg;
+    try {
+        validateConfig(conf);
+    } catch (Exception e) {
+        threw = true;
+        msg = e.msg;
+    }
+    assert(threw, "validateConfig must throw for an empty file name in an enabled kind");
+    import std.algorithm : canFind;
+
+    assert(canFind(msg, "nudges.keepReasoning.softNudges[1]"),
+            "error message must name the offending entry, got: " ~ msg);
+}
+
+/// compression threshold — (0.0, 0.9) valid; a value in [0.9, 1.0)
+/// elicits a warning (not a throw) that the advisory nudge can never fire
+/// before forced compression at 90%; outside (0.0, 1.0) throws.
+@("compression threshold: >= 0.9 warns, outside (0.0, 1.0) throws") unittest {
+    import llm.agent.nudges : sharedLogSwapMutex;
+    import std.algorithm : canFind;
+
+    auto conf = nudgesValidateTestConfig();
+    validateConfig(conf); // default 0.8 is valid and silent
+
+    // At/above the forced point: warning, not throw.
+    conf.nudges.compression.threshold = 0.95;
+    synchronized (sharedLogSwapMutex) {
+        auto prevLog = logger.sharedLog;
+        auto cap = cast(shared) new CfgLogCapture();
+        logger.sharedLog = cap;
+        scope (exit)
+            logger.sharedLog = prevLog;
+
+        validateConfig(conf);
+        auto lines = (cast() cap).takeLines().join("\n");
+        assert(lines.canFind("nudges.compression.threshold"),
+                "threshold >= 0.9 must warn, got: " ~ lines);
+    }
+
+    // Outside (0.0, 1.0): throw.
+    conf.nudges.compression.threshold = 0.0;
+    bool threw;
+    try {
+        validateConfig(conf);
+    } catch (Exception e) {
+        threw = true;
+    }
+    assert(threw, "validateConfig must throw for threshold 0.0");
+
+    conf.nudges.compression.threshold = 1.0;
+    threw = false;
+    try {
+        validateConfig(conf);
+    } catch (Exception e) {
+        threw = true;
+    }
+    assert(threw, "validateConfig must throw for threshold 1.0");
+}
+
+/// Test: feedback floors — 0 would warn after every tool call, so both values
+/// must be >= 1 (use `enabled: false` to turn the warning off instead).
+@("feedback floors of 0 are rejected") unittest {
+    auto conf = nudgesValidateTestConfig();
+    conf.nudges.feedback.intervalSecs = 0;
+    bool threw;
+    string msg;
+    try {
+        validateConfig(conf);
+    } catch (Exception e) {
+        threw = true;
+        msg = e.msg;
+    }
+    assert(threw, "validateConfig must throw for intervalSecs 0");
+    import std.algorithm : canFind;
+
+    assert(canFind(msg, "nudges.feedback.intervalSecs"),
+            "error message must name the offending key path, got: " ~ msg);
+
+    conf = nudgesValidateTestConfig();
+    conf.nudges.feedback.minToolCalls = 0;
+    threw = false;
+    try {
+        validateConfig(conf);
+    } catch (Exception e) {
+        threw = true;
+        msg = e.msg;
+    }
+    assert(threw, "validateConfig must throw for minToolCalls 0");
+    assert(canFind(msg, "nudges.feedback.minToolCalls"),
+            "error message must name the offending key path, got: " ~ msg);
+}
+
+/// Test: per-model `nudges:` wholesale overrides are validated like the
+/// global block — a 0/0 ladder, a bad compression threshold, or a feedback
+/// floor violation inside a model block fails startup with the model's key
+/// path in the message.
+@("per-model nudges overrides validated with the model key path") unittest {
+    import std.algorithm : canFind;
+
+    auto conf = nudgesValidateTestConfig();
+    conf.codeModels[0].nudges = NudgeConfig(keepReasoning: EscalationConfig(softStrikes: 0,
+            hardStrikes: 0));
+
+    bool threw;
+    string msg;
+    try {
+        validateConfig(conf);
+    } catch (Exception e) {
+        threw = true;
+        msg = e.msg;
+    }
+    assert(threw, "validateConfig must throw for a 0/0 ladder in a per-model override");
+    assert(canFind(msg, "codeModels[0].nudges.keepReasoning"),
+            "error message must name the per-model key path, got: " ~ msg);
+
+    conf = nudgesValidateTestConfig();
+    conf.codeModels[0].nudges = NudgeConfig(compression: CompressionNudgeConfig(enabled: true,
+            threshold: 1.5));
+    threw = false;
+    try {
+        validateConfig(conf);
+    } catch (Exception e) {
+        threw = true;
+        msg = e.msg;
+    }
+    assert(threw, "validateConfig must throw for a per-model threshold outside (0.0, 1.0)");
+    assert(canFind(msg, "codeModels[0].nudges.compression.threshold"),
+            "error message must name the per-model key path, got: " ~ msg);
+
+    conf = nudgesValidateTestConfig();
+    conf.codeModels[0].nudges = NudgeConfig(feedback: FeedbackNudgeConfig(enabled: true,
+            intervalSecs: 900, minToolCalls: 0));
+    threw = false;
+    try {
+        validateConfig(conf);
+    } catch (Exception e) {
+        threw = true;
+        msg = e.msg;
+    }
+    assert(threw, "validateConfig must throw for a per-model feedback floor violation");
+    assert(canFind(msg, "codeModels[0].nudges.feedback.minToolCalls"),
+            "error message must name the per-model key path, got: " ~ msg);
+}
+
+/// Test: a valid per-model `nudges:` override passes, and files of DISABLED
+/// kinds inside a per-model block are not validated either (same semantics as
+/// the global policy).
+@("valid per-model override passes; disabled kinds not validated") unittest {
+    auto conf = nudgesValidateTestConfig();
+    conf.codeModels[0].nudges = NudgeConfig(keepReasoning: EscalationConfig(softNudges: [
+        "MY_SOFT.md"
+    ], softStrikes: 5));
+    validateConfig(conf); // must not throw
+
+    conf = nudgesValidateTestConfig();
+    conf.codeModels[0].nudges = NudgeConfig(keepReasoning: EscalationConfig(enabled: false,
+            softNudges: ["", "GARBAGE.md"]));
+    validateConfig(conf); // disabled kind inside a per-model block: not validated
+}
+
+/// Test: the default (untouched) nudge policy shape validates SILENTLY — no
+/// spurious nudge warning on the shipped defaults.
+@("default nudge policy validates silently") unittest {
+    import llm.agent.nudges : sharedLogSwapMutex;
+    import std.algorithm : canFind;
+
+    synchronized (sharedLogSwapMutex) {
+        auto prevLog = logger.sharedLog;
+        auto cap = cast(shared) new CfgLogCapture();
+        logger.sharedLog = cap;
+        scope (exit)
+            logger.sharedLog = prevLog;
+
+        validateConfig(nudgesValidateTestConfig());
+        auto lines = (cast() cap).takeLines().join("\n");
+        assert(!lines.canFind("nudges."),
+                "default nudge policy must validate silently, got: " ~ lines);
+    }
 }

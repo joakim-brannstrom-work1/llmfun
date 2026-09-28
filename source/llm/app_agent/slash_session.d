@@ -1,5 +1,5 @@
 /// Session-management slash commands: /sessions, /switch, /new, /rename,
-/// /delete, /clear. Also owns the /delete confirmation state machine (W3/W9:
+/// /delete, /clear. Also owns the /delete confirmation state machine:
 /// PendingDeleteAction and decideDeleteCommand).
 module llm.app_agent.slash_session;
 
@@ -159,7 +159,7 @@ private AgentStatus deleteHandler(ref AgentApp app, string arg) {
 
 /// `/clear`: explicit in-session history wipe.
 private AgentStatus clearHandler(ref AgentApp app, string arg) {
-    // Old /new behavior: explicit in-session wipe (F11). Order matters:
+    // Old /new behavior: explicit in-session wipe. Order matters:
     // clearHistory -> UI clear -> context reset -> pipelineClear -> save.
     app.agent_.clearHistory(); // keeps system prompt at history[0]
     app.uiMsg.clearChat();
@@ -178,7 +178,7 @@ unittest {
     import std.algorithm.searching : canFind;
     import std.string : indexOf;
 
-    // AgentApp's constructor installs a blocked UiMessenger (W5); the
+    // AgentApp's constructor installs a blocked UiMessenger; the
     // unknown-command path dereferences uiMsg, so a real instance is needed.
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     SlashCommandRegistry reg;
@@ -189,7 +189,7 @@ unittest {
     assert(reg.execute(app, "/new please") == AgentStatus.active);
     assert(reg.execute(app, "/clear please") == AgentStatus.active);
 
-    // SlashArgMode.required: bare /switch and /rename take the unknown path (W1)
+    // SlashArgMode.required: bare /switch and /rename take the unknown path
     assert(reg.execute(app, "/switch") == AgentStatus.active);
     assert(reg.execute(app, "/rename") == AgentStatus.active);
 

@@ -232,7 +232,7 @@ version (unittest) {
 
     /// TestEmbedder whose embed() always fails - exercises the vector-query
     /// error path (the "error:" prefix -> success:false seam) and the
-    /// text-fallback path (mirrors the Phase 1 dialogue tool's FailEmbedder).
+    /// text-fallback path (mirrors the dialogue tool's FailEmbedder).
     private class FailEmbedder : TestEmbedder {
         override EmbedResult embed(string text) {
             return EmbedResult(EmbedError("boom"));

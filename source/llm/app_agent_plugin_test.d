@@ -1,4 +1,4 @@
-/// External-registration test (W2, §5.5): proves the startup command hook
+/// External-registration test: proves the startup command hook
 /// works from OUTSIDE the `llm.app_agent` package.
 ///
 /// This module deliberately lives outside the package — the module name is

@@ -94,7 +94,7 @@ ExecuteFuncResult queryDialogueHistory(Context baseCtx, QueryDialogueHistoryPara
 
     if (!result.hasHistory) {
         // Distinguish engine errors (embed failure, missing embedder) from the
-        // graceful no-history result (N3): errors must not look like success.
+        // graceful no-history result: errors must not look like success.
         if (result.message.startsWith("error:"))
             return ExecuteFuncResult(result.message, false);
         return ExecuteFuncResult(result.message, true);
@@ -507,7 +507,7 @@ unittest {
 }
 
 // --- Test: multi-noun FTS recall - every episode containing all exact nouns
-// is returned verbatim (F7's promise to the prompt rule) ---
+// is returned verbatim ---
 unittest {
     auto testDir = testArea("multi_noun_fts_recall");
     scope (exit)
@@ -517,7 +517,7 @@ unittest {
     // passes to FTS5 as implicit AND ("a b c" = a AND b AND c): every episode
     // that contains all the nouns is recalled. (An episode containing only a
     // SUBSET of the query nouns is NOT recalled - the boundary is asserted
-    // below; it is FTS5 semantics, not a defect, and F7's recall contract
+    // below; it is FTS5 semantics, not a defect, and the recall contract
     // depends on it.)
     seedSessionDb(TestSessionId, [1, 2, 3, 20],
             [
@@ -708,17 +708,16 @@ unittest {
     assert(chat.getMessages.length == 6);
 }
 
-// --- Test: item 1 tool-boundary surface ---
+// queryDialogueHistory tool-boundary surface ---
 // A single self-contained test that drives the REAL compression path (no fake
-// ChatData, C2) and asserts every documented behaviour of the queryDialogueHistory
+// ChatData) and asserts every documented behaviour of the queryDialogueHistory
 // API surface through the tool:
 //   * the real compress -> checkpoint -> worker-index -> query round trip
-//   * empty params -> a well-formed !success (item 6)
+//   * empty params -> a well-formed !success
 //   * never-indexed session -> graceful no-history, NO "error:" prefix
-//   * corrupt session DB written via File (N2) -> degrades to no-history, NOT an
-//     engine error (item 3), disjoint from the "error:" form (item 4)
-//   * embed failure on a session WITH history -> "error:" prefix (item 7)
-//   * dispose() is idempotent and safe before/after (item 2)
+//     engine error, disjoint from the "error:" form
+//   * embed failure on a session WITH history -> "error:" prefix
+//   * dispose() is idempotent and safe before/after
 unittest {
     import std.stdio : File;
 
@@ -754,14 +753,14 @@ unittest {
     assert(res.newLength == 6); // 1 (system) + KeepLast (5)
     di.dispose(); // drain: DiJob fully indexed before the query below
 
-    // (a) Item 1 core: the evicted turn comes back verbatim through the tool.
+    // (a) The evicted turn comes back verbatim through the tool.
     auto ra = queryDialogueHistory(makeContext(testDir, TestSessionId, di),
             QueryDialogueHistoryParams(textQuery: "item-1 integration answer"));
     assert(ra.success, ra.msg);
     assert(ra.msg.canFind("The item-1 integration answer is 987654."), ra.msg);
     assert(ra.msg.canFind("session: " ~ TestSessionId), ra.msg);
 
-    // (b) Item 6: empty params (both empty) is a well-formed !success.
+    // (b) Empty params (both empty) is a well-formed !success.
     auto rb = queryDialogueHistory(makeContext(testDir, TestSessionId, di),
             QueryDialogueHistoryParams());
     assert(!rb.success, rb.msg);
@@ -774,7 +773,7 @@ unittest {
     assert(rc.msg == "No dialogue history indexed for this session yet.", rc.msg);
     assert(!rc.msg.startsWith("error:"), "no-history must not be error-prefixed: " ~ rc.msg);
 
-    // (d) Item 3 (N2): corrupt session DB written via File -> degrades to
+    // (d) corrupt session DB written via File -> degrades to
     //     no-history, NOT an engine error.
     string corruptSid = "20240101-120000-cafe";
     File((testDir ~ (corruptSid ~ ".db")).toString, "w").write("this is not sqlite");
@@ -785,25 +784,25 @@ unittest {
     assert(!rd.msg.startsWith("error:"),
             "corrupt DB must degrade to no-history, not an engine error: " ~ rd.msg);
 
-    // (e) Item 7: embed failure on a session WITH history -> "error:" prefix.
+    // (e) Embed failure on a session WITH history -> "error:" prefix.
     auto rf = queryDialogueHistory(makeContext(testDir, TestSessionId, di, true,
             new FailEmbedder()), QueryDialogueHistoryParams(textQuery: "",
             vectorQuery: "anything"));
     assert(!rf.success, rf.msg);
     assert(rf.msg.startsWith("error:"), "embed failure must be error-prefixed: " ~ rf.msg);
 
-    // (f) Item 4 (N3 boundary): the no-history form and the engine-error form are
+    // (f) the no-history form and the engine-error form are
     //     disjoint at the tool boundary.
     assert(rc.msg != rf.msg, "no-history and engine-error forms must be distinct");
     assert(!rc.msg.startsWith("error:") && rf.msg.startsWith("error:"),
             "N3 boundary: no-history has no error prefix, engine error does");
 
-    // Item 2 (dispose idempotent at the tool level): final double dispose.
+    // Dispose idempotency at the tool level: final double dispose.
     di.dispose();
     di.dispose();
 }
 
-// --- Test: A4 partitioning keeps ToolResponse out of the dialogue projection ---
+// --- the dialogue projection keeps ToolResponse messages out ---
 unittest {
     auto chat = Chat();
     chat.setSystemPrompt("sys");
@@ -818,7 +817,7 @@ unittest {
 
     auto dialogue = chat.getDialogueHistory;
     // Dialogue projection: the user query and the final-answer ToolMessage only
-    // - both ToolResponses and the non-final ToolMessage are excluded (A4).
+    // - both ToolResponses and the non-final ToolMessage are excluded.
     assert(dialogue.length == 2, "unexpected dialogue size " ~ dialogue.length.to!string);
     assert(dialogue[0].match!((Message m) => m.isUserQuery
             && m.content == "what is 2+2?", (_) => false));
@@ -868,12 +867,12 @@ unittest {
 }
 
 // --- Test: cross-session E2E - per-session isolation, explicit targeting,
-// per-DB maxTurn independence (F5) ---
+// per-DB maxTurn independence ---
 unittest {
     auto testDir = testArea("cross_session_e2e");
     scope (exit)
         testDir.cleanup();
-    // A second valid session id (D12), distinct from TestSessionId.
+    // A second valid session id, distinct from TestSessionId.
     const string SessionB = "20240101-120100-beef";
     // One exact string present in BOTH sessions' DBs (once each - the same
     // text twice in ONE session DB would hit addToDatabase's content-hash
@@ -956,7 +955,7 @@ unittest {
     assert(r.success, r.msg);
     assert(r.msg.canFind("No matches found"), r.msg);
 
-    // (3) Per-DB maxTurn (F5): the SAME maxTurnAge = 1 window must be
+    // (3) Per-DB maxTurn: the SAME maxTurnAge = 1 window must be
     // governed by EACH DB's own newest indexed turnEnd, never a cross-session
     // one.
     // A: maxTurn = 10 -> the window keeps turnEnd >= 9, so only the turn-10

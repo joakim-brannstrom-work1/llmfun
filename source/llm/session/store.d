@@ -1,5 +1,5 @@
 /// `SessionStore`: persistent storage for chat sessions, one JSON file per
-/// session under a directory. The store keeps no in-memory cache (D4); all
+/// session under a directory. The store keeps no in-memory cache; all
 /// operations read from or write to the filesystem.
 module llm.session.store;
 
@@ -34,7 +34,7 @@ private void safeWarn(Args...)(string fmt, Args args) @safe nothrow {
 
 /** Persistent store for chat session files.
  *
- * The store keeps no in-memory cache (D4); all operations read from or write
+ * The store keeps no in-memory cache; all operations read from or write
  * to the filesystem. Each session is one JSON file under `chatDir`.
  *
  * Thread safety: single writer (the agent thread); no locking needed.
@@ -45,7 +45,7 @@ class SessionStore {
     /** Create a session store for the given directory.
      *
      * Creates the directory if it does not exist. Sweeps stale `.tmp` files
-     * left by previous crashes (W14). The directory is resolved to an
+     * left by previous crashes. The directory is resolved to an
      * absolute path so all operations stay independent of the CWD.
      *
      * Params:
@@ -68,13 +68,13 @@ class SessionStore {
         sweepStaleTmpFiles();
     }
 
-    /** Absolute path of the session file for an id (no D12 check - callers
+    /** Absolute path of the session file for an id (no format check - callers
      * validate). */
     private AbsolutePath filePathFor(SessionId id) @trusted {
         return AbsolutePath(buildPath(chatDir.toString, id.get ~ ".json"));
     }
 
-    /** Sweep stale `.tmp` files from the chat directory (W14). */
+    /** Sweep stale `.tmp` files from the chat directory. */
     private void sweepStaleTmpFiles() {
         foreach (entry; dirEntries(chatDir, "*.json.tmp", SpanMode.shallow)) {
             auto name = entry.name.baseName;
@@ -103,7 +103,7 @@ class SessionStore {
 
     /** Compute messageCount, userMessageCount, and preview from messages array.
      *
-     * Preview short-circuits at the first string-content user message (W8).
+     * Preview short-circuits at the first string-content user message.
      * Counts require the full scan.
      */
     private void computeCountsAndPreview(JSONValue doc, ref SessionMeta meta) @trusted {
@@ -125,7 +125,7 @@ class SessionStore {
                         if (content.length > 0) {
                             // First PreviewMaxChars graphemes; newlines, tabs,
                             // and control bytes normalized to spaces so the
-                            // preview is always a single line (A17). Grapheme
+                            // preview is always a single line. Grapheme
                             // iteration never splits multi-byte UTF-8.
                             previewStr = content.byGrapheme.take(PreviewMaxChars)
                                 .byCodePoint.map!(c => isControl(c) ? ' ' : c).text;
@@ -143,7 +143,7 @@ class SessionStore {
     /** Parse the header fields and compute counts/preview from a JSON document.
      *
      * Extracts known header keys (title, createdAt, updatedAt), preserves
-     * unknown keys in `extra` (D2), and computes messageCount/
+     * unknown keys in `extra`, and computes messageCount/
      * userMessageCount/preview from the messages array.
      */
     private SessionMeta parseHeader(SessionId sessionId, JSONValue doc) @trusted {
@@ -225,7 +225,7 @@ class SessionStore {
 
     /** Create a new session with a generated id and date title.
      *
-     * Generates an id per D10, sets title to local date, creates with
+     * Generates an id in the standard format, sets title to local date, creates with
      * createdAt == updatedAt == now, and writes the file immediately with
      * messages: [].
      *
@@ -254,7 +254,7 @@ class SessionStore {
 
     /** Load a session by id.
      *
-     * Returns none if id fails D12 validation, file is missing, or corrupt.
+     * Returns none if id fails validation, file is missing, or corrupt.
      */
     Optional!SessionFile load(SessionId id) @trusted {
         if (!isValidId(id)) {
@@ -281,7 +281,7 @@ class SessionStore {
      * `doc` contributes only `messages[]`; the header is rebuilt from
      * `meta.extra` + title/createdAt + updatedAt: now. Returns the updated
      * meta with recomputed counts/preview. If `doc["messages"]` is missing,
-     * treats it as []. D12-invalid id returns meta unchanged with a warning.
+     * treats it as []. An invalid id returns meta unchanged with a warning.
      */
     SessionMeta save(SessionId id, SessionMeta meta, JSONValue doc) @trusted {
         if (!isValidId(id)) {
@@ -291,7 +291,7 @@ class SessionStore {
 
         auto now = Clock.currTime().toUnixTime();
 
-        // Copy messages from doc (M5: only doc["messages"])
+        // Copy messages from doc (only doc["messages"])
         auto outDoc = buildSessionDoc(meta, now, getMessagesArray(doc));
 
         // Recompute counts/preview
@@ -305,7 +305,7 @@ class SessionStore {
 
     /** Remove a session file by id.
      *
-     * No-op (silent) if the file does not exist. D12-invalid id is ignored
+     * No-op (silent) if the file does not exist. An invalid id is ignored
      * with a warning.
      */
     void remove(SessionId id) @trusted {
@@ -326,10 +326,10 @@ class SessionStore {
 
     /** Remove every listed session with no user messages, except `keep`.
      *
-     * Built on `list()`: corrupt/invalid files are never candidates (C7).
+     * Built on `list()`: corrupt/invalid files are never candidates.
      * Per-file best effort - `remove` already swallows errors with
      * `safeWarn`. The active session is never removed, even when empty
-     * (W15). A session with assistant/tool messages but no user messages
+     * A session with assistant/tool messages but no user messages
      * IS swept (it matches "no user messages").
      *
      * Params:
@@ -358,8 +358,8 @@ class SessionStore {
 
     /** Rename a session title.
      *
-     * Updates the header title only, resaves, preserves updatedAt (D11).
-     * Returns none on empty title, unknown id, or D12-invalid id.
+     * Updates the header title only, resaves, preserves updatedAt.
+     * Returns none on empty title, unknown id, or invalid id.
      */
     Optional!SessionMeta rename(SessionId id, string newTitle) @trusted {
         if (newTitle.strip.length == 0) {
@@ -395,7 +395,7 @@ class SessionStore {
      *
      * Scans *.json files in chatDir, parses header keys and computes
      * messageCount/userMessageCount/preview from the messages array.
-     * Corrupt files are skipped with a warning, never thrown (N2/N3).
+     * Corrupt files are skipped with a warning, never thrown.
      */
     SessionMeta[] list() @trusted {
         SessionMeta[] result;

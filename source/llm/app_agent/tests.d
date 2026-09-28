@@ -51,6 +51,7 @@ version (unittest) {
         auto promptDir = buildPath(tmpDir, "prompt");
         mkdirRecurse(promptDir);
         write(buildPath(promptDir, "SUMMARY.md"), "test summary prompt");
+        writeDefaultNudgeFiles(promptDir);
 
         LlmConfig cfg;
         cfg.codeModels = [
@@ -1151,7 +1152,7 @@ unittest {
 }
 
 // ---------------------------------------------------------------------------
-// AppAgentActor integration (plan task 9, tests 6-9)
+// AppAgentActor integration
 //
 // Exercise the actor shell around AgentApp on a real my.actor System. The
 // actor reports completion over a std.concurrency mailbox to the test
