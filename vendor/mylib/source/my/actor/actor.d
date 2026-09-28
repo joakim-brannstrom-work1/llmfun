@@ -1684,6 +1684,10 @@ struct ScopedActor {
     private {
         ActorShell actor;
         ScopedActorError errSt;
+
+        /// Non-matching payloads retained for later receive calls (design
+        /// §3.B); survives across calls, entries cleared when dispatched.
+        Variant[] stash;
     }
 
     this(StrongAddress addr, string name) @safe {
@@ -1725,6 +1729,164 @@ struct ScopedActor {
                         Variant(Tuple!UArgs(args)))));
         }();
         return SRequestSendThen(RequestSendThen(rs, msg), &this);
+    }
+
+    /// The address senders can target (design §3.B).
+    WeakAddress address() @safe nothrow scope {
+        return actor.addr.weakRef;
+    }
+
+    /** Block until a message matching one of `handlers` arrives (design
+     * §3.B). A handler is a function or delegate `void f(P v)`; the first
+     * handler whose parameter type matches the message payload (mylib's
+     * exact `Unqual` rule, including the `makePayload` tuple box) is
+     * invoked.
+     *
+     * Non-matching messages are retained in the actor's stash and
+     * reconsidered, oldest first, by later receive calls. Only one thread
+     * may wait on an actor at a time — a receive inside another wait's
+     * handler is not supported. If the matching handler throws, its
+     * exception is rethrown at this wait point. */
+    void receive(Handlers...)(Handlers handlers) @safe {
+        () @trusted { receiveLoop(Duration.max, handlers); }();
+    }
+
+    /** Like `receive`, but returns `false` when `timeout` expires without
+     * a match (std-parity). */
+    bool receiveTimeout(Handlers...)(Duration timeout, Handlers handlers) @safe {
+        return () @trusted { return receiveLoop(timeout, handlers); }();
+    }
+
+    /// The wait loop shared by `receive` and `receiveTimeout` (design §3.B):
+    /// installs the dispatcher as the actor's default handler (restored on
+    /// exit), then scans the stash and pumps the mailbox until a handler
+    /// matches or the deadline expires. A throwing handler aborts the wait
+    /// and its exception is rethrown here.
+    private bool receiveLoop(Handlers...)(Duration timeout, Handlers handlers) @trusted {
+        auto hs = tuple(handlers);
+        auto ctx = new ReceiveDispatcher!(Handlers)(&this, &hs);
+        auto prev = actor.defaultHandler_;
+        actor.defaultHandler_ = &ctx.dispatch;
+        scope (exit)
+            actor.defaultHandler_ = prev;
+
+        Duration remaining = timeout;
+        SysTime prevTime = Clock.currTime;
+        uint backoff = 0;
+        while (true) {
+            // retained messages first (stale first)
+            if (ctx.scanStash) {
+                if (ctx.handlerError !is null)
+                    throw ctx.handlerError;
+                return true;
+            }
+
+            // pump the mailbox; the keep-alive mirrors SRequestSendThen.then
+            actor.process(Clock.currTime);
+            actor.state_ = ActorState.waiting;
+
+            if (ctx.matched) {
+                if (ctx.handlerError !is null)
+                    throw ctx.handlerError;
+                return true;
+            }
+
+            // Duration.max never expires: the subtraction stays positive.
+            remaining -= (Clock.currTime - prevTime);
+            prevTime = Clock.currTime;
+            if (remaining <= Duration.zero)
+                return false;
+
+            Thread.sleep(backoff.dur!"usecs");
+            backoff = min(backoff + 100, 20000);
+        }
+    }
+
+    /// Context for one blocking receive call (design §3.B): holds the
+    /// handlers tuple and per-call state, and manipulates the actor's
+    /// persistent `stash` so retained messages survive across calls.
+    private static class ReceiveDispatcher(Hs...) {
+        ScopedActor* self_;
+        Tuple!Hs* handlers;
+        bool matched;
+        Exception handlerError;
+
+        this(ScopedActor* self, Tuple!Hs* handlers) @safe nothrow @nogc {
+            this.self_ = self;
+            this.handlers = handlers;
+        }
+
+        /// Match `handler` against `msg`: parameter `P` accepts a payload
+        /// stored as `Unqual!P`, or (when `P` is not itself a tuple) the
+        /// `makePayload` box `Tuple!(Unqual!P)`. A throwing handler stores
+        /// its exception in `handlerError` instead of propagating it.
+        private static bool tryHandler(H)(H handler, ref Variant msg, ref Exception handlerError) @trusted nothrow {
+            alias P = Parameters!H[0];
+            P v;
+            bool found;
+            try {
+                if (auto p = msg.peek!(Unqual!P)) {
+                    v = cast(P)*p;
+                    found = true;
+                } else {
+                    static if (!is(Unqual!P : Tuple!U, U)) {
+                        if (auto t = msg.peek!(Tuple!(Unqual!P))) {
+                            v = cast(P)(*t).tupleof[0];
+                            found = true;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                return false;
+            }
+            if (!found)
+                return false;
+            try {
+                handler(v);
+            } catch (Exception e) {
+                handlerError = e;
+            }
+            return true;
+        }
+
+        void dispatch(scope ref ActorShell self, ref Variant msg) @safe nothrow {
+            if (!matched) {
+                static foreach (i, H; Hs) {
+                    if (!matched && tryHandler!H((*handlers)[i], msg, handlerError))
+                        matched = true;
+                }
+            }
+            if (!matched) {
+                try {
+                    () @trusted { self_.stash ~= Variant(msg); }();
+                } catch (Exception e) {
+                }
+            }
+        }
+
+        /// Scan the stash oldest first; dispatch the first handler match
+        /// and clear its entry.
+        bool scanStash() @safe nothrow {
+            for (size_t i = 0; i < self_.stash.length; ++i) {
+                bool hit;
+                static foreach (j, H; Hs) {
+                    if (!hit && tryHandler!H((*handlers)[j], self_.stash[i], handlerError)) {
+                        try {
+                            () @trusted {
+                                self_.stash = self_.stash[0 .. i] ~ self_.stash[i + 1 .. $];
+                            }();
+                        } catch (Exception e) {
+                        }
+                        hit = true;
+                    }
+                }
+                if (hit) {
+                    matched = true;
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     private static struct SRequestSendThen {
@@ -2205,4 +2367,107 @@ unittest {
     assert(counter.get >= 3,
             "repeating tick should fire under maxThroughput=1 but got " ~ to!string(counter.get));
     sys.shutdown;
+}
+
+@("ScopedActor.receive: handler dispatch + address-targeted send") unittest {
+    import my.actor.system;
+    import my.actor.channel;
+
+    static class Sender {
+        void go(WeakAddress to) {
+            dynSend(to, "hello", "world");
+        }
+    }
+
+    auto sup = scopedActor;
+    auto sys = makeSystem;
+    auto s = sys.spawn!Sender();
+    dynSend(s, "go", sup.address());
+    string got;
+    assert(sup.receiveTimeout(5.dur!"seconds", (string v) { got = v; }));
+    assert(got == "world");
+    sys.shutdown();
+}
+
+@("ScopedActor.receiveTimeout: false on deadline") unittest {
+    auto sup = scopedActor;
+    assert(!sup.receiveTimeout(50.dur!"msecs", (string s) { assert(false); }));
+}
+
+@("ScopedActor.receive: stash retains non-matching messages for later calls") unittest {
+    import my.actor.channel;
+
+    auto sup = scopedActor;
+    dynSend(sup.address(), "a", 42); // int payload — no handler in call 1
+    dynSend(sup.address(), "b", "text"); // string payload
+    string s1;
+    assert(sup.receiveTimeout(5.dur!"seconds", (string s) { s1 = s; }));
+    assert(s1 == "text");
+    int i1 = -1;
+    assert(sup.receiveTimeout(5.dur!"seconds", (int i) { i1 = i; }));
+    assert(i1 == 42);
+}
+
+@("ScopedActor.receive: sequential reuse with dynRequest") unittest {
+    import my.actor.system;
+
+    static class Target {
+        int sum(int a, int b) {
+            return a + b;
+        }
+    }
+
+    auto sup = scopedActor;
+    auto sys = makeSystem;
+    auto t = sys.spawn!Target();
+    assert(!sup.receiveTimeout(50.dur!"msecs", (string s) { assert(false); })); // wait times out
+    int got = -1;
+    sup.dynRequest(t, Clock.currTime + 5.dur!"seconds", "sum", 2, 3).then((int v) {
+        got = v;
+    });
+    assert(got == 5, "dynRequest must still work after receive calls");
+    sys.shutdown();
+}
+
+@("ScopedActor.receive: handler exceptions rethrow at the wait point") unittest {
+    import my.actor.channel;
+
+    auto sup = scopedActor;
+    dynSend(sup.address(), "x", "boom");
+    bool threw;
+    try {
+        sup.receiveTimeout(5.dur!"seconds", (string s) {
+            throw new Exception("handler boom");
+        });
+    } catch (Exception e) {
+        threw = e.msg == "handler boom";
+    }
+    assert(threw);
+}
+
+@("ScopedActor.receive: infinite wait (no timeout) returns on match") unittest {
+    import my.actor.channel;
+
+    auto sup = scopedActor;
+    dynSend(sup.address(), "m", "now");
+    string got;
+    sup.receive((string s) { got = s; });
+    assert(got == "now");
+}
+
+@("ScopedActor.receive: first matching handler wins across multiple handlers") unittest {
+    import my.actor.channel;
+
+    auto sup = scopedActor;
+    // dynSend boxes the payload as Variant(Tuple!(string)): the (string)
+    // handler matches via the box-unwrap path, the (Tuple!(string)) handler
+    // matches directly — the first one in the list must win.
+    dynSend(sup.address(), "m", "x");
+    string first;
+    bool secondHit;
+    sup.receiveTimeout(5.dur!"seconds", (string s) { first = s; }, (Tuple!(string) t) {
+        secondHit = true;
+    });
+    assert(first == "x");
+    assert(!secondHit, "the first matching handler must win");
 }

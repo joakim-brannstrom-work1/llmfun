@@ -40,12 +40,23 @@ struct SystemConfig {
     Scheduler scheduler;
 }
 
+/// Actor placement for `System.spawn`/`spawnBounded` (design §3.A).
+enum Config {
+    /// Schedule on the shared worker pool (default; unchanged behavior).
+    pool,
+    /// Run on a dedicated System-owned thread; joined at shutdown (no daemon).
+    detached,
+}
+
 struct System {
     private {
         bool running;
         bool ownsPool;
         TaskPool pool;
         Backend bg;
+        DetachedExecutor[] detached;
+        // Guards `detached`; actors may spawn from any pool worker.
+        Mutex detachedMtx;
     }
 
     @disable this(this);
@@ -61,6 +72,7 @@ struct System {
     this(SystemConfig conf, TaskPool pool, bool ownsPool) @safe {
         this.pool = pool;
         this.ownsPool = ownsPool;
+        this.detachedMtx = new Mutex;
         this.bg = Backend(new Scheduler(conf.scheduler, pool));
 
         this.running = true;
@@ -76,6 +88,7 @@ struct System {
         if (!running)
             return;
 
+        stopDetached;
         bg.shutdown;
         if (ownsPool)
             pool.finish(true);
@@ -84,11 +97,13 @@ struct System {
         running = false;
     }
 
-    /// Wait for all actors to finish (terminate) before returning.
+    /// Wait for all actors to finish (terminate) before returning. Note:
+    /// detached actors are terminated (killed) rather than awaited.
     void wait() @safe {
         if (!running)
             return;
 
+        stopDetached;
         bg.shutdown;
         if (ownsPool)
             pool.finish(true);
@@ -106,7 +121,14 @@ struct System {
     /// The incoming mailbox is unbounded (the default; see README,
     /// "Bounded mailbox"). Use `spawnBounded` for a bounded mailbox.
     TypedAddress!T spawn(T, Args...)(auto ref Args args) if (is(T == class)) {
-        return spawnImpl!T(0UL, args);
+        return spawnImpl!T(Config.pool, 0UL, args);
+    }
+
+    /// Like `spawn`, but the placement is chosen explicitly: `Config.detached`
+    /// runs the actor on a dedicated System-owned thread (joined at shutdown).
+    TypedAddress!T spawn(Config cfg, T, Args...)(auto ref Args args)
+            if (is(T == class)) {
+        return spawnImpl!T(cfg, 0UL, args);
     }
 
     /// Like `spawn`, but the actor's incoming mailbox is bounded to `bound`
@@ -118,10 +140,16 @@ struct System {
     /// frees or the actor shuts down. `bound <= 0` behaves like `spawn`.
     TypedAddress!T spawnBounded(T, Args...)(size_t bound, auto ref Args args)
             if (is(T == class)) {
-        return spawnImpl!T(bound, args);
+        return spawnImpl!T(Config.pool, bound, args);
     }
 
-    private TypedAddress!T spawnImpl(T, Args...)(size_t bound, auto ref Args args) {
+    /// Like `spawnBounded`, with an explicit placement (see `spawn`).
+    TypedAddress!T spawnBounded(Config cfg, T, Args...)(size_t bound, auto ref Args args)
+            if (is(T == class)) {
+        return spawnImpl!T(cfg, bound, args);
+    }
+
+    private TypedAddress!T spawnImpl(T, Args...)(Config cfg, size_t bound, auto ref Args args) {
         auto actor = new ActorShell(makeAddress);
         if (bound > 0)
             actor.addr.get.setMailboxBound(bound);
@@ -129,7 +157,17 @@ struct System {
         try {
             instance = () @trusted { return new T(args); }();
             implActor(instance, actor);
-            schedule(actor);
+            setHomeSystem(actor); // both placements
+            if (cfg == Config.detached) {
+                reapDetached(); // join executors whose actor already stopped
+                auto ex = new DetachedExecutor(actor);
+                ex.start(); // last throwing action; the ctor already ran
+                synchronized (detachedMtx) {
+                    detached ~= ex; // never queued on the scheduler
+                }
+            } else {
+                schedule(actor);
+            }
         } catch (Throwable e) {
             // the ctor or wiring threw before the actor entered the scheduler:
             // run the shell down to stopped; once it is out of every queue
@@ -146,9 +184,39 @@ struct System {
     // Returns: the address of the actor.
     private WeakAddress schedule(ActorShell* actor) @safe {
         assert(bg.scheduler.isActive);
-        setHomeSystem(actor);
         bg.scheduler.putWaiting(actor);
         return actor.address;
+    }
+
+    // Remove executors whose actor already stopped (one-shot actors) and join them.
+    private void reapDetached() @safe {
+        synchronized (detachedMtx) {
+            if (detached.length == 0)
+                return;
+            DetachedExecutor[] keep;
+            foreach (e; detached) {
+                if (e.isRunning)
+                    keep ~= e;
+                else
+                    e.join(); // immediate; releases the thread record
+            }
+            detached = keep;
+        }
+    }
+
+    // Join-all teardown: signal stop, let each executor run its actor to
+    // stopped (a mid-block handler delays this, bounded by itself), then
+    // join. Never daemon.
+    private void stopDetached() @safe {
+        synchronized (detachedMtx) {
+            if (detached.length == 0)
+                return;
+            foreach (e; detached)
+                e.requestStop();
+            foreach (e; detached)
+                e.join();
+            detached = null;
+        }
     }
 
     // set the homesystem of the actor. this is safe on the assumption that the
@@ -575,6 +643,237 @@ unittest {
     sys.shutdown;
 }
 
+@("Config.detached: spawn forms, dispatch and shutdown join")
+unittest {
+    import core.atomic : atomicLoad, atomicStore;
+    import my.actor.channel : dynSend;
+
+    static shared bool ran;
+    static class Smoke {
+        void work() {
+            atomicStore(ran, true);
+        }
+    }
+
+    auto sys = makeSystem;
+    auto a = sys.spawn!Smoke(); // pool (unchanged)
+    auto b = sys.spawn!(Config.detached, Smoke)(); // detached
+    auto c = sys.spawnBounded!Smoke(10); // pool, bounded
+    auto d = sys.spawnBounded!(Config.detached, Smoke)(10); // detached, bounded
+
+    dynSend(b, "work");
+    foreach (i; 0 .. 400) {
+        if (atomicLoad(ran))
+            break;
+        Thread.sleep(5.dur!"msecs");
+    }
+    assert(atomicLoad(ran), "detached actor did not process its message");
+    sys.shutdown; // must return (join-all)
+}
+
+@("Config.detached: isolated from pool starvation")
+unittest {
+    import core.atomic : atomicLoad, atomicOp, atomicStore;
+    import my.actor.channel : dynSend;
+
+    static shared bool releasePool;
+    static shared int holding;
+    static class Hog {
+        void hold() {
+            atomicOp!"+="(holding, 1);
+            while (!atomicLoad(releasePool))
+                Thread.sleep(1.dur!"msecs");
+        }
+    }
+
+    static shared bool workDone;
+    static class Worker {
+        void work() {
+            atomicStore(workDone, true);
+        }
+    }
+
+    auto sys = makeSystem;
+    // One hog per pool worker (the default pool is totalCPUs - 1), so
+    // every worker blocks in hold() and the pool is fully starved.
+    TypedAddress!Hog[] hogs;
+    foreach (i; 0 .. sys.pool.size)
+        hogs ~= sys.spawn!Hog();
+    foreach (h; hogs)
+        dynSend(h, "hold");
+
+    // Wait until every hog is actually in hold() so the pool is provably
+    // starved before the detached actor starts; otherwise the test could
+    // pass while not all workers had blocked yet.
+    foreach (i; 0 .. 400) {
+        if (atomicLoad(holding) >= sys.pool.size)
+            break;
+        Thread.sleep(5.dur!"msecs");
+    }
+    assert(atomicLoad(holding) >= sys.pool.size, "pool not fully starved");
+
+    // The detached actor must still run while every pool worker is busy.
+    auto w = sys.spawn!(Config.detached, Worker)();
+    dynSend(w, "work");
+    foreach (i; 0 .. 400) {
+        if (atomicLoad(workDone))
+            break;
+        Thread.sleep(5.dur!"msecs");
+    }
+    assert(atomicLoad(workDone), "detached actor starved by busy pool");
+    atomicStore(releasePool, true);
+    sys.shutdown;
+}
+
+@("Config.detached: shutdown joins a mid-block handler")
+unittest {
+    import core.atomic : atomicLoad, atomicStore;
+    import my.actor.channel : dynSend;
+
+    static shared bool handlerDone;
+    static class Slow {
+        void slow() {
+            Thread.sleep(250.dur!"msecs");
+            atomicStore(handlerDone, true);
+        }
+    }
+
+    auto sys = makeSystem;
+    auto a = sys.spawn!(Config.detached, Slow)();
+    dynSend(a, "slow");
+    // The executor wakes at most every 10 ms, so by now the handler is
+    // mid-block; the shutdown kill must wait for it to return.
+    Thread.sleep(30.dur!"msecs");
+    auto t0 = Clock.currTime;
+    sys.shutdown; // join-all: waits for the handler
+    assert(atomicLoad(handlerDone), "shutdown must not abandon a mid-block handler");
+    assert(Clock.currTime - t0 >= 100.dur!"msecs", "shutdown returned before the handler finished");
+}
+
+@("Config.detached: timers fire on the executor")
+unittest {
+    import core.atomic : atomicLoad, atomicOp;
+    import my.actor.behavior : ActorRef;
+
+    static shared int ticks;
+    static class Timer {
+        void onSpawn(ActorRef self) @trusted {
+            self.scheduleRepeating(50.dur!"msecs", "tick", 1);
+        }
+
+        void tick(int) {
+            atomicOp!"+="(ticks, 1);
+        }
+    }
+
+    auto sys = makeSystem;
+    auto t = sys.spawn!(Config.detached, Timer)();
+    foreach (i; 0 .. 400) {
+        if (atomicLoad(ticks) >= 2)
+            break;
+        Thread.sleep(5.dur!"msecs");
+    }
+    assert(atomicLoad(ticks) >= 2, "repeating timer did not fire on the detached executor");
+    sys.shutdown;
+}
+
+@("Config.detached: a throwing ctor leaks no executor")
+unittest {
+    static class Thrower {
+        this() {
+            throw new Exception("ctor boom");
+        }
+    }
+
+    auto sys = makeSystem;
+    bool threw;
+    try {
+        sys.spawn!(Config.detached, Thrower)();
+    } catch (Exception e) {
+        threw = true;
+    }
+    assert(threw, "ctor exception must propagate");
+    assert(sys.detached.length == 0, "failed spawn must not register an executor");
+    sys.shutdown;
+}
+
+@("Config.detached: one-shot actors self-terminate; sendExit variant stops too")
+unittest {
+    import core.atomic : atomicLoad, atomicStore;
+    import my.actor.behavior : ActorRef;
+    import my.actor.system_msg : DownMsg;
+
+    static shared bool release, release2, done, down1, down2;
+
+    // No message methods: self-terminates once the first execution
+    // finishes. Parks in onSpawn so the monitor registration below
+    // wins the race against the death.
+    static class OneShot {
+        void onSpawn(ActorRef self) {
+            while (!atomicLoad(release))
+                Thread.sleep(1.dur!"msecs");
+            atomicStore(done, true);
+        }
+    }
+
+    // Has a message method (would stay alive otherwise), but exits itself
+    // with no onExit hook: the default exit handler force-shuts, a real
+    // death the monitor observes. Parks like OneShot for the same reason.
+    static class OneShotExit {
+        void onSpawn(ActorRef self) {
+            while (!atomicLoad(release2))
+                Thread.sleep(1.dur!"msecs");
+            sendExit(self.address, ExitReason.userShutdown);
+        }
+
+        void ping() {
+        }
+    }
+
+    static class Observer {
+        shared(bool)* flag;
+        this(shared(bool)* flag) {
+            this.flag = flag;
+        }
+
+        void onDownMessage(DownMsg d) {
+            atomicStore(*flag, true);
+        }
+
+        void ping() {
+        }
+    }
+
+    auto sys = makeSystem;
+    auto o1 = sys.spawn!Observer(&down1);
+    auto o2 = sys.spawn!Observer(&down2);
+
+    // s1 is parked in onSpawn, so it cannot die before the monitor is
+    // registered; release lets it finish, self-terminate and go down.
+    auto s1 = sys.spawn!(Config.detached, OneShot)();
+    monitor(o1.weakRef, s1.weakRef);
+    atomicStore(release, true);
+    foreach (i; 0 .. 400) {
+        if (atomicLoad(down1))
+            break;
+        Thread.sleep(5.dur!"msecs");
+    }
+    assert(atomicLoad(done) && atomicLoad(down1),
+            "no-method actor must self-terminate after onSpawn");
+
+    // Same parking for s2: the hook-less sendExit must go down, observed.
+    auto s2 = sys.spawn!(Config.detached, OneShotExit)();
+    monitor(o2.weakRef, s2.weakRef);
+    atomicStore(release2, true);
+    foreach (i; 0 .. 400) {
+        if (atomicLoad(down2))
+            break;
+        Thread.sleep(5.dur!"msecs");
+    }
+    assert(atomicLoad(down2), "hook-less sendExit(userShutdown) must stop the actor");
+    sys.shutdown;
+}
+
 private:
 @safe:
 
@@ -596,6 +895,67 @@ struct Backend {
         () @trusted { malloc_trim(0); }();
     }
 }
+
+/// One dedicated thread per detached actor. Never queued on the scheduler;
+/// the System owns it and joins it at shutdown.
+private final class DetachedExecutor {
+    private ActorShell* actor;
+    private Thread thread;
+    private bool stopRequested;
+
+    this(ActorShell* actor) {
+        this.actor = actor;
+        () @trusted { this.thread = new Thread(&run); }();
+    }
+
+    void start() {
+        () @trusted { thread.start; }();
+    }
+
+    void requestStop() {
+        import core.atomic : atomicStore;
+
+        atomicStore(stopRequested, true);
+    }
+
+    bool isRunning() {
+        return () @trusted { return thread.isRunning; }();
+    }
+
+    void join() {
+        if (isRunning)
+            () @trusted { thread.join; }();
+    }
+
+    private void run() @trusted {
+        import core.atomic : atomicLoad;
+
+        while (true) {
+            if (atomicLoad(stopRequested) && actor.isAlive)
+                sendSelfKill(); // retry until the sys queue accepts it
+            do {
+                actor.process(Clock.currTime);
+            }
+            while (actor.messages > 0 && actor.isAlive); // burst throughput
+            if (!actor.isAlive)
+                break;
+            if (!atomicLoad(stopRequested))
+                Thread.sleep(min(detachedPollInterval,
+                        actor.nextTimeout(Clock.currTime, detachedPollInterval)));
+        }
+    }
+
+    private void sendSelfKill() @trusted {
+        import my.actor.msg : sendSystemMsgIfEmpty;
+        import my.actor.common : ExitReason;
+        import my.actor.system_msg : SystemExitMsg;
+
+        sendSystemMsgIfEmpty(actor.address, SystemExitMsg(ExitReason.kill));
+    }
+}
+
+/// Idle poll interval for detached executors.
+private immutable Duration detachedPollInterval = 10.dur!"msecs";
 
 /** Schedule actors for execution.
  *

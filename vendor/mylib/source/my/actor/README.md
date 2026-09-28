@@ -188,6 +188,8 @@ Optional class methods, called by the shell — they are never message targets.
   `WeakAddress`.
 - An actor with at least one message method stays alive until it is shut down;
   it can shut itself down with `sendExit(self_.address, ...)`.
+- An actor with no message methods self-terminates after `onSpawn`
+  (empty behavior) — a one-shot task actor.
 
 ## Bounded mailbox
 
@@ -224,7 +226,9 @@ guarantees that a blocked non-actor sender always resolves (delivered, or
 **actor count + 1** threads available — one worker per concurrently busy
 actor, plus one **non-pool thread** (e.g. the `main` supervisor) that may
 perform blocking sends. A pool worker must never be the thread that
-blocks on a full bounded mailbox.
+blocks on a full bounded mailbox. `Config.detached` actors run on their own
+dedicated threads and do not consume pool workers; the convention above
+applies to the pooled set only.
 
 The semantics and the 2-worker deadlock scenario are covered by the
 unittests in `bounded_mailbox.d`.
@@ -236,6 +240,33 @@ tree builds LDC-only.
 A class without an interface is still an actor (all its public methods are
 messages), but sends should use the dynamic path — unless the class type is in
 scope, in which case `Channel!Class` works as well.
+
+## Detached actors
+
+Placement is chosen per spawn call with the `Config` parameter (first
+template argument of `spawn` / `spawnBounded`):
+
+```d
+sys.spawn!T(args);                                  // Config.pool (default)
+sys.spawn!(Config.detached, T)(args);               // dedicated thread
+sys.spawnBounded!T(1000, args);                     // pool, bounded
+sys.spawnBounded!(Config.detached, T)(1000, args);  // dedicated thread, bounded
+```
+
+A `Config.detached` actor runs on its own System-owned thread: created at
+spawn, never daemon, and joined at `shutdown`. It is never queued on the
+shared worker pool, so a fully busy pool cannot starve it; per-actor
+serialization is unchanged (one `process` pass at a time, on that thread).
+Idle executors wake at most every 10 ms, and `scheduleRepeating` / delayed
+sends fire on the executor within one poll after they come due.
+
+**One-shot task actors.** An actor with no message methods self-terminates
+as soon as its first execution finishes — `onSpawn` is the whole task. The
+explicit variant keeps a message method but sends
+`sendExit(self_.address, ExitReason.userShutdown)` from `onSpawn` with no
+`onExit` hook; the default exit handler force-shuts, which is a real death
+a `monitor` sees via `DownMsg`. A throwing ctor propagates out of `spawn`
+and leaves no executor behind.
 
 ## Known limits
 
