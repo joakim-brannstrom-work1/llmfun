@@ -761,6 +761,7 @@ Continue your work from where you left off.";
             chat.load(j);
             chat.resetResponseIndex;
             syncContextFromChat();
+            seedBrokerFromChat();
         } catch (Exception e) {
             logger.trace(e.msg).collectException;
         }
