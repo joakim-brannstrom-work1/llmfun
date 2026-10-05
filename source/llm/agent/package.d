@@ -869,9 +869,7 @@ private:
                 if (toolCtx.brokerEnabled
                         && toolCtx.pool.canFind!(f => f.name == call.name)
                         && !tools.canFind!(t => t["function"]["name"].str == call.name)) {
-                    result = (
-                            "error: tool '" ~ call.name
-                            ~ "' is not visible to this agent; discover tools with `listToolTags`")
+                    result = ("error: tool '" ~ call.name ~ "' is not visible to this agent in the current session (visibility resets when chat history is loaded or the session changes); discover tools with `listToolTags`, then make them visible with `loadToolTag`.")
                         .sanitizeUtf8;
                     success = false;
 

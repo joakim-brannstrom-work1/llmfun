@@ -1122,8 +1122,8 @@ unittest {
     // Tier-3: the tool is in the pool but hidden from this agent (tagged, never
     // activated) — the instructive refusal names the recovery path.
     auto hidden = dispatch(agent, "agent_t8_tier3_fixture");
-    assert(hidden.content == "error: tool 'agent_t8_tier3_fixture' is not visible to this agent"
-            ~ "; discover tools with `listToolTags`", hidden.content);
+    assert(hidden.content == "error: tool 'agent_t8_tier3_fixture' is not visible to this agent in the current session (visibility resets when chat history is loaded or the session changes)" ~ "; discover tools with `listToolTags`, then make them visible with `loadToolTag`.",
+            hidden.content);
     assert(!hidden.success());
     assert(hidden.toolName == "agent_t8_tier3_fixture");
     // The refusal took the recording path: the tool-call message and the tool
