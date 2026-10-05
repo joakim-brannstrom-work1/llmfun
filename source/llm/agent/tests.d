@@ -1476,6 +1476,338 @@ unittest {
     assert(names.canFind("agent_t10_tier3_fixture"),
             "the tier-3 refusal is a use: the fixture survives");
     assert(!names.canFind("agent_t10_unused_fixture"), "the unused fixture is pruned");
+
+    // 5. broker_seed: a restore that actually seeds - the hand-built
+    // chat.load + seedBrokerFromChat seam the seed-on-load tests use. After
+    // the prune above, the unused fixture is the only pool tool whose name
+    // no longer sits in the activation list, so a history proving its use
+    // re-activates exactly it: "seeded": 1 (the used and refused fixtures
+    // are already activated, and activation is sticky).
+    agent.chat.load(parseJSON(`{
+        "messages": [
+            {"role": "assistant", "content": null, "reasoning_content": "",
+             "tool_calls": [{"id": "2", "type": "function",
+                             "function": {"name": "agent_t10_unused_fixture", "arguments": "{}"}}]},
+            {"role": "tool", "content": "out", "tool_call_id": "2",
+             "name": "agent_t10_unused_fixture"}
+        ]
+    }`));
+    agent.seedBrokerFromChat();
+
+    auto seeds = byKind("broker_seed");
+    assert(seeds.length == 1, "a restore that seeds lands exactly one broker_seed event");
+    assert(seeds[0]["seeded"].integer == 1);
+    assert(seeds[0]["agent"].str == "integration");
+
+    // Idempotency (D7): a second seed of the same chat fires nothing.
+    agent.seedBrokerFromChat();
+    assert(byKind("broker_seed").length == 1, "a no-op seed records no event");
+
+}
+
+// --- Seed-on-load: the load-path inverse of the compression-time prune ---
+
+version (unittest) {
+    import std.json : JSONValue;
+
+    import llm.tool_call : Context, ExecuteFuncResult;
+
+    /// Empty params struct for the seed-on-load fixtures (nothing to decode).
+    private struct T11FixtureParams {
+    }
+
+    /// (Context, JSONValue)-shaped callback matching the RegFunction.callback type.
+    private ExecuteFuncResult t11FixtureCallback(Context ctx, JSONValue args) {
+        return ExecuteFuncResult("ok", true);
+    }
+}
+
+@("seed-on-load: a loaded chat's structured tool call re-activates the workarea-tagged fixture and the rebuilt tools array carries it")
+unittest {
+    import std.algorithm : canFind;
+    import std.datetime : Clock;
+    import std.file : mkdirRecurse, write;
+    import std.format : format;
+    import std.json : JSONValue, parseJSON;
+    import std.range : empty;
+
+    import llm.tool_call : RegFunction, addFunction, toParams;
+    import llm.tool_call.broker : BrokerState;
+
+    auto now = Clock.currTime();
+    auto tmpDir = format("llmfun_test/agent_t11_seed_%d_%d", now.toUnixTime(), now.stdTime);
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        cleanupAgentTestDir(tmpDir);
+    write(tmpDir ~ "/SUMMARY.md", "Summarize text.");
+    writeDefaultNudgeFiles(tmpDir);
+
+    // Workarea-tagged fixture registered BEFORE agent construction, so it is
+    // in the pool (the pool is built at ctor time from the live registry) but
+    // not in the day-one tools array (tagged, never activated).
+    addFunction(RegFunction(name: "agent_t11_seed_fixture", desc: "t11 seed fixture", params: toParams!T11FixtureParams, callback: &t11FixtureCallback,
+            tags: ["workarea"]));
+
+    string[] namesOf(JSONValue[] ts) {
+        string[] n;
+        foreach (t; ts)
+            n ~= t["function"]["name"].str;
+        return n;
+    }
+
+    auto agent = new Agent("integration", makeAgentTestConfig(tmpDir), null, null);
+
+    // Fresh-broker pin, kept explicit: the case seeds from scratch.
+    agent.toolCtx.broker = BrokerState.init;
+    assert(agent.toolCtx.broker.activated.empty);
+
+    // A chat doc holding one structured call + tool response pair for the
+    // fixture: the same save shape the session-restore path parses back.
+    agent.chat.load(parseJSON(`{
+        "messages": [
+            {"role": "assistant", "content": null, "reasoning_content": "",
+             "tool_calls": [{"id": "1", "type": "function",
+                             "function": {"name": "agent_t11_seed_fixture", "arguments": "{}"}}]},
+            {"role": "tool", "content": "out", "tool_call_id": "1",
+             "name": "agent_t11_seed_fixture"}
+        ]
+    }`));
+    agent.seedBrokerFromChat();
+
+    assert(agent.toolCtx.broker.activated.canFind("agent_t11_seed_fixture"),
+            "the tool the history proves was used is re-activated");
+    assert(namesOf(agent.tools).canFind("agent_t11_seed_fixture"),
+            "the rebuilt tools array carries the seeded tool");
+}
+
+@(
+        "seed-on-load: an empty chat doc is a no-op - the activation list and the tools array stay untouched")
+unittest {
+    import std.datetime : Clock;
+    import std.file : mkdirRecurse, write;
+    import std.format : format;
+    import std.json : JSONValue, parseJSON;
+    import std.range : empty;
+
+    auto now = Clock.currTime();
+    auto tmpDir = format("llmfun_test/agent_t11_empty_%d_%d", now.toUnixTime(), now.stdTime);
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        cleanupAgentTestDir(tmpDir);
+    write(tmpDir ~ "/SUMMARY.md", "Summarize text.");
+    writeDefaultNudgeFiles(tmpDir);
+
+    auto agent = new Agent("integration", makeAgentTestConfig(tmpDir), null, null);
+
+    auto before = JSONValue(agent.tools).toString;
+    agent.chat.load(parseJSON(`{"messages": []}`));
+    agent.seedBrokerFromChat();
+
+    assert(agent.toolCtx.broker.activated.empty, "nothing to seed: no activations");
+    assert(JSONValue(agent.tools).toString == before,
+            "an empty chat doc must not touch the tools array");
+}
+
+@("seed-on-load: the kill switch off makes the seed a no-op even when the history proves a use")
+unittest {
+    import std.datetime : Clock;
+    import std.file : mkdirRecurse, write;
+    import std.format : format;
+    import std.json : JSONValue, parseJSON;
+    import std.range : empty;
+
+    import llm.tool_call : RegFunction, addFunction, toParams;
+
+    auto now = Clock.currTime();
+    auto tmpDir = format("llmfun_test/agent_t11_killswitch_%d_%d", now.toUnixTime(), now.stdTime);
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        cleanupAgentTestDir(tmpDir);
+    write(tmpDir ~ "/SUMMARY.md", "Summarize text.");
+    writeDefaultNudgeFiles(tmpDir);
+
+    addFunction(RegFunction(name: "agent_t11_killswitch_fixture", desc: "t11 kill-switch fixture", params: toParams!T11FixtureParams,
+            callback: &t11FixtureCallback, tags: ["workarea"]));
+
+    auto llmConf = makeAgentTestConfig(tmpDir);
+    llmConf.toolBroker.enabled = false;
+    auto agent = new Agent("integration", llmConf, null, null);
+
+    // The history proves a use, but the gate is brokerEnabled's first
+    // conjunct: the seed must stay a no-op.
+    agent.chat.load(parseJSON(`{
+        "messages": [
+            {"role": "assistant", "content": null, "reasoning_content": "",
+             "tool_calls": [{"id": "1", "type": "function",
+                             "function": {"name": "agent_t11_killswitch_fixture", "arguments": "{}"}}]},
+            {"role": "tool", "content": "out", "tool_call_id": "1",
+             "name": "agent_t11_killswitch_fixture"}
+        ]
+    }`));
+    auto before = JSONValue(agent.tools).toString;
+    agent.seedBrokerFromChat();
+
+    assert(agent.toolCtx.broker.activated.empty, "kill switch off: nothing is seeded (D6)");
+    assert(JSONValue(agent.tools).toString == before,
+            "kill switch off: the tools array is untouched by the seed");
+}
+
+@("seed-on-load: only alwaysOn (untagged) calls in the history - the activation list and the tools array stay untouched")
+unittest {
+    import std.algorithm : canFind;
+    import std.datetime : Clock;
+    import std.file : mkdirRecurse, write;
+    import std.format : format;
+    import std.json : JSONValue, parseJSON;
+    import std.range : empty;
+
+    auto now = Clock.currTime();
+    auto tmpDir = format("llmfun_test/agent_t11_alwayson_%d_%d", now.toUnixTime(), now.stdTime);
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        cleanupAgentTestDir(tmpDir);
+    write(tmpDir ~ "/SUMMARY.md", "Summarize text.");
+    writeDefaultNudgeFiles(tmpDir);
+
+    string[] namesOf(JSONValue[] ts) {
+        string[] n;
+        foreach (t; ts)
+            n ~= t["function"]["name"].str;
+        return n;
+    }
+
+    auto agent = new Agent("integration", makeAgentTestConfig(tmpDir), null, null);
+
+    // A history whose only structured call targets taskDone: untagged
+    // (alwaysOn) and neverHide - the seeder must skip both (D2).
+    agent.chat.load(parseJSON(`{
+        "messages": [
+            {"role": "assistant", "content": null, "reasoning_content": "",
+             "tool_calls": [{"id": "1", "type": "function",
+                             "function": {"name": "taskDone", "arguments": "{}"}}]}
+        ]
+    }`));
+    auto before = JSONValue(agent.tools).toString;
+    agent.seedBrokerFromChat();
+
+    assert(agent.toolCtx.broker.activated.empty,
+            "an alwaysOn/neverHide call never enters the activation list (D2)");
+    assert(JSONValue(agent.tools).toString == before,
+            "an alwaysOn-only history must not touch the tools array");
+    assert(namesOf(agent.tools).canFind("taskDone"), "alwaysOn stays in the head");
+}
+
+@(
+        "seed-on-load: a second seed of the same chat is a no-op - nothing newly activated, no rebuild (D7)")
+unittest {
+    import std.algorithm : canFind;
+    import std.datetime : Clock;
+    import std.file : mkdirRecurse, write;
+    import std.format : format;
+    import std.json : JSONValue, parseJSON;
+    import std.range : empty;
+
+    import llm.tool_call : RegFunction, addFunction, toParams;
+
+    auto now = Clock.currTime();
+    auto tmpDir = format("llmfun_test/agent_t11_idem_%d_%d", now.toUnixTime(), now.stdTime);
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        cleanupAgentTestDir(tmpDir);
+    write(tmpDir ~ "/SUMMARY.md", "Summarize text.");
+    writeDefaultNudgeFiles(tmpDir);
+
+    addFunction(RegFunction(name: "agent_t11_idem_fixture", desc: "t11 idempotency fixture", params: toParams!T11FixtureParams,
+            callback: &t11FixtureCallback, tags: ["workarea"]));
+
+    string[] namesOf(JSONValue[] ts) {
+        string[] n;
+        foreach (t; ts)
+            n ~= t["function"]["name"].str;
+        return n;
+    }
+
+    auto agent = new Agent("integration", makeAgentTestConfig(tmpDir), null, null);
+
+    agent.chat.load(parseJSON(`{
+        "messages": [
+            {"role": "assistant", "content": null, "reasoning_content": "",
+             "tool_calls": [{"id": "1", "type": "function",
+                             "function": {"name": "agent_t11_idem_fixture", "arguments": "{}"}}]},
+            {"role": "tool", "content": "out", "tool_call_id": "1",
+             "name": "agent_t11_idem_fixture"}
+        ]
+    }`));
+    // Counting rebuild hook installed BEFORE the first seed: the first seed
+    // (something newly activated) must fire exactly one rebuild, the second
+    // (nothing newly activated) none (D7). The wrapper forwards to the
+    // default rebuild so the tools array still gets recomposed.
+    size_t rebuilds;
+    auto defaultRebuild = agent.toolCtx.rebuildTools;
+    agent.toolCtx.rebuildTools = delegate() @safe {
+        rebuilds++;
+        defaultRebuild();
+    };
+    agent.seedBrokerFromChat(); // first seed: activates + rebuilds
+    assert(rebuilds == 1, "the first seed fires exactly one rebuild");
+    assert(agent.toolCtx.broker.activated.canFind("agent_t11_idem_fixture"));
+
+    agent.seedBrokerFromChat(); // second seed: sticky activation, seeded == 0
+    assert(rebuilds == 1, "the second seed must fire no rebuild (D7)");
+    assert(agent.toolCtx.broker.activated.canFind("agent_t11_idem_fixture"),
+            "the activation is sticky");
+    assert(namesOf(agent.tools).canFind("agent_t11_idem_fixture"), "the seeded tool stays visible");
+}
+
+@("seed-on-load end to end: agent.loadHistory seeds the broker from the restored session file")
+unittest {
+    import std.algorithm : canFind;
+    import std.datetime : Clock;
+    import std.file : mkdirRecurse, write;
+    import std.format : format;
+    import std.json : JSONValue;
+
+    import my.path : Path;
+
+    import llm.tool_call : RegFunction, addFunction, toParams;
+
+    auto now = Clock.currTime();
+    auto tmpDir = format("llmfun_test/agent_t11_load_%d_%d", now.toUnixTime(), now.stdTime);
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        cleanupAgentTestDir(tmpDir);
+    write(tmpDir ~ "/SUMMARY.md", "Summarize text.");
+    writeDefaultNudgeFiles(tmpDir);
+
+    addFunction(RegFunction(name: "agent_t11_load_fixture", desc: "t11 load fixture", params: toParams!T11FixtureParams, callback: &t11FixtureCallback,
+            tags: ["workarea"]));
+
+    string[] namesOf(JSONValue[] ts) {
+        string[] n;
+        foreach (t; ts)
+            n ~= t["function"]["name"].str;
+        return n;
+    }
+
+    auto agent = new Agent("integration", makeAgentTestConfig(tmpDir), null, null);
+
+    // The history file in the save format, written AFTER construction (the
+    // ctor does not auto-load): one structured call + tool response pair.
+    write(tmpDir ~ "/integration_history.json", `{
+        "messages": [
+            {"role": "assistant", "content": null, "reasoning_content": "",
+             "tool_calls": [{"id": "1", "type": "function",
+                             "function": {"name": "agent_t11_load_fixture", "arguments": "{}"}}]},
+            {"role": "tool", "content": "out", "tool_call_id": "1",
+             "name": "agent_t11_load_fixture"}
+        ]
+    }`);
+    agent.loadHistory(tmpDir.Path);
+
+    assert(agent.toolCtx.broker.activated.canFind("agent_t11_load_fixture"),
+            "the restored session re-activated the used tool");
+    assert(namesOf(agent.tools).canFind("agent_t11_load_fixture"),
+            "the rebuilt tools array carries the seeded tool");
 }
 
 // --- MCP tools route through the broker: connect change point ---

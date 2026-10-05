@@ -790,8 +790,13 @@ Continue your work from where you left off.";
             if (toolCtx.broker.activated.length != before)
                 seeded++;
         }
-        if (seeded > 0 && toolCtx.rebuildTools !is null)
-            toolCtx.rebuildTools();
+        if (seeded > 0) {
+            recordBrokerEvent(this, "broker_seed", [
+                "seeded": JSONValue(cast(long) seeded)
+            ]);
+            if (toolCtx.rebuildTools !is null)
+                toolCtx.rebuildTools();
+        }
     }
 
     string takeTaskDoneMessage() @safe {
