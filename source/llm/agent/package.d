@@ -766,6 +766,33 @@ Continue your work from where you left off.";
         }
     }
 
+    /// Seed the tool broker from the loaded chat: re-activate each tagged tool
+    /// the history proves was used
+    void seedBrokerFromChat() @safe {
+        import llm.tool_call.broker : activateTool, scanUsedTools;
+
+        if (!toolCtx.brokerEnabled)
+            return;
+
+        size_t seeded;
+        auto used = () @trusted { return scanUsedTools(chat); }();
+
+        foreach (name; used) {
+            auto matches = toolCtx.pool.filter!(f => f.name == name);
+            if (matches.empty)
+                continue;
+            auto f = matches.front;
+            if (f.tags.empty || neverHideTools_.canFind!(n => n == name))
+                continue;
+            auto before = toolCtx.broker.activated.length;
+            activateTool(toolCtx.broker, toolCtx.pool, name);
+            if (toolCtx.broker.activated.length != before)
+                seeded++;
+        }
+        if (seeded > 0 && toolCtx.rebuildTools !is null)
+            toolCtx.rebuildTools();
+    }
+
     string takeTaskDoneMessage() @safe {
         auto msg = taskDoneMessage_;
         taskDoneMessage_ = null;

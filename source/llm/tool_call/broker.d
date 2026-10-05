@@ -174,12 +174,9 @@ string[] scanUsedTools(scope Chat chat) @system {
 
     foreach (msg; chat.getMessages) {
         msg.match!((ToolMessage m) {
-            if (m.toolCalls.type != JSONType.array)
-                return;
-            foreach (name; m.toolCalls.array.map!(a => getValue(a,
-                (a) => a["function"]["name"].str, null))) {
-                if (unseen(name))
-                    used ~= name;
+            foreach (tool; m.getFunctions) {
+                if (unseen(tool.name))
+                    used ~= tool.name;
             }
         }, (_) {});
     }
