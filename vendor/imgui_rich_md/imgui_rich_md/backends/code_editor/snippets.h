@@ -1,0 +1,102 @@
+// Part of imgui_rich_md - MIT License - Copyright (c) 2022-2026 Pascal Thomet - https://github.com/pthom/imgui_rich_md
+#pragma once
+
+#include <functional>
+#include <string>
+#include <vector>
+
+/*::md Code snippets
+Code snippets with syntax highlighting (ImGuiColorTextEdit), read-only or editable, with a copy button. A snippet whose
+lines overflow its width also shows a wrap button; the reader's choice holds for all the snippets of the session.
+The markdown code blocks use `ShowCodeSnippet` when built with `IMGUI_RICHMD_WITH_CODE_EDITOR`.
+*/
+namespace Snippets
+{
+    // =================================================================================================================
+    //                                      Snippet data
+    // =================================================================================================================
+    /*::md Snippet data
+    A snippet: its code, its language, its look.
+    ::code
+    */
+
+    enum class SnippetLanguage
+    {
+        Cpp,
+        Hlsl,
+        Glsl,
+        C,
+        Sql,
+        AngelScript,
+        Lua,
+        Python
+    };
+
+    enum class SnippetTheme
+    {
+        Auto,   // Automatic based on bg color
+        Dark,
+        Light,
+    };
+
+
+    // DefaultSnippetLanguage: Cpp, or Python when the host defines IMGUI_RICHMD_DEFAULT_SNIPPET_LANGUAGE_PYTHON
+    // (Python bindings)
+    inline SnippetLanguage DefaultSnippetLanguage()
+    {
+#ifdef IMGUI_RICHMD_DEFAULT_SNIPPET_LANGUAGE_PYTHON
+        return SnippetLanguage::Python;
+#else
+        return SnippetLanguage::Cpp;
+#endif
+    }
+
+
+    struct SnippetData
+    {
+        std::string Code = "";
+        SnippetLanguage Language = DefaultSnippetLanguage();
+        SnippetTheme Palette = SnippetTheme::Auto;
+
+        bool ShowCopyButton = true;         // Displayed on top of the editor (Top Right corner)
+        bool ShowCursorPosition = true;     // Show line and column number
+        std::string DisplayedFilename = {}; // Displayed on top of the editor
+
+        int HeightInLines = 0;              // Number of visible lines in the editor
+        // If the number of lines in the code exceeds MaxHeightInLines, the editor will scroll. Set to 0 to disable.
+        int MaxHeightInLines = 40;
+
+        bool ReadOnly = true;               // Snippets are read-only by default
+
+        bool Border = false;                // Draw a border around the editor
+
+        bool DeIndentCode = true;           // Keep the code indentation, but remove main indentation,
+                                            // so that the displayed code start at column 1
+
+        bool AddFinalEmptyLine = false;     // Add an empty line at the end of the code if missing
+
+        // Hooks for a host that knows the code (an API browser): the line under the mouse and the column in it.
+        // OnHover draws a tooltip when it has something to say (it returns false otherwise). OnContextMenu adds items
+        // to the right-click menu (it returns false when it has none: the menu closes).
+        std::function<bool(const std::string& line, size_t column)> OnHover;
+        std::function<bool(const std::string& line, size_t column)> OnContextMenu;
+    };
+    // ::endcode
+
+    // =================================================================================================================
+    //                                      Showing snippets
+    // =================================================================================================================
+    /*::md Showing snippets
+    One snippet, editable or not, or several side by side.
+    ::code
+    */
+
+    bool ShowEditableCodeSnippet(const std::string& label_id, SnippetData* snippetData, float width = 0.f,
+                                 int overrideHeightInLines = 0);
+    void ShowCodeSnippet(const SnippetData& snippetData, float width = 0.f, int overrideHeightInLines = 0);
+    void ShowSideBySideSnippets(const SnippetData& snippet1, const SnippetData& snippet2,
+                                bool hideIfEmpty = true, bool equalVisibleLines = true);
+    void ShowSideBySideSnippets(const std::vector<SnippetData>& snippets ,
+                                bool hideIfEmpty = true, bool equalVisibleLines = true);
+    // ::endcode
+};

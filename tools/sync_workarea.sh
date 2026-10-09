@@ -24,4 +24,4 @@ llmfun rag --db llmfun/data/rag.sqlite3 --sync -i '.*\.(md)$' doc
 llmfun rag --db llmfun/data/rag.sqlite3 --sync -i '.*\.d$' source local_model/source common/source vendor/mylib
 llmfun rag --db llmfun/data/rag.sqlite3 --sync -i '.*\.(h|hpp|c|cpp)$' cpp_tui
 llmfun rag --db llmfun/data/rag.sqlite3 --sync -i '.*\.(h|hpp|c|cpp|md|py)$' -e '.*imtui/test/build/.*' vendor/imtui/test vendor/imtui/include vendor/imtui/examples
-llmfun rag --db llmfun/data/rag.sqlite3 --sync -i '.*\.(h|hpp|c|cpp|md|py)$' -e '.*backend.*' -e '.*examples/libs.*' vendor/imgui vendor/imgui_markdown/README.md vendor/imgui_markdown/imgui_markdown.h
+llmfun rag --db llmfun/data/rag.sqlite3 --sync -i '.*\.(h|hpp|c|cpp|md|py)$' -e '.*backend.*' -e '.*examples/libs.*' vendor/imgui vendor/imgui_rich_md/docs vendor/imgui_rich_md/imgui_rich_md/rich_md.h

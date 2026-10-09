@@ -1,0 +1,10 @@
+%% A message to itself on the last participant, notes wider than their participant
+%% expect: participants=2 messages=3 notes=2
+sequenceDiagram
+    participant A as Client
+    participant B as Server
+    A->>B: request
+    B->>B: validate the request and its signature
+    Note over A: a note much wider than its participant
+    Note right of B: on the right edge
+    B-->>A: response

@@ -1,0 +1,60 @@
+# The smoke test: a document using every feature, rendered with Dear ImGui's null backend (no window, no GPU).
+#   cmake -S tests -B build_tests -DCMAKE_BUILD_TYPE=Debug && cmake --build build_tests && ctest --test-dir build_tests
+# Build it in Debug, so that the assertions of Dear ImGui and of the library are active.
+cmake_minimum_required(VERSION 3.20)
+project(imgui_rich_md_tests CXX C)
+set(CMAKE_CXX_STANDARD 17)
+
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/imgui_richmd_fetch_imgui.cmake)
+imgui_richmd_fetch_imgui()
+if(NOT TARGET imgui)  # Dear ImGui's core only: the test needs no platform backend
+    add_library(imgui STATIC
+        ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp)
+    target_include_directories(imgui PUBLIC ${IMGUI_DIR})
+endif()
+if(NOT TARGET imgui_rich_md)
+    add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/.. imgui_rich_md_build)
+endif()
+
+add_executable(imgui_rich_md_smoke_test ${CMAKE_CURRENT_LIST_DIR}/smoke_test.cpp ${IMGUI_DIR}/backends/imgui_impl_null.cpp)
+target_include_directories(imgui_rich_md_smoke_test PRIVATE ${IMGUI_DIR}/backends)
+target_link_libraries(imgui_rich_md_smoke_test PRIVATE imgui_rich_md)
+enable_testing()
+add_test(NAME smoke_test COMMAND imgui_rich_md_smoke_test)
+
+# The selection test: text selected with injected mouse events, and copied
+add_executable(imgui_rich_md_selection_test ${CMAKE_CURRENT_LIST_DIR}/selection_test.cpp ${IMGUI_DIR}/backends/imgui_impl_null.cpp)
+target_include_directories(imgui_rich_md_selection_test PRIVATE ${IMGUI_DIR}/backends)
+target_link_libraries(imgui_rich_md_selection_test PRIVATE imgui_rich_md)
+add_test(NAME selection_test COMMAND imgui_rich_md_selection_test)
+
+# The Mermaid test: the corpus of tests/mermaid, parsed, laid out and checked (the review page: tests/mermaid/mermaid_review.cpp)
+if(IMGUI_RICHMD_WITH_MERMAID)
+    add_executable(imgui_rich_md_mermaid_test ${CMAKE_CURRENT_LIST_DIR}/mermaid/mermaid_test.cpp ${IMGUI_DIR}/backends/imgui_impl_null.cpp)
+    target_include_directories(imgui_rich_md_mermaid_test PRIVATE ${IMGUI_DIR}/backends)
+    target_link_libraries(imgui_rich_md_mermaid_test PRIVATE imgui_rich_md)
+    target_compile_definitions(imgui_rich_md_mermaid_test PRIVATE MERMAID_CORPUS_DIR="${CMAKE_CURRENT_LIST_DIR}/mermaid/corpus"
+                               MERMAID_DOCS_DIR="${CMAKE_CURRENT_LIST_DIR}/../docs")
+    add_test(NAME mermaid_test COMMAND imgui_rich_md_mermaid_test)
+endif()
+
+# The narrative programming test: the cases of tests/narrative/cases (sources, doc.md, expected.md)
+add_executable(imgui_rich_md_narrative_test ${CMAKE_CURRENT_LIST_DIR}/narrative/narrative_test.cpp)
+target_link_libraries(imgui_rich_md_narrative_test PRIVATE imgui_rich_md)
+target_compile_definitions(imgui_rich_md_narrative_test PRIVATE NARRATIVE_CASES_DIR="${CMAKE_CURRENT_LIST_DIR}/narrative/cases")
+add_test(NAME narrative_test COMMAND imgui_rich_md_narrative_test)
+
+# The pages of docs/ assembled from the sources, by tools/narrative_resolve (no ImGui): docs/<name>.src.md -> docs/<name>.md.
+# Regenerate them with the target rich_md_docs; the test doc_<name> fails when a page is not up to date.
+add_executable(narrative_resolve ${CMAKE_CURRENT_LIST_DIR}/../tools/narrative_resolve/narrative_resolve.cpp
+                                 ${CMAKE_CURRENT_LIST_DIR}/../imgui_rich_md/narrative_programming.cpp)
+target_include_directories(narrative_resolve PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
+get_filename_component(_richmd_docs_dir ${CMAKE_CURRENT_LIST_DIR}/../docs ABSOLUTE)
+set(_richmd_docs_commands)
+foreach(_page api architecture)
+    set(_src ${_richmd_docs_dir}/${_page}.src.md)
+    set(_md ${_richmd_docs_dir}/${_page}.md)
+    list(APPEND _richmd_docs_commands COMMAND narrative_resolve ${_src} ${_md})
+    add_test(NAME doc_${_page} COMMAND narrative_resolve --check ${_src} ${_md})
+endforeach()
+add_custom_target(rich_md_docs ${_richmd_docs_commands} COMMENT "Generating the pages of docs/")

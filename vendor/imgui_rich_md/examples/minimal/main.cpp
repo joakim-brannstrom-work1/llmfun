@@ -1,0 +1,156 @@
+// Markdown with stock Dear ImGui (GLFW + OpenGL3), no HelloImGui: fonts and images come from the
+// embedded assets, textures go through Dear ImGui's ImTextureData (the default UploadRgba).
+// IMGUI_RICHMD_SHOT=<file.ppm> in the environment: writes a screenshot after 30 frames and exits.
+// The whole setup is written out on purpose (the other examples share it, in common/app_glfw_gl3.h): it shows
+// where the library's calls go in an application's own loop. CreateContext() after the backends,
+// Render() inside a window, DestroyContext() before the backends shut down.
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
+#include "imgui_rich_md/rich_md.h"
+#if defined(__EMSCRIPTEN__)
+#include <GLES2/gl2.h>                 // WebGL, through the OpenGL ES 2 API
+#include "emscripten_mainloop_stub.h"  // from Dear ImGui's examples/libs/emscripten
+#elif defined(__APPLE__)
+#define GL_SILENCE_DEPRECATION
+#include <OpenGL/gl3.h>
+#else
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>  // GL/gl.h needs APIENTRY and WINGDIAPI
+#endif
+#include <GL/gl.h>
+#endif
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+
+static const char* kMarkdown = R"(
+# Markdown with stock Dear ImGui
+No HelloImGui here: the fonts and the images below are **embedded** in the library, the textures are
+`ImTextureData` created by the OpenGL3 backend.
+
+## Text
+*Emphasis*, **bold**, `code`, ~~strikethrough~~, a [link](https://github.com/pthom/imgui_bundle), and a
+formula, rendered when the library is built with LaTeX (shown as source otherwise): $e^{i\pi} + 1 = 0$.
+
+## Table
+| Feature | State |
+|---|---|
+| Fonts | embedded |
+| Images | embedded, ImTextureData |
+
+## Image
+![world](images/world.png)
+An image that does not exist: ![nope](images/nope.png)
+
+## Code
+```cpp
+RichMd::CreateContext();
+RichMd::Render(markdown);
+```
+)";
+
+static void WriteScreenshotPpm(GLFWwindow* window, const char* path)
+{
+    int w, h;
+    glfwGetFramebufferSize(window, &w, &h);
+    std::vector<unsigned char> rgb((size_t)w * h * 3);
+    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
+    FILE* f = fopen(path, "wb");
+    fprintf(f, "P6\n%d %d\n255\n", w, h);
+    for (int y = h - 1; y >= 0; --y)
+        fwrite(rgb.data() + (size_t)y * w * 3, 1, (size_t)w * 3, f);
+    fclose(f);
+}
+
+int main(int, char**)
+{
+    if (!glfwInit())
+        return 1;
+#if defined(__EMSCRIPTEN__)
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);  // WebGL
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    const char* glslVersion = "#version 100";
+#else
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#ifdef __APPLE__
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+#endif
+    const char* glslVersion = "#version 150";
+#endif
+    // High DPI: the window, the paddings and the fonts follow the monitor's scale (1 on macOS and the web, where
+    // the framebuffer scale does it)
+    float mainScale = ImGui_ImplGlfw_GetContentScaleForMonitor(glfwGetPrimaryMonitor());
+    GLFWwindow* window = glfwCreateWindow((int)(900 * mainScale), (int)(800 * mainScale), "imgui_rich_md minimal example", nullptr, nullptr);
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(1);
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::GetStyle().ScaleAllSizes(mainScale);
+    ImGui::GetStyle().FontScaleDpi = mainScale;
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+#ifdef __EMSCRIPTEN__
+    ImGui_ImplGlfw_InstallEmscriptenCallbacks(window, "#canvas");
+#endif
+    ImGui_ImplOpenGL3_Init(glslVersion);
+
+    RichMd::MarkdownOptions options;
+#ifdef IMGUI_RICHMD_WITH_LATEX
+    options.withLatex = true;
+#endif
+    RichMd::CreateContext(options);
+
+    const char* shot = std::getenv("IMGUI_RICHMD_SHOT");
+    int frame = 0;
+#ifdef __EMSCRIPTEN__
+    EMSCRIPTEN_MAINLOOP_BEGIN  // the browser calls the loop's body at each frame
+#else
+    while (!glfwWindowShouldClose(window))
+#endif
+    {
+        glfwPollEvents();
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(vp->WorkPos);
+        ImGui::SetNextWindowSize(vp->WorkSize);
+        ImGui::Begin("##md", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+        RichMd::Render(kMarkdown);
+        ImGui::End();
+
+        ImGui::Render();
+        int w, h;
+        glfwGetFramebufferSize(window, &w, &h);
+        glViewport(0, 0, w, h);
+        glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        if (shot && ++frame == 30)
+        {
+            WriteScreenshotPpm(window, shot);
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+        glfwSwapBuffers(window);
+    }
+#ifdef __EMSCRIPTEN__
+    EMSCRIPTEN_MAINLOOP_END;
+#endif
+
+    RichMd::DestroyContext();  // frees the markdown textures while the backend is alive
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    glfwDestroyWindow(window);
+    glfwTerminate();
+    return 0;
+}

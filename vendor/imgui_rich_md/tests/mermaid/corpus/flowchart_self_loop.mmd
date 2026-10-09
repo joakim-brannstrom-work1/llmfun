@@ -1,0 +1,7 @@
+%% A node linked to itself, and a cycle of two nodes
+%% expect: nodes=3 edges=4
+flowchart TD
+    A[Start] --> B[Poll]
+    B --> B
+    B --> C[Done]
+    C --> B

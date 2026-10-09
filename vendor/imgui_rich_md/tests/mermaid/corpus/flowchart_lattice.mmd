@@ -1,0 +1,16 @@
+%% A lattice declared in a scrambled order
+%% expect: nodes=9 edges=12
+%% known: edge-overlap (an exit and an entry closer than a quarter of em: the node is too narrow to move its entries)
+flowchart TD
+    A --> F
+    A --> D
+    B --> D
+    B --> E
+    C --> E
+    C --> F
+    D --> H
+    E --> G
+    F --> I
+    D --> G
+    E --> I
+    F --> H

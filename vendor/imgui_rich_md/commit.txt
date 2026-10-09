@@ -1,0 +1,1 @@
+git@github.com:pthom/imgui_rich_md.git 4f27c132509acfe3cdcb65e7f0e79d3d85ba6a71
