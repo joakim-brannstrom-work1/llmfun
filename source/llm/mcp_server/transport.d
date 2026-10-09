@@ -10,6 +10,7 @@ module llm.mcp_server.transport;
 import std.stdio : stdout;
 import std.string : indexOf, stripRight;
 
+import core.atomic : atomicLoad, atomicStore;
 import core.sys.posix.fcntl : F_GETFL, F_SETFL, O_NONBLOCK, fcntl;
 import core.sys.posix.poll : POLLIN, POLLHUP, POLLERR, poll, pollfd;
 import core.sys.posix.unistd : read;
@@ -47,7 +48,11 @@ class EOFException : Exception {
 /// availability checks are always accurate -- no hidden FILE buffer.
 class StdioTransport : Transport {
 private:
-    bool _closed = false;
+    // Cross-thread eof/shutdown flag (the one shared mutable field):
+    // written by close() on the writer/server side and by _tryRead() on the
+    // reader side (EOF or fd error), read by closed()/hasData()/readMessage()
+    // on the reader side. Access only via atomicStore/atomicLoad.
+    shared bool _closed = false;
     int _fd;
     char[] _buf; // accumulated raw bytes from the fd
 
@@ -70,7 +75,7 @@ private:
             _buf ~= tmp[0 .. n];
             return true;
         } else if (n == 0) {
-            _closed = true;
+            atomicStore(_closed, true);
         } else {
             // n < 0: EAGAIN / EWOULDBLOCK and EINTR are normal for a
             // non-blocking fd. Anything else is a real error.
@@ -80,7 +85,7 @@ private:
                 import logger = std.logger;
 
                 logger.warning("Unexpected read error on stdin fd: errno=", errno);
-                _closed = true;
+                atomicStore(_closed, true);
             }
         }
         return false;
@@ -107,7 +112,7 @@ public:
     }
 
     bool closed() @safe {
-        return _closed;
+        return atomicLoad(_closed);
     }
 
     /// Fast, non-blocking check: returns true when a complete line is
@@ -121,7 +126,7 @@ public:
         // (no \n) is discarded — MCP messages are always newline-terminated.
         if (_hasCompleteLine())
             return true;
-        if (_closed)
+        if (atomicLoad(_closed))
             return false;
         // Drain all available kernel data without blocking.
         while (_tryRead()) {
@@ -148,7 +153,7 @@ public:
                 }
                 continue;
             }
-            if (_closed)
+            if (atomicLoad(_closed))
                 throw new EOFException();
 
             // No complete line yet. In the actor loop this path is never
@@ -169,10 +174,31 @@ public:
     }
 
     void close() @system {
-        _closed = true;
+        atomicStore(_closed, true);
         stdout.flush();
         // No fd close -- the process owns stdin. Setting _closed is
         // enough: hasData() returns false, and readMessage() throws
         // EOFException on next call if the buffer is drained.
     }
+}
+
+/// Cross-thread visibility of the close flag (the one documented thread-using
+/// unittest exception to the no-thread test convention): a close() performed
+/// on a writer thread must be observed by the reader side (closed()/hasData())
+/// as eof-equivalent -- no data, so the reader actor treats it as end of
+/// stream. Needs no fd I/O: the ctor only pins _fd = 0, and hasData() checks
+/// _closed before touching the fd.
+@("StdioTransport: writer-thread close() is observed by the reader side as eof-equivalent")
+unittest {
+    import core.thread : Thread;
+    import core.time : MonoTime, msecs, seconds;
+
+    auto t = new StdioTransport();
+    auto writer = new Thread({ t.close(); });
+    writer.start();
+    auto deadline = MonoTime.currTime() + 5.seconds;
+    while (!t.closed() && MonoTime.currTime() < deadline)
+        Thread.sleep(1.msecs);
+    assert(t.closed()); // reader side observes the writer-side close
+    assert(!t.hasData()); // and treats it as eof-equivalent (no data)
 }

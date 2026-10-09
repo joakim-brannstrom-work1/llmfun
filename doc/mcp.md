@@ -17,36 +17,114 @@ The server constructs a full `AgentContext` inside the actor thread, providing a
 | `mcp_server/types.d` | JSON-RPC 2.0 types (`JsonRpcRequest`, `JsonRpcResponse`, `ToolResult`) using `std.json.JSONValue` |
 | `mcp_server/protocol.d` | JSON-RPC parsing (`parseRequest`) and serialization (`serializeResponse`) |
 | `mcp_server/transport.d` | `Transport` interface and `StdioTransport` implementation |
-| `mcp_server/package.d` | `MCPServer` class, actor entry point (`runMcpServer`), message types |
+| `mcp_server/package.d` | `MCPServer` class, the `McpServerActor`/`StdioReaderActor` actors, payload types (`McpConfigData`, `ToolFilter`, `ReadyReply`, `ExitCell`) |
 | `app_mcp.d` | CLI entry point, signal handling, actor spawning |
 
 ### Actor Model
 
-The MCP server runs as a `std.concurrency` actor:
+The MCP server runs on the vendored `my.actor` framework
+(`vendor/mylib/source/my/actor/`): one `System` per `mcp` subcommand
+process, two pool-placed actors, and a manually pumped client kernel on
+the main thread.
 
-1. **Main thread** spawns `runMcpServer` via `std.concurrency.spawn`
-2. **Main thread** sends `McpServerConfig` with include/exclude filter patterns and `McpConfigData`
-3. **Actor** reconstructs `LlmConfig` from `McpConfigData`
-4. **Actor** creates `RAG` (may be null — graceful degradation)
-5. **Actor** constructs `AgentContext` with all dependencies
-6. **Actor** creates `SkillManager` (may be null — graceful degradation)
-7. **Actor** sets `taskDone` handler (no-op with logging)
-8. **Actor** creates `StdioTransport` and `MCPServer`, sends `McpStarted`
-9. **Actor** polls for transport input (`hasData()`) and control messages (`receiveTimeout`)
-10. **Main thread** sends `McpShutdown` on SIGINT/SIGTERM
-11. **Actor** drains pending messages, closes transport, sends `McpStopped`
+1. **Main thread** (`app_mcp.d: runServer`) blocks SIGINT/SIGTERM with
+   `pthread_sigmask` (signals are consumed on the main thread with
+   `sigtimedwait` and turned into shutdown requests), creates the `System`
+   via `makeSystem()` and spawns both actors on its shared pool:
+   `sys.spawn!McpServerActor(exitState)` and
+   `sys.spawn!StdioReaderActor(serverAddr.weakRef)`.
+2. **Main thread** sends the startup request
+   `configure(ToolFilter, McpConfigData)` through a typed
+   `Channel!McpServerActor` and awaits the `ReadyReply` by pumping a bare
+   `ActorShell` client kernel (`client.process(Clock.currTime())`). The
+   request timeout is pinned at 30 s; any `ScopedActorError` on the reply
+   path (peer down, timeout, unknown message, fatal) is logged and exits 1.
+3. **Server actor** (`McpServerActor`) runs the heavy startup inside the
+   `configure` message handler, not the constructor (the ctor runs
+   synchronously on the spawning thread inside `spawn!`): `readConfig`
+   reconstructs `LlmConfig` from the flattened `McpConfigData`, then `RAG`
+   (may be null - graceful degradation), `AgentContext` with all
+   dependencies, `SkillManager` (may be null - graceful degradation), the
+   `taskDone` no-op-with-logging handler, and `MCPServer`. A failed startup
+   is reported as `ReadyReply(false, errMsg)`; the main thread logs it and
+   exits 1.
+4. **Reader actor** (`StdioReaderActor`) forwards complete stdin frames:
+   each `pollTick()` reads one frame via the existing transport API
+   (`hasData()` / `readMessage()`), forwards it to the server actor with
+   `dynSend(server_, "stdin", message)`, and re-arms itself with a delayed
+   self-send (`dynDelayedSend`) 10 ms later, so between ticks neither actor
+   occupies a pool worker.
+5. **Server actor** handles one request at a time: `stdin(message)`
+   dispatches `MCPServer.handleMessage` and writes the response (a handler
+   error is a stop path, not catch-and-continue); `eof()` and `shutdown()`
+   are state-guarded idempotent stop requests.
+6. **Stop path**: the server actor closes the transport, destroys RAG and
+   sets the shared exit cell right before sending its self-exit
+   (`sendExit(self_, ExitReason.userShutdown)` - with no `onExit` hook
+   declared, the default exit handler force-shuts the actor down). The
+   reader observes a closed transport on its next tick and treats it as
+   eof-equivalent.
+7. **Main thread** pump loop: non-blocking `sigtimedwait`, on the first
+   signal `shutdown()` (a second signal forces exit), poll the exit cell,
+   sleep 10 ms. The 30 s shutdown deadline, the second-signal force exit
+   and the `exitState != 0 -> exit 1` mapping are unchanged.
 
-No shared state exists between threads. All communication uses typed messages.
+The only value shared across threads is the exit cell: an `ExitCell` (a
+`my.gc.refc` `RefCounted!int`: 0 running, 1 stopped ok, 2 stopped with
+error), the mylib-sanctioned cross-thread flag pattern. Each actor creates
+its own `StdioTransport` in its `onSpawn` launch hook (per-actor transport
+ownership); the transport's `_closed` flag is still `core.atomic`-shared
+even though each instance now has a single-user thread. The server mailbox
+is deliberately unbounded (`spawn`, not `spawnBounded`): dropping JSON-RPC
+requests would be a correctness bug. Lifecycle traces (spawn, stop path,
+reader tick cadence) are behind the module's `version(TraceMcp)`-gated
+`trace()` helper (emitted at INFO level as `[MCP] ...`).
 
-### Message Types
+### Log Parity with the Pre-Migration Lifecycle
 
-| Message | Direction | Purpose |
-|---------|-----------|---------|
-| `McpServerConfig` | Main -> Actor | Initial config (include/exclude regex patterns, `McpConfigData`) |
-| `McpStarted` | Actor -> Main | Server is ready to accept requests |
-| `McpShutdown` | Main -> Actor | Request graceful shutdown |
-| `McpStopped` | Actor -> Main | Server has stopped (includes error flag) |
-| `McpFailed` | Actor -> Main | Startup failed (e.g., invalid regex, fatal construction error) |
+Every lifecycle log case of the old `std.concurrency` design (the Task 3
+e2e baseline) has a corresponding log or trace in this design:
+
+| Old message | New log / trace |
+|---|---|
+| `McpStarted` | info `MCP server actor started` (actor, in `configure`) + info `MCP server actor confirmed startup` (main) + trace `configure: ready` |
+| `McpShutdown` | info `Shutdown requested, stopping MCP server` (actor, in `shutdown()`) + trace `shutdown: graceful shutdown requested, stopping` |
+| `McpStopped` (ok) | exit cell 1 + info `MCP server actor stopped` (main) + info `MCP server stopped` + trace `stop: transport closed, exit cell set, self-exit sent` |
+| `McpStopped` (EOF) | info `MCP client disconnected (EOF)` (actor, in `eof()`) + trace `eof: client disconnected, stopping`, then the `McpStopped` (ok) row |
+| `McpFailed` | `ReadyReply(false, errMsg)`: actor-side `logger.errorf` + main logs the `errMsg` and `MCP server stopped`, exit 1 |
+| drain-loop handler error | warning `Error in MCP loop: ...` (`onException`) or the fatal wrap in `stdin()`/`configure()`; for reader-side cases warning `Error in MCP reader loop: ...` (`StdioReaderActor.onException`, which re-arms the tick) - the `reader: ...` strings are the per-tick/EOF informational traces, not the error path |
+
+Additional traces (all behind `version(TraceMcp)`):
+
+- `stdin: one frame dispatched`
+- `reader: one frame forwarded`
+- `reader: transport closed, notifying the server and exiting`
+- `reader: EOF from readMessage, notifying the server and exiting`
+- the reader tick re-arms (in `onException` or after a completed tick)
+
+### Message Contracts
+
+Actor methods are the messages (my.actor: public methods on a plain
+class; `void` = one-shot fire-and-forget, non-void = request/reply
+returning a promise chain). `StdioReaderActor` sends the strings `stdin`
+(with the frame) and `eof` via `dynSend`; a send to a dead server is a
+structural no-op (`WeakAddress.lock.get` returns null and drops the
+message).
+
+| Contract | Kind | Direction | Purpose |
+|---|---|---|---|
+| `ReadyReply configure(ToolFilter, McpConfigData)` | request/reply | Main -> Server | Startup: heavy construction, replies ok/errMsg; 30 s pinned timeout |
+| `void stdin(string message)` | one-shot | Reader -> Server | One complete JSON-RPC frame; dispatch + write response |
+| `void eof()` | one-shot | Reader -> Server | Client disconnected; idempotent stop |
+| `void shutdown()` | one-shot | Main -> Server | Graceful shutdown request; idempotent stop |
+| `void pollTick()` | one-shot, self-sent | Self (reader) | One non-blocking read/forward iteration; re-arms at +10 ms |
+| `ExitCell` (`RefCounted!int`) | shared cell | Server writes, Main polls | 0 running / 1 stopped ok / 2 stopped with error |
+
+`McpConfigData` (flattened scalar-only copy of `LlmConfig`) and
+`ToolFilter` remain the payload types: `LlmConfig` holds associative
+arrays and my.actor's `Variant` boxing gives no unshared-aliasing
+guarantee, so the flatten stays (the `readConfig` reconstruction inside
+`configure` is unchanged).
 
 ### AgentContext Integration
 
@@ -322,6 +400,21 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
+## Debugging
+
+The actor scheduler used by the MCP server (`my.actor`) delivers wakeups
+via real-time signals, which stop `gdb` immediately. Run the server under
+`gdb` with the real-time signals passed through:
+
+```bash
+gdb -batch -ex 'handle SIG34 nostop noprint pass' -ex run --args \
+    ./build/llmfun mcp --stdio
+```
+
+An empty backtrace from an attached `gdb` is an attach failure (e.g.
+`yama ptrace_scope`), not missing debug info: launch the process under
+`gdb` from the start instead of attaching to it.
+
 ## Design Decisions
 
 ### std.json over mir
@@ -334,7 +427,7 @@ The MCP server constructs `AgentContext` with all dependencies. RAG and SkillMan
 
 ### McpConfigData for Actor Boundary
 
-Configuration is passed across the actor boundary via `McpConfigData`, a struct containing only scalar/immutable fields. This avoids `std.concurrency` aliasing violations that would occur with complex structs containing associative arrays. The actor reconstructs `LlmConfig` from this data.
+Configuration is passed across the actor boundary via `McpConfigData`, a struct containing only scalar/immutable fields. This stays regardless of framework: `LlmConfig` holds associative arrays and the my.actor `Variant` boxing gives no unshared-aliasing guarantee, so the flatten stays and the actor reconstructs `LlmConfig` from this data via `readConfig`.
 
 ### Arguments Pass-Through
 
