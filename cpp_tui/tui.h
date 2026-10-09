@@ -9,15 +9,21 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "imtui/imtui.h"
 
-#include "imgui_markdown.h"
-
 #include "tui_backend.h"
+
+// Forward declaration (keeps the rich_md headers out of this header): the
+// markdown context of a TuiState, created/destroyed by the tuiInit/tuiDestroy
+// State lifecycle (tui_api.cpp, implemented in tui_chat.cpp).
+namespace RichMd {
+struct Context;
+}
 
 namespace llmfun::tui {
 inline ImVec4 lighten(ImVec4 color, float amount) {
@@ -251,16 +257,6 @@ struct ChatTab {
 
 enum class ActiveTab { chat, log };
 
-struct MarkdownStyle {
-    ImVec4 heading[4] = {ImVec4(1.0f, 0.9f, 0.2f, 1.0f), ImVec4(0.2f, 1.0f, 1.0f, 1.0f),
-                         ImVec4(0.5f, 1.0f, 0.2f, 1.0f), ImVec4(0.8f, 0.8f, 0.8f, 1.0f)};
-    std::string headingPrefix[4] = {"# ", "## ", "### ", "> "};
-
-    ImVec4 strong = ImVec4(1.0f, 1.0f, 0.8f, 1.0f);
-    ImVec4 italic = ImVec4(0.3f, 0.9f, 0.9f, 1.0f);
-    ImVec4 inlineCode = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
-};
-
 struct TuiState {
     bool isLogActive{false};
     std::string iniFilename;
@@ -285,8 +281,8 @@ struct TuiState {
     std::deque<LogMessage> logMessages;
     static constexpr size_t MaxLogMessages = 1000;
 
-    MarkdownStyle mdStyle;
-    ImGui::MarkdownConfig mdConfig;
+    RichMd::Context* mdContext =
+        nullptr; // rich_md context; owned by the tuiInit/tuiDestroyState lifecycle
 
     bool autoScroll = true;
 
@@ -314,7 +310,24 @@ int leftPanelWidth(const TuiState& s);
 /// character counts. Every consumer treats the result as a raw length.
 int colUnits(int cols);
 
-void initMarkdownConfig(TuiState& state);
+/// rich_md markdown lifecycle (the RichMd::Context* in TuiState). The context
+/// and its fonts are created in tuiInit() for the active render profile and
+/// destroyed in tuiDestroyState(); headless states never create one (their
+/// renders take the plain-text fallback).
+///
+/// Text (grid) profile: the fonts must be added and warmed up BEFORE the text
+/// backend init, because ImTui_ImplText_Init() then builds and locks the
+/// atlas — a later GetFontBaked() would resolve the closest existing bake
+/// (16px -> 1/16 scale) instead of the exact 1-cell bake. So
+/// initMarkdownTextMode() runs first, and finishMarkdownTextMode() pins the
+/// default font by name once the backend is up.
+/// GUI profile: fonts are lazy, so the context is created after the backend.
+void initMarkdownTextMode(
+    TuiState& state); // before the text backend init (fonts before ImTui_ImplText_Init)
+void finishMarkdownTextMode(
+    TuiState& state); // after the text backend init (pins io.FontDefault by name)
+void initMarkdownGuiMode(TuiState& state); // after a successful GUI backend init
+void destroyMarkdown(TuiState& state);     // before backend shutdown / ImGui::DestroyContext
 
 /// Apply the shared dark theme to the current ImGui context. The C API's
 /// tuiInit() calls this after the backend initialized (a backend init resets

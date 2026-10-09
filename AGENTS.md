@@ -4,7 +4,7 @@ LLM agent harness — a CLI tool that orchestrates AI agents with tool calling, 
 
 ## Tech Stack
 
-- **Language:** D (primary), C (vendor: sqlite3, sqlite3-vec, imtui), C++17 (cpp_tui, imgui_markdown, llama.cpp)
+- **Language:** D (primary), C (vendor: sqlite3, sqlite3-vec, imtui), C++17 (cpp_tui, imgui_rich_md, llama.cpp)
 - **Build:** Dub (`dub.sdl`) + Makefiles for C/C++ components
 - **Database:** SQLite3 with FTS5 and sqlite3-vec (vector search)
 - **Local Inference:** llama.cpp
@@ -264,11 +264,11 @@ dub build --config=llmfun_util              # Build test utility (manual testing
 
 - Every chat-history entry carries a typed `turnId` (mixin `TurnIdMixin` in `llm/chat.d`); 0 = no turn. A turn is one user query plus everything produced while answering it.
 - Turn boundaries are decided inside `Chat.add` only: a user-query `Message` opens a new turn (allocating from the per-Chat counter `nextTurnId_`), every other insertion continues the current turn, and `setSystemPrompt` stamps 0. Call sites never allocate turns themselves; vision chats open a turn explicitly with `chat.beginNewTurn()`.
-- Counter state is per-Chat (`nextTurnId_` / `currentTurnId_`, no static/shared/atomic state). The high-water mark is persisted as the session-header key `next_turn_id`; on disk the stamp lives inside each message's `save_data["turn_id"]` (typed field in memory, `save_data` on disk — no new top-level message keys). Invariants I1–I4 (history sorted by `(turn_id, position)`, active-turn stamps > 0, counter never decreases, no ID reuse within a session — including across restarts, `clear()`/reload never recycle IDs) are pinned by unittests in `llm/chat.d`; legacy files are reconstructed on load (`reconstructTurnIds`).
+- Counter state is per-Chat (`nextTurnId_` / `currentTurnId_`, no static/shared/atomic state). The high-water mark is persisted as the session-header key `next_turn_id`; on disk the stamp lives inside each message's `save_data["turn_id"]` (typed field in memory, `save_data` on disk — no new top-level message keys). Invariants (history sorted by `(turn_id, position)`, active-turn stamps > 0, counter never decreases, no ID reuse within a session — including across restarts, `clear()`/reload never recycle IDs) are pinned by unittests in `llm/chat.d`; legacy files are reconstructed on load (`reconstructTurnIds`).
 - Projections: `getDialogueHistory()` (Facts) and `getReasoningTrace()` (Trace) in `llm/chat.d`. Harness control traffic (user-role messages with `userQuery == false`) appears in neither projection.
 - Compression is observable: `SummaryAgent` multicasts a `CompressionCheckpoint` via `addCheckpointListener` exactly once per compression that actually evicts verbatim content, carrying the session id, the evicted message arrays, the evicted turn range, and the final context size. Listeners must not block (the compressing thread is usually the UI thread) and must not throw (throwing listeners are caught and logged).
 
-### Searchable Dialogue History (Phase 1)
+### Searchable Dialogue History
 
 - `DialogueIndex` (`llm/rag/dialogue_index.d`) is owned by the agent thread; it spawns an actor worker (`llm/rag/dialogue_worker.d`) on its own thread. The worker owns its own embedder (never the shared agent embedder) and all communication is via value messages only.
 - Episodes are indexed into per-session SQLite WAL databases under `dialogueDir` (config key `dialogueDir`, default `llmfun/data/dialogue`): one `<sessionId>.db` per session, opened/created with the `openDatabase`/`addToDatabase` seam as Topic sources named `d_<sess>__t<turnStart>_<turnEnd>__<epochMillis>` (`encodeTopicName`/`decodeTopicName`; hyphens → underscores in the name).
@@ -283,9 +283,9 @@ dub build --config=llmfun_util              # Build test utility (manual testing
   embedding model or dimensions makes the write path drop and recreate a
   dialogue DB (all indexed history for that session is lost) — intentional,
   the loss is the operator's responsibility.
-- Turn metadata is always derived by decoding the DB topic names, never from worker memory (F5). The `queryDialogueHistory` tool (`llm/tool_call/dialogue.d`) takes `maxTurnAge`: 0/negative = no filtering, positive N keeps episodes with `turnEnd >= maxTurn - N` (`maxTurn` computed from the DB).
-- Indexing is asynchronous with a small lag (~2-3 s, R3 — documented in the tool description). Indexing itself is triggered in code at each compression checkpoint (F1). The F7 trigger rule — when the main agent should call `queryDialogueHistory` — lives in `config/prompt/AGENT.md` ("# Dialogue History Retrieval"), user-tunable, with no code-side constant.
-- Admin/reporting: `llmfun rag --dialogue` produces a read-only report over the session databases (per-session source count, indexed turn range, totals). It dispatches before `createRag` (no embedder/local model/primary RAG DB needed), probes each DB's `VersionTbl` for model/dimensions before the read-only open, and only considers D12-valid session file names (path-traversal guard). A session whose read-only open fails (e.g. WAL recovery after an abnormal shutdown, or a read-only directory where `-shm` cannot be created) is skipped with a warning. No destructive `rag` subcommands in Phase 1.
+- Turn metadata is always derived by decoding the DB topic names, never from worker memory. The `queryDialogueHistory` tool (`llm/tool_call/dialogue.d`) takes `maxTurnAge`: 0/negative = no filtering, positive N keeps episodes with `turnEnd >= maxTurn - N` (`maxTurn` computed from the DB).
+- Indexing is asynchronous with a small lag (~2-3 s, documented in the tool description). Indexing itself is triggered in code at each compression checkpoint. The trigger rule — when the main agent should call `queryDialogueHistory` — lives in `config/prompt/AGENT.md` ("# Dialogue History Retrieval"), user-tunable, with no code-side constant.
+- Admin/reporting: `llmfun rag --dialogue` produces a read-only report over the session databases (per-session source count, indexed turn range, totals). It dispatches before `createRag` (no embedder/local model/primary RAG DB needed), probes each DB's `VersionTbl` for model/dimensions before the read-only open, and only considers valid session file names (path-traversal guard). A session whose read-only open fails (e.g. WAL recovery after an abnormal shutdown, or a read-only directory where `-shm` cannot be created) is skipped with a warning. No destructive `rag` subcommands.
 
 ### Slash Commands
 
@@ -334,10 +334,10 @@ dub build --config=llmfun_util              # Build test utility (manual testing
 
 ### TUI
 
-- C++ TUI library (`cpp_tui/`) provides Dear ImGui-based terminal UI with markdown rendering.
+- C++ TUI library (`cpp_tui/`) provides Dear ImGui-based terminal UI with markdown rendering via the vendored `imgui_rich_md`.
 - D bindings in `tui/package.d` handle streaming and inter-thread message passing.
 - Exposed via pure C API (`tui_api.h` / `tui_api.cpp`) for D interop.
-- Session sidebar (`ChatTabSessionPanel`): session rows with active marker and ` [N]` count, rename toggle + input on the active row, two-step delete, busy gating (guard-and-skip; the vendored ImGui 1.81 has no `BeginDisabled`). A filter input in the panel header with fzf-style fuzzy subsequence matching + ranking against title + preview (`session_fuzzy.h`, pure), Esc/Enter/click selection with busy-defer, whole-word match highlighting, and the headless `test_session_filter_smoke` harness. Mutually exclusive with the pipeline panel (the pipeline wins the left slot whenever it has agents); `leftPanelWidth(state)` resolves the output offset. See `doc/tui_design.md`.
+- Session sidebar (`ChatTabSessionPanel`): session rows with active marker and ` [N]` count, rename toggle + input on the active row, two-step delete, busy gating (guard-and-skip: New/Rename/Delete are skipped while busy and a pending session switch is deferred in a single last-click-wins slot; the vendored ImGui is 1.92.9b — `BeginDisabled` exists at imgui.h:998, but the manual guard-and-pending-slot gating is what's implemented). A filter input in the panel header with fzf-style fuzzy subsequence matching + ranking against title + preview (`session_fuzzy.h`, pure), Esc/Enter/click selection with busy-defer, whole-word match highlighting, and the headless `test_session_filter_smoke` harness. Mutually exclusive with the pipeline panel (the pipeline wins the left slot whenever it has agents); `leftPanelWidth(state)` resolves the output offset. See `doc/tui_design.md` and `doc/sessions.md`.
 - D can import `.c` as they are, no binding is required, no `extern(C)` is required. See the D specification for more details.
 - Max width (`TuiConfig` / YAML `tui.maxWidth`): caps the TUI's rendered
   width in terminal columns (0 = unlimited, default; valid 0 or [40, 10000],

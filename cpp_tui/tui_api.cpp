@@ -136,11 +136,17 @@ int tuiInit(TuiState* state, TuiBackendMode mode) {
     bool initialized = false;
 
     if (mode == TuiBackendMode_Tui) {
+        // Rich context + font warm-up BEFORE the text backend init, which
+        // builds and locks the atlas (fonts added after lock would bake at
+        // the wrong size).
+        ::llmfun::tui::initMarkdownTextMode(*state->inner);
         backend = ::llmfun::tui::makeNcursesBackend();
         initialized = backend->init(error);
     } else if (mode == TuiBackendMode_Gui) {
         backend = ::llmfun::tui::makeGuiBackend();
         initialized = backend->init(error);
+        if (initialized)
+            ::llmfun::tui::initMarkdownGuiMode(*state->inner);
     } else {
         // Auto (also the defensive default for unknown values): try the GUI
         // backend first. On failure, fall back to the terminal UI iff both
@@ -148,11 +154,14 @@ int tuiInit(TuiState* state, TuiBackendMode mode) {
         // useless, so there the GUI error is the result.
         backend = ::llmfun::tui::makeGuiBackend();
         initialized = backend->init(error);
-        if (!initialized) {
+        if (initialized) {
+            ::llmfun::tui::initMarkdownGuiMode(*state->inner);
+        } else {
             if (isatty(0) && isatty(1)) {
                 const std::string note =
                     "GUI unavailable: " + error + "; falling back to terminal UI";
                 std::fprintf(stderr, "%s\n", note.c_str());
+                ::llmfun::tui::initMarkdownTextMode(*state->inner);
                 backend = ::llmfun::tui::makeNcursesBackend();
                 std::string tuiError;
                 if (backend->init(tuiError)) {
@@ -167,6 +176,7 @@ int tuiInit(TuiState* state, TuiBackendMode mode) {
 
     if (!initialized) {
         // Clean unwind: the state stays backend-less and retryable.
+        ::llmfun::tui::destroyMarkdown(*state->inner);
         ImGui::DestroyContext(context);
         state->inner->ownedContext = nullptr;
         setLastError(error.empty() ? "tuiInit: backend initialization failed" : error.c_str());
@@ -181,6 +191,10 @@ int tuiInit(TuiState* state, TuiBackendMode mode) {
     // aliases ImGuiCol_NavCursor in ImGui 1.91.4+), so applying the theme
     // before the backend would let the backend undo the NavCursor override.
     ::llmfun::tui::applyTheme();
+    // Pin the text-grid default font after the theme: the whole UI (not just
+    // markdown) must stay at 1-cell metrics.
+    if (::llmfun::tui::tuiIsTextGrid())
+        ::llmfun::tui::finishMarkdownTextMode(*state->inner);
 
     return 0;
 }
@@ -191,7 +205,6 @@ TuiState* tuiCreateState(void) {
     try {
         inner = new ::llmfun::tui::TuiState();
         TuiState* state = new TuiState{inner};
-        ::llmfun::tui::initMarkdownConfig(*state->inner);
         return state;
     } catch (const std::bad_alloc&) {
         delete inner;
@@ -204,6 +217,9 @@ void tuiDestroyState(TuiState* state) {
     if (!state)
         return;
     if (state->inner) {
+        // Rich textures must be freed while the backend is still alive; the
+        // rich context outlives nothing here (created per tuiInit).
+        ::llmfun::tui::destroyMarkdown(*state->inner);
         if (state->inner->backend) {
             state->inner->backend->shutdown();
             state->inner->backend.reset();

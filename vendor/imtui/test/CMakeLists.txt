@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
-project(imtui_test_code_block VERSION 0.1.0 LANGUAGES CXX)
+project(imtui_test VERSION 0.1.0 LANGUAGES CXX)
 
-# Tests are run via Python (test_code_block.py) since imtui's stripped-down
-# ImGui lacks the full API needed by imgui_markdown.
-# The Python tests verify parsing logic by analyzing imgui_markdown.h source.
-# Compilation is verified by the main llmfun_tui build.
-
-# This CMakeLists exists so the test directory integrates with the build system.
-# To run tests: python3 test_code_block.py
+# This directory holds the imtui test sources and drivers. The C++ test
+# binaries are CMake targets in llmfun/cpp_tui/CMakeLists.txt:
+#   imtui_utf8_grid_test          (grid-invariant regression, test_utf8_grid.cpp)
+#   imtui_ncurses_fold_redraw_test (PTY fold-row rewrite driver target)
+# test_wcwidth.cpp is compiled standalone by build_test.py (no CMake target).
+# This stub exists so the test directory stays a recognized CMake project.
+# To build and run the tests: python3 build_test.py

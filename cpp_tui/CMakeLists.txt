@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.10)
-project(llmfun_tui VERSION 0.1.0 LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.20)
+project(llmfun_tui VERSION 0.1.0 LANGUAGES C CXX)
 
 # C++17 for our sources (imtui uses C++11 internally, unaffected)
 set(CMAKE_CXX_STANDARD 17)
@@ -14,7 +14,23 @@ set(IMTUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 # imtui-ncurses transitively provides the PUBLIC include path, so no extra target_include_directories needed
 add_subdirectory(../vendor/imgui ${CMAKE_BINARY_DIR}/imgui)
 add_subdirectory(../vendor/imtui ${CMAKE_BINARY_DIR}/imtui)
-add_subdirectory(../vendor/imgui_markdown ${CMAKE_BINARY_DIR}/imgui_markdown)
+
+# --- imgui_rich_md (rich markdown; md4c-based; no third-party deps in this config) ---
+# rich_md expects a target named `imgui` from its parent; create the interface
+# before add_subdirectory. Its bare "imgui.h"/"imgui_internal.h" includes need
+# the core imgui dir on the path; IMGUI_USE_WCHAR32 propagates from imgui-for-imtui.
+add_library(imgui INTERFACE)
+target_link_libraries(imgui INTERFACE imgui-for-imtui)
+target_include_directories(imgui INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/../vendor/imgui/imgui)
+set(IMGUI_RICHMD_WITH_CODE_EDITOR OFF CACHE BOOL "" FORCE)
+set(IMGUI_RICHMD_WITH_LATEX OFF CACHE BOOL "" FORCE)
+set(IMGUI_RICHMD_WITH_DOWNLOAD_IMAGES OFF CACHE BOOL "" FORCE)
+set(IMGUI_RICHMD_WITH_MERMAID ON CACHE BOOL "" FORCE)
+set(IMGUI_RICHMD_EMBED_ASSETS ON CACHE BOOL "" FORCE)
+set(IMGUI_RICHMD_STB_IMAGE_IMPLEMENTATION ON CACHE BOOL "" FORCE)
+set(IMGUI_RICHMD_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(IMGUI_RICHMD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(../vendor/imgui_rich_md ${CMAKE_BINARY_DIR}/imgui_rich_md)
 
 find_package(Threads REQUIRED)
 
@@ -65,7 +81,7 @@ add_library(llmfun_tui_lib STATIC
 target_include_directories(llmfun_tui_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(llmfun_tui_lib
-    PUBLIC imtui-ncurses imgui_markdown
+PUBLIC imtui-ncurses imgui_rich_md
     PRIVATE Threads::Threads stdc++
 )
 
@@ -96,8 +112,9 @@ add_custom_command(
     COMMAND ${CMAKE_AR} -x $<TARGET_FILE:imtui-ncurses>
     COMMAND ${CMAKE_AR} -x $<TARGET_FILE:imtui>
     COMMAND ${CMAKE_AR} -x $<TARGET_FILE:imgui-for-imtui>
+    COMMAND ${CMAKE_AR} -x $<TARGET_FILE:imgui_rich_md>
     COMMAND ${CMAKE_AR} rcs libllmfun_tui_all_lib.a *.o
-    DEPENDS llmfun_tui_lib imtui-ncurses imtui imgui-for-imtui
+    DEPENDS llmfun_tui_lib imtui-ncurses imtui imgui-for-imtui imgui_rich_md
 )
 add_custom_target(libllmfun_tui_all_lib ALL
     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/libllmfun_tui_all_lib.a
@@ -138,7 +155,6 @@ add_dependencies(test_tui_api_v4 llmfun_tui_all_lib)
 target_link_libraries(test_tui_api_v4 PRIVATE
     llmfun_tui_all_lib
     imtui-ncurses
-    imgui_markdown
     ncursesw
     glfw
     ${CMAKE_DL_LIBS}
@@ -176,14 +192,13 @@ add_executable(test_session_filter_smoke
     test_session_filter_smoke.cpp
 )
 add_dependencies(test_session_filter_smoke llmfun_tui_all_lib)
-# tui.h (the C++ header) needs the imtui + imgui_markdown include paths and
+# tui.h (the C++ header) needs the imtui include paths and
 # the IMGUI_USE_WCHAR32 definition; link the interface-providing targets for
 # exactly that (their archives are already inside llmfun_tui_all_lib, so they
 # contribute no extra objects).
 target_link_libraries(test_session_filter_smoke PRIVATE
     llmfun_tui_all_lib
     imtui-ncurses
-    imgui_markdown
     ncursesw
     glfw
     ${CMAKE_DL_LIBS}
@@ -194,14 +209,38 @@ add_executable(test_tui_maxwidth
     test_tui_maxwidth.cpp
 )
 add_dependencies(test_tui_maxwidth llmfun_tui_all_lib)
-# tui.h (the C++ header) needs the imtui + imgui_markdown include paths and
+# tui.h (the C++ header) needs the imtui include paths and
 # the IMGUI_USE_WCHAR32 definition; link the interface-providing targets for
 # exactly that (their archives are already inside llmfun_tui_all_lib, so they
 # contribute no extra objects).
 target_link_libraries(test_tui_maxwidth PRIVATE
     llmfun_tui_all_lib
     imtui-ncurses
-    imgui_markdown
+    ncursesw
+    glfw
+    ${CMAKE_DL_LIBS}
+)
+
+# Headless rich-markdown text-mode smoke test for the imgui_rich_md
+# migration. Drives a real TuiState through tuiRender on the imtui TEXT
+# backend (no ncurses, no PTY) with the real text-mode markdown profile
+# (initMarkdownTextMode BEFORE the backend init, the 1-cell warm-up bakes)
+# and pins the reference document's rows in order (chrome-agnostic scan),
+# the wide/emoji row byte-exactly, the table/image/mermaid outcomes, and a
+# clean stderr. Tripwire: fails if the warm-up recipe or the LLMFUN imgui
+# measurement patch is reverted. Invoke:
+# ./test_rich_markdown_text < /dev/null
+add_executable(test_rich_markdown_text
+    test_rich_markdown_text.cpp
+)
+add_dependencies(test_rich_markdown_text llmfun_tui_all_lib)
+# tui.h (the C++ header) needs the imtui include paths and the
+# IMGUI_USE_WCHAR32 definition; link the interface-providing targets for
+# exactly that (their archives are already inside llmfun_tui_all_lib, so they
+# contribute no extra objects).
+target_link_libraries(test_rich_markdown_text PRIVATE
+    llmfun_tui_all_lib
+    imtui-ncurses
     ncursesw
     glfw
     ${CMAKE_DL_LIBS}
@@ -213,14 +252,13 @@ add_executable(test_clear_output_state
     test_clear_output_state.cpp
 )
 add_dependencies(test_clear_output_state llmfun_tui_all_lib)
-# tui.h (the C++ header) needs the imtui + imgui_markdown include paths and
+# tui.h (the C++ header) needs the imtui include paths and
 # the IMGUI_USE_WCHAR32 definition; link the interface-providing targets for
 # exactly that (their archives are already inside llmfun_tui_all_lib, so they
 # contribute no extra objects).
 target_link_libraries(test_clear_output_state PRIVATE
     llmfun_tui_all_lib
     imtui-ncurses
-    imgui_markdown
     ncursesw
     glfw
     ${CMAKE_DL_LIBS}

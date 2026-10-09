@@ -11,7 +11,6 @@
 #include "imtui/imtui.h"
 
 #include "imgui/imgui_internal.h"
-#include "imgui_markdown.h"
 
 namespace llmfun::tui {
 
@@ -32,8 +31,5 @@ struct Log {
 bool isWhitespaceOnly(const std::string& s);
 
 void textUnformattedMultiline(std::string_view text);
-
-void textUnformattedMultiline(ImGui::MarkdownConfig& mdConfig, std::string_view text,
-                              bool renderMarkdown = true);
 
 } // namespace llmfun::tui

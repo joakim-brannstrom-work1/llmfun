@@ -6,8 +6,6 @@
 // backend (linked like llmfun_tui: imgui-for-imtui is compiled with IMTUI +
 // IMGUI_USE_WCHAR32 by the build; this TU itself defines neither) into an
 // ImTui::TScreen grid and asserts the grid-vs-terminal-width invariants.
-// It is NOT the fake-ImGui stub used by
-// test_inline_code_runtime.cpp.
 //
 // Setup mirrors cpp_tui/tui.cpp (tuiInit 606-631, renderTabChat 726-734):
 //   ImGui::CreateContext(); ImTui_ImplText_Init(); io.DisplaySize = (80,24);
@@ -385,7 +383,10 @@ static const int kScreenW = 80;
 static const int kScreenH = 24;
 
 // (g2) wrap-probe: 40 'a's + a trailing combining mark; PushTextWrapPos(10)
-// wraps after every 10 cells, so the mark always follows a word-wrap break.
+// wraps after every 10 cells. Under cell-based measurement the mark measures
+// 0 cells, so it does not force a wrap break: it stays in the final run and
+// is folded into the final wrapped row's last 'a' cell (folding mode) or
+// dropped (default mode) — see the (g2) assertions.
 static const char kWrapProbe[] =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u0301";
 
@@ -691,7 +692,9 @@ int main()
     // a following combining mark cannot fold into row 0's 'b' cell (folding
     // mode). Fails pre-fix: the mark folds into the previous line's last
     // quad ('b' + accent on the wrong row). '\r' and word-wrap breaks get the
-    // same clears; the wrap case is asserted by (g2) below.
+    // same clears; (g2) below pins the wrap fixture under cell measurement
+    // (the 0-width mark stays in its base's run, so it folds there instead of
+    // reaching a wrap break).
     {
         const ImGuiWindowFlags rootFlagsG = ImGuiWindowFlags_NoResize |
                                             ImGuiWindowFlags_NoTitleBar |
@@ -705,7 +708,7 @@ int main()
         // in row 1 and fail the row-1-empty assert below for reasons
         // unrelated to the '\n' fold barrier under test. (g2) is wiped below
         // too: its own renders cover only its wrapped text cells (rows 0-3,
-        // cols 0-9; the backend writes no blanks), while its fold-leak scan
+        // cols 0-9; the backend writes no blanks), while its mark scan
         // reads all 8 rows x 80 cols, so without the wipes it would be
         // silently order-dependent on prior blocks' residue.
         screen.clear();
@@ -745,12 +748,16 @@ int main()
                   "(g) 'ab\\n<U+0301>': the mark does not move/create rows (row 1 empty)");
         }
 
-        // (g2) word-wrap break fold barrier: the long row wraps at 10 cells
-        // and the trailing combining mark follows the wrap break — it must
-        // not fold into the last 'a' cell of the final wrapped row.
+        // (g2) word-wrap fixture: the long row wraps at 10 cells; the trailing
+        // combining mark measures 0 cells, so it never reaches a wrap break —
+        // it stays in the final wrapped row's run, where RenderText folds it
+        // (folding mode) into that row's last 'a' cell as ch2, matching
+        // fixture row 1's 'e' + U+0301 same-row merge. (Before cell-based
+        // measurement the mark's glyph advance overflowed the wrap width; the
+        // wrap break cleared lastQuad and the mark was dropped.)
         // (g2) also starts from a CLEAN grid (screen.clear() below): its own
         // renders cover only its wrapped text cells (rows 0-3, cols 0-9; the
-        // backend writes no blanks), while its fold-leak scan reads all 8
+        // backend writes no blanks), while its mark scan reads all 8
         // rows x 80 cols — without the wipe it would be silently
         // order-dependent on prior blocks' residue.
         screen.clear();
@@ -774,7 +781,58 @@ int main()
             ImGui::Render();
             ImTui_ImplText_RenderDrawData(ImGui::GetDrawData(), &screen);
         }
+        if (g_folding)
         {
+            // The mark must fold exactly once, as ch2, into the final
+            // wrapped row's last 'a' cell (row 3, col 9): never as a cell of
+            // its own, never on an earlier row, and it must not push an
+            // extra row.
+            int mark_count = 0, mark_row = -1, mark_col = -1;
+            bool mark_as_ch = false;
+            for (int y = 0; y < kChildHeight; ++y)
+                for (int x = 0; x < screen.nx; ++x)
+                {
+                    const ImTui::TCell& c = screen.data[y * screen.nx + x];
+                    if (c.ch == 0x0301)
+                    {
+                        ++mark_count;
+                        mark_as_ch = true;
+                        mark_row = y;
+                        mark_col = x;
+                    }
+                    if (c.ch2 == 0x0301)
+                    {
+                        ++mark_count;
+                        mark_row = y;
+                        mark_col = x;
+                    }
+                }
+            const bool placed_ok = mark_count == 1 && !mark_as_ch &&
+                                   mark_row == 3 && mark_col == 9 &&
+                                   mark_col == rowLastTextCol(screen, mark_row) &&
+                                   screen.data[mark_row * screen.nx + mark_col].ch == 'a';
+            char msg[192];
+            snprintf(msg, sizeof(msg),
+                     "(g2) wrap fixture: U+0301 folds exactly once, as ch2, "
+                     "into the final wrapped row's last 'a' (row 3, col 9) — "
+                     "found %d occurrence(s) at (row %d, col %d), as_ch=%d",
+                     mark_count, mark_row, mark_col, mark_as_ch ? 1 : 0);
+            check(placed_ok, msg);
+
+            // No extra row: the mark consumes no cell; rows 4-7 stay empty.
+            bool extra_row = false;
+            for (int y = 4; y < kChildHeight; ++y)
+                for (int x = 0; x < screen.nx; ++x)
+                    if (isTextCell(screen.data[y * screen.nx + x]))
+                        extra_row = true;
+            check(!extra_row,
+                  "(g2) fold adds no extra row (the mark consumes no cell; "
+                  "rows 4-7 stay empty)");
+        }
+        else
+        {
+            // Default mode: the width-0 mark is dropped — never a cell of its
+            // own, never a ch2.
             bool fold_leak = false;
             for (int y = 0; y < kChildHeight; ++y)
                 for (int x = 0; x < screen.nx; ++x)
@@ -784,8 +842,7 @@ int main()
                         fold_leak = true;
                 }
             check(!fold_leak,
-                  "(g2) wrap-break fold barrier: trailing U+0301 never folds "
-                  "(fails pre-fix: folded into the last wrapped row's 'a')");
+                  "(g2) default mode: U+0301 is dropped (no cell, no ch2)");
         }
     }
     // --- (h) clip-edge flush geometry keeps its last cell -------------------

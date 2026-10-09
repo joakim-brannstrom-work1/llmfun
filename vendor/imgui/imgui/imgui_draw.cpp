@@ -41,7 +41,7 @@ Index of this file:
 #endif
 
 // LLMFUN PATCH: UTF-8 support via IMTUI vertex color encoding
-#include <stdlib.h> // getenv (P3 Task 6 env gates below)
+#include <stdlib.h> // getenv (the env gates below)
                     //
 // Complete Unicode cell-width function for the imtui terminal grid.
 //
@@ -69,9 +69,9 @@ Index of this file:
 //    so ZWJ sequences (family emoji), regional-indicator flag pairs, keycaps,
 //    and emoji modifiers (skin tones) still diverge from terminal widths.
 //    This is inherent to the current architecture and out of scope (Won't).
-//  - P0 default (Task 2): combining marks are dropped, e + U+0301 renders
+//  - Default: combining marks are dropped, e + U+0301 renders
 //    as aligned "e"; U+26A0 + U+FE0F renders as narrow U+26A0 on all
-//    terminals (guaranteed aligned). P3 (Task 6): with
+//    terminals (guaranteed aligned). With
 //    LLMFUN_IMTUI_EMOJI_PRESENTATION=1 (terminals that cluster VS16, e.g.
 //    VTE/kitty/wezterm) RenderText folds the continuation into the base
 //    cell instead of dropping it — VS16 promotes the base to a 2-cell
@@ -90,12 +90,12 @@ Index of this file:
 //    LLMFUN_IMTUI_EMOJI_WIDTH=1 forces the whole Emoji_Presentation=Yes
 //    class to width 1 (implemented in imtui_wcwidth below).
 //
-// P3 terminal-capability env gates, read once per process (magic statics;
+// Terminal-capability env gates, read once per process (magic statics;
 // no per-frame cost, no cross-TU state, no new exported symbols):
 static bool imtui_emoji_presentation_enabled()
 {
     // LLMFUN_IMTUI_EMOJI_PRESENTATION=1 -> fold VS16/combining marks into
-    // the base cell (RenderText). Default OFF = P0 Task 2 behavior.
+    // the base cell (RenderText). Default OFF keeps marks dropped.
     static int cached = -1;
     if (cached < 0) {
         const char * v = getenv("LLMFUN_IMTUI_EMOJI_PRESENTATION");
@@ -106,7 +106,7 @@ static bool imtui_emoji_presentation_enabled()
 static bool imtui_emoji_width_one()
 {
     // LLMFUN_IMTUI_EMOJI_WIDTH=1 -> force the Emoji_Presentation=Yes class
-    // to width 1 (narrow-emoji terminal mitigation, design §6).
+    // to width 1 (narrow-emoji terminal mitigation).
     static int cached = -1;
     if (cached < 0) {
         const char * v = getenv("LLMFUN_IMTUI_EMOJI_WIDTH");
@@ -118,7 +118,7 @@ static bool imtui_emoji_width_one()
 // of imtui_wcwidth so the LLMFUN_IMTUI_EMOJI_WIDTH=1 override can force the
 // whole class to width 1 and so RenderText's VS16 folding can reference it.
 // Ranges mirror the original table exactly, including the deliberately
-// coarse 0x1F000-0x1F644 / 0x1FA70-0x1FAFF blocks (Task 1 history).
+// coarse 0x1F000-0x1F644 / 0x1FA70-0x1FAFF blocks (historical).
 static bool imtui_is_emoji_presentation(unsigned int ucs)
 {
     if (ucs >= 0x231A && ucs <= 0x231B) return true;   // watch, hourglass done
@@ -172,7 +172,7 @@ static bool imtui_is_emoji_presentation(unsigned int ucs)
 // would promote a base the terminal renders narrow (the original bug class
 // in the opposite direction) — when unsure, leave a codepoint out: a false
 // negative only means VS16 is dropped and the base stays narrow (the safe
-// P0 fallback).
+// default fallback).
 static bool imtui_is_vs16_eligible(unsigned int ucs)
 {
     if (ucs == 0x00A9 || ucs == 0x00AE) return true;   // copyright, registered
@@ -240,7 +240,7 @@ static bool imtui_is_vs16_eligible(unsigned int ucs)
     if (ucs == 0x3297 || ucs == 0x3299) return true;   // circled ideograph congratulation/secret
     return false;
 }
-// Combining-mark blocks that RenderText folds into the base cell (P3) —
+// Combining-mark blocks that RenderText folds into the base cell -
 // same ranges as the width-0 class in imtui_wcwidth below.
 static bool imtui_is_combining_mark(unsigned int ucs)
 {
@@ -257,7 +257,7 @@ static int imtui_wcwidth(unsigned int ucs)
     if (ucs == 0) return 0;
     if (ucs < 32 || (ucs >= 0x7F && ucs < 0xA0)) return 0;
 
-    // Width 0: combining marks (dropped in P0, see RenderText skip rule)
+    // Width 0: combining marks (dropped by default, see RenderText skip rule)
     if (ucs >= 0x0300 && ucs <= 0x036F) return 0;
     if (ucs >= 0x1AB0 && ucs <= 0x1AFF) return 0;
     if (ucs >= 0x1DC0 && ucs <= 0x1DFF) return 0;
@@ -5866,10 +5866,18 @@ const char* ImFontCalcWordWrapPositionEx(ImFont* font, float size, const char* t
             }
         }
 
-        // Optimized inline version of 'float char_width = GetCharAdvance((ImWchar)c);'
-        float char_width = (c < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[c] : -1.0f;
-        if (char_width < 0.0f)
-            char_width = BuildLoadGlyphGetAdvanceOrFallback(baked, c);
+        // LLMFUN PATCH: in the imtui text backend the rendered advance is the cell width
+        // (RenderText uses cw * scale; this function works unscaled), so word wrap must
+        // count cells or wrapped text overlaps its own runs.
+        float char_width;
+        if (ImTui_TextEncodingActive)
+            char_width = ImFontIMTuiCellWidth(c);
+        else
+        {
+            char_width = (c < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[c] : -1.0f;
+            if (char_width < 0.0f)
+                char_width = BuildLoadGlyphGetAdvanceOrFallback(baked, c);
+        }
 
         // Classify current character
         int curr_type;
@@ -5997,10 +6005,17 @@ ImVec2 ImFontCalcTextSizeEx(ImFont* font, float size, float max_width, float wra
         if (c == '\r')
             continue;
 
-        // Optimized inline version of 'float char_width = GetCharAdvance((ImWchar)c);'
-        float char_width = (c < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[c] : -1.0f;
-        if (char_width < 0.0f)
-            char_width = BuildLoadGlyphGetAdvanceOrFallback(baked, c);
+        // LLMFUN PATCH: measurement must match the rendered advance in the imtui
+        // text backend (RenderText: char_width = cw * scale).
+        float char_width;
+        if (ImTui_TextEncodingActive)
+            char_width = ImFontIMTuiCellWidth(c);
+        else
+        {
+            char_width = (c < (unsigned int)baked->IndexAdvanceX.Size) ? baked->IndexAdvanceX.Data[c] : -1.0f;
+            if (char_width < 0.0f)
+                char_width = BuildLoadGlyphGetAdvanceOrFallback(baked, c);
+        }
         char_width *= scale;
 
         if (line_width + char_width >= max_width)
@@ -6092,7 +6107,7 @@ begin:
         y = IM_TRUNC(y);
     }
 
-    // LLMFUN PATCH (P3, Task 6): most recently emitted glyph quad — the fold
+    // LLMFUN PATCH: most recently emitted glyph quad — the fold
     // target for width-0 continuations (VS16 / combining marks). See the
     // fold block below. Cleared on dropped chars, invisible glyphs (spaces),
     // clipped quads and line breaks so only immediately adjacent
@@ -6227,12 +6242,12 @@ begin:
         // position. Test the unscaled result (cw), not char_width, to stay
         // robust against scale changes.
         //
-        // P0 default (Task 2): drop the codepoint. Consequence: ⚠️
+        // Default: drop the codepoint. Consequence: ⚠️
         // (U+26A0 + U+FE0F) renders as narrow ⚠ on all terminals —
-        // guaranteed aligned (design §6); combining marks are dropped
+        // guaranteed aligned; combining marks are dropped
         // (e + U+0301 renders as aligned "e").
         //
-        // P3 (Task 6), LLMFUN_IMTUI_EMOJI_PRESENTATION=1 (terminals that
+        // With LLMFUN_IMTUI_EMOJI_PRESENTATION=1 (terminals that
         // cluster VS16): instead of dropping, fold the continuation into the
         // PREVIOUSLY emitted quad at the vertex level — no second quad is
         // emitted, so the text backend's lastCharX dedup (which would push a
@@ -6263,7 +6278,7 @@ begin:
         //    ncurses chwidth cursor compensation;
         //  - ZWJ U+200D, ZWSP, bidi controls and other zero-width format
         //    characters are ALWAYS dropped (grapheme clusters are out of
-        //    scope — design §6 Won't). VS15 (U+FE0E) is also always dropped
+        //    scope - a known limitation). VS15 (U+FE0E) is also always dropped
         //    in this revision: demoting a width-2 emoji to width 1 would
         //    misalign on terminals that ignore VS15, and folding it with no
         //    width change is indistinguishable from dropping it.
@@ -6397,7 +6412,7 @@ begin:
                     //   vtx_write[1].col = Unicode codepoint -> TCell::ch
                     //   vtx_write[2].col = cell width 1 or 2 -> TCell::chwidth
                     //   vtx_write[3].col = continuation codepoint (VS16 or a
-                    //       combining mark folded into the base by the P3
+                    //       combining mark folded into the base by the fold
                     //       rule above) -> TCell::ch2; 0 = none
                     // These assignments MUST stay in sync with the backend
                     // decode; the width written here is the unscaled table
@@ -6413,7 +6428,7 @@ begin:
                     {
                         vtx_write[1].col = (ImU32)c;
                         vtx_write[2].col = (ImU32)ImFontIMTuiCellWidth(c);
-                        vtx_write[3].col = 0; // ch2: no continuation (the P3 fold may set it afterwards)
+                        vtx_write[3].col = 0; // ch2: no continuation (the fold may set it afterwards)
                     }
                     idx_write[0] = (ImDrawIdx)(vtx_index); idx_write[1] = (ImDrawIdx)(vtx_index + 1); idx_write[2] = (ImDrawIdx)(vtx_index + 2);
                     idx_write[3] = (ImDrawIdx)(vtx_index); idx_write[4] = (ImDrawIdx)(vtx_index + 2); idx_write[5] = (ImDrawIdx)(vtx_index + 3);

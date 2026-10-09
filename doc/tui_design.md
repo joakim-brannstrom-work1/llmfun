@@ -122,7 +122,45 @@ Messages can contain collapsible **thinking/reasoning** content (the `thinking` 
 
 ### Markdown Support
 
-The TUI includes `imgui_markdown` in the header (`tui.h` includes `imgui_markdown.h`), but markdown rendering is **currently turned off** because the library lacks support for fence blocks (code blocks with triple backticks). The `mdConfig` field in `TuiState` is reserved for when this is re-enabled.
+Markdown renders through the vendored `imgui_rich_md` library (static lib +
+md4c parser, `vendor/imgui_rich_md`) in BOTH profiles — the text grid
+(ncurses/imtui) and the GUI (GLFW + OpenGL3). `TuiState.mdContext`
+(`RichMd::Context*`) owns the renderer: created in `tuiInit` (per branch,
+only after `ImGui::CreateContext`) and destroyed in `tuiDestroyState` before
+the backend shuts down (and on the init-failure unwind, before
+`ImGui::DestroyContext`).
+
+The text profile runs markdown at 1-cell fonts (`regularSize` 1, all six
+`headerSizeFactors` 1, `subSupScale` 1) with an order-critical warm-up that
+keeps it row-exact on the one-row-per-line grid: `initMarkdownTextMode` adds
+the rich fonts BEFORE `ImTui_ImplText_Init()` (which the text backend runs
+next) — that call builds and locks the font atlas, and a font added
+afterwards would resolve its glyph queries to the closest existing bake and
+render as invisible slivers. It then pre-creates the exact bakes rich_md
+pushes on every frame (`GetFontBaked(1.0f)` per font) and preloads their
+glyph ranges (fallback char, `' '`, U+0020..U+00FF), so no mid-frame glyph
+query falls back to the invisible synthetic glyph. After the backend init,
+`finishMarkdownTextMode` pins `io.FontDefault` to the imtui 1 px font found
+BY NAME (`"ProggyClean.ttf"`) — `LegacySize == 1.0f` is not a unique
+selector (the rich code font is also baked at 1 px in this profile), and no
+fonts may be added after the pin. The GUI profile uses the library defaults
+(Roboto 16 body, scaled headers, Inconsolata code) and needs no warm-up —
+the GL3 backend supports dynamic texture updates, so its fonts load lazily
+at the first render.
+
+Behavior: a link click copies the URL to the clipboard (no browser launch);
+`ToolCall` / `ToolResponse` messages stay plain text; thinking sections
+render as markdown; code blocks render in a child window with a `Copy` row
+(line breaks intact, no side scrolling); the `[c]` copy buttons are
+unchanged. `renderMarkdown` falls back to plain text when markdown is not
+wanted or when no rich context exists (the headless harnesses that never
+call `tuiInit`). Current feature outcomes: images are disabled in both
+profiles (`OnImage = nullptr` — nothing renders, no asset reads, no stderr
+warning); tables render with collapsed ~1-cell columns on the text grid
+(accepted degradation — the GUI renders them natively); mermaid is
+best-effort (node labels, or an error line for unparseable sources); LaTeX
+stays off (the source shows); markdown text selection is off in both
+profiles, so `Ctrl+C` stays quit.
 
 ### State Management
 
@@ -244,6 +282,11 @@ and keeps the default. The 1.92 atlas rasterizes glyphs on demand, so no
 glyph ranges are passed (they only matter to legacy backends); a glyph the
 font lacks renders as its fallback (`?`) glyph. Without configuration the
 rendering is exactly as before on a 1.0-scale monitor.
+
+The text grid instead runs markdown at 1-cell fonts (see Markdown Support),
+with `io.FontDefault` pinned to the imtui 1 px font BY NAME after init —
+`LegacySize == 1.0f` is not a unique selector (the rich code font is also
+1 px there), and no fonts may be added after the pin.
 
 **DPI:** at init the backend queries the primary monitor's content scale
 (`ImGui_ImplGlfw_GetContentScaleForMonitor`) and, when it is not 1.0, scales
@@ -857,7 +900,7 @@ Note: History navigation uses `Ctrl+Up`/`Ctrl+Down` instead of plain `Up`/`Down`
 The TUI renders through a patched fork of **imtui** (`llmfun/vendor/imtui`:
 the text rasteriser in `src/imtui-impl-text.cpp`, the ncurses output in
 `src/imtui-impl-ncurses.cpp`) built on a vendored **Dear ImGui**
-(`vendor/imtui/third-party/imgui`, currently 1.92.9b). The patches are marked
+(`vendor/imgui/imgui`, currently 1.92.9b). The patches are marked
 with `LLMFUN PATCH` comments so they can be re-applied after an upstream sync.
 They exist because the 1-cell terminal grid exposes assumptions made for pixel
 backends (coordinates, stroke widths, half-cell sizes), and because a terminal

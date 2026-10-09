@@ -6,14 +6,10 @@ Usage:
     python3 build_test.py --build  # Build only (llmfun_tui compilation check)
     python3 build_test.py --run    # Run only (must be built first)
 
-Tests are Python-based since imtui's stripped-down ImGui lacks the full
-API needed by imgui_markdown. The compilation test verifies that
-imgui_markdown.h compiles correctly as part of the llmfun_tui build.
-
-The runtime harness test_inline_code_runtime.cpp additionally compiles
-imgui_markdown.h standalone against a fake ImGui namespace (g++ only, no
-imtui) and asserts the exact rendered byte stream for every inline-code
-edge-case matrix row.
+The build phase compiles llmfun_tui (which now links the vendored
+imgui_rich_md markdown renderer) and the C++ test binaries defined in
+llmfun/cpp_tui/CMakeLists.txt. The run phase executes those binaries,
+the standalone width-table test, and the PTY drivers.
 
 The width-table unit test test_wcwidth.cpp compiles imgui_draw.cpp by TU
 inclusion (IMTUI + IMGUI_USE_WCHAR32, exactly like the llmfun_tui build)
@@ -53,7 +49,7 @@ def main():
         print(f"Unknown mode: {sys.argv[1]!r}. Usage: build_test.py [--build|--run]")
         return 2
 
-    skipped = 0  # runtime harness not verifiable (g++ missing)
+    skipped = 0  # set when a test could not be verified (missing tools); reported at the end
     combined = 0  # overall status; initialized here so --build mode
                   # (which never enters the run phase) still returns 0 on success
     print("=== Installing build tools ===")
@@ -107,73 +103,11 @@ def main():
             print("Build failed. Aborting.")
             return 1
 
-        print("Build succeeded - imgui_markdown.h compiles correctly.")
+        print("Build succeeded - llmfun_tui compiled.")
 
     if mode in ("both", "run"):
         print(f"\n=== Running tests ===")
         combined = 0
-
-        # Static-analysis test scripts (Python)
-        for script_name in ("test_code_block.py", "test_inline_code.py"):
-            test_script = os.path.join(testdir, script_name)
-            if not os.path.exists(test_script):
-                print(f"Test script not found: {test_script}")
-                combined = 1
-                continue
-
-            result = subprocess.run(
-                [sys.executable, test_script],
-                capture_output=True, text=True,
-                cwd=testdir, timeout=60
-            )
-            print(result.stdout)
-            if result.stderr:
-                print(f"STDERR:\n{result.stderr}")
-
-            if result.returncode == 0:
-                print(f"{script_name}: all tests passed.")
-            else:
-                print(f"{script_name}: some tests failed (exit code {result.returncode}).")
-                combined = 1
-
-        # Runtime harness (C++): exact rendered byte stream for every
-        # inline-code edge-case matrix row, against a fake ImGui namespace.
-        harness_src = os.path.join(testdir, "test_inline_code_runtime.cpp")
-        harness_bin = os.path.join(testdir, "test_inline_code_runtime")
-        try:
-            result = subprocess.run(
-                ["g++", "-std=c++11", "-O0", "-o", harness_bin, harness_src],
-                capture_output=True, text=True,
-                cwd=testdir, timeout=120
-            )
-        except FileNotFoundError:
-            print("Harness NOT verified: g++ not found (install build-essential first).")
-            result = None
-        if result is None:
-            skipped = 1
-        elif result.returncode != 0:
-            print(result.stdout[-500:] if result.stdout else "")
-            print(result.stderr[-500:] if result.stderr else "")
-            print("Harness compilation failed.")
-            combined = 1
-        else:
-            result = subprocess.run(
-                [harness_bin],
-                capture_output=True, text=True,
-                cwd=testdir, timeout=60
-            )
-            print(result.stdout)
-            if result.stderr:
-                print(f"STDERR:\n{result.stderr}")
-            if result.returncode == 0:
-                print("Runtime harness: all checks passed.")
-            else:
-                print(f"Runtime harness: some checks failed (exit code {result.returncode}).")
-                combined = 1
-            try:
-                os.remove(harness_bin)
-            except OSError:
-                pass
 
         # Width-table unit test (C++): verifies imtui_wcwidth /
         # ImFontIMTuiCellWidth vectors (emoji-presentation codepoints are
@@ -345,7 +279,7 @@ def main():
                 break
         r2_repo = os.path.join(basedir, "llmfun")
         if not os.path.exists(r2_probe_src) or r2_tui is None:
-            print("R2 max-width gate NOT verified: probe_margin.c or the "
+            print("max-width gate NOT verified: probe_margin.c or the "
                   "llmfun_tui binary is missing; treated as skipped.")
             skipped = 1
         else:
@@ -359,7 +293,7 @@ def main():
             except FileNotFoundError:
                 r2_built = False
             if not r2_built:
-                print("R2 max-width gate NOT verified: could not build "
+                print("max-width gate NOT verified: could not build "
                       "probe_margin.c (gcc or libncursesw unavailable); "
                       "treated as skipped.")
                 skipped = 1
@@ -395,17 +329,17 @@ def main():
                         print(f"STDERR:\n{capped.stderr}")
                     cp = r2_parse(capped.stdout)
                     if cp is None:
-                        print("R2 max-width gate NOT verified: probe produced "
+                        print("max-width gate NOT verified: probe produced "
                               "no metrics (no PTY support?); treated as "
                               "skipped.")
                         skipped = 1
                     else:
                         r2_pass = cp < r2_cap
                         if r2_pass:
-                            print(f"R2 max-width gate: capped run clean "
+                            print(f"max-width gate: capped run clean "
                                   f"(max_data_col={cp} < {r2_cap}).")
                         else:
-                            print(f"R2 max-width gate FAILED: capped "
+                            print(f"max-width gate FAILED: capped "
                                   f"max_data_col={cp} (want < {r2_cap}).")
                             combined = 1
                         # Negative control: with no cap the TUI uses the full
@@ -416,22 +350,22 @@ def main():
                             print(f"STDERR:\n{uncap.stderr}")
                         up = r2_parse(uncap.stdout)
                         if up is None:
-                            print("R2 negative control NOT verified: probe "
+                            print("negative control NOT verified: probe "
                                   "produced no metrics; treated as skipped.")
                             skipped = 1
                         elif up < r2_cap:
-                            print(f"R2 negative control FAILED: uncapped "
+                            print(f"negative control FAILED: uncapped "
                                   f"max_data_col={up} < {r2_cap} -- the "
                                   f"gate would not discriminate; failing.")
                             combined = 1
                         else:
-                            print(f"R2 negative control: uncapped run leaks "
+                            print(f"negative control: uncapped run leaks "
                                   f"into the margin (max_data_col={up} "
                                   f">= {r2_cap}) -- gate discriminates.")
                             if r2_pass:
-                                print("R2 max-width gate: all checks passed.")
+                                print("max-width gate: all checks passed.")
                 except (OSError, subprocess.TimeoutExpired) as exc:
-                    print(f"R2 max-width gate NOT verified: PTY run failed "
+                    print(f"max-width gate NOT verified: PTY run failed "
                           f"({exc}); treated as skipped.")
                     skipped = 1
                 finally:

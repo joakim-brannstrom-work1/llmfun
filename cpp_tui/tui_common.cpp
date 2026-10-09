@@ -29,13 +29,4 @@ void textUnformattedMultiline(std::string_view text) {
     }
 }
 
-void textUnformattedMultiline(ImGui::MarkdownConfig& mdConfig, std::string_view text,
-                              bool renderMarkdown) {
-    if (renderMarkdown) {
-        ImGui::Markdown(text.data(), text.length(), mdConfig);
-    } else {
-        textUnformattedMultiline(text);
-    }
-}
-
 } // namespace llmfun::tui

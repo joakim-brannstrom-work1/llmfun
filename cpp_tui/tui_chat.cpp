@@ -6,7 +6,7 @@
 #include "tui_widgets.h"
 
 #include "imgui/imgui_internal.h"
-#include "imgui_markdown.h"
+#include "imgui_rich_md/rich_md.h"
 
 #include <algorithm>
 #include <cassert>
@@ -46,6 +46,24 @@ static bool renderAsMarkdown(const ChatMessageType type) {
 
 static size_t countNewLines(const std::string& str) {
     return std::count(str.begin(), str.end(), '\n');
+}
+
+// Render markdown through rich_md, or plain text when markdown is not wanted
+// (ToolCall/ToolResponse) or when no rich context exists (headless harnesses
+// that never call tuiInit — the soft fallback keeps their output stable).
+// The caller wraps this in PushTextWrapPos(contentMax-1); the inner 0.0f push
+// neutralises that for the markdown path only (rich_md wraps to the region
+// itself; a non-zero outer wrap pos would double-wrap).
+static void renderMarkdown(TuiState& state, std::string_view text, bool asMarkdown = true) {
+    if (!asMarkdown || state.mdContext == nullptr) {
+        textUnformattedMultiline(text);
+        return;
+    }
+    if (RichMd::GetCurrentContext() != state.mdContext)
+        RichMd::SetCurrentContext(state.mdContext);
+    ImGui::PushTextWrapPos(0.0f); // caller pushed maxX-1; rich_md wraps itself (no double wrap)
+    RichMd::RenderRaw(std::string(text)); // RenderRaw: no unindent, no transclusion file reads
+    ImGui::PopTextWrapPos();
 }
 
 static constexpr int HEADER_COLOR_COUNT = 4;
@@ -163,7 +181,7 @@ static void renderAgentStream(TuiState& state, const int agentIndex, const int64
             if (ImGui::TreeNodeEx(thinkId.c_str(), thinkFlags)) {
                 thinkGuard.pop();
                 ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - 1);
-                textUnformattedMultiline(state.mdConfig, msg.thinking);
+                renderMarkdown(state, msg.thinking);
                 ImGui::PopTextWrapPos();
                 renderSeparator("End ", "-", ImGui::GetContentRegionMax().x - 4, true);
                 ImGui::TreePop();
@@ -171,7 +189,7 @@ static void renderAgentStream(TuiState& state, const int agentIndex, const int64
         }
 
         ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - 1);
-        textUnformattedMultiline(state.mdConfig, msg.content);
+        renderMarkdown(state, msg.content);
         ImGui::PopTextWrapPos();
 
         ImGui::Unindent();
@@ -201,7 +219,7 @@ static void renderNestedMessage(TuiState& state, size_t i, ImVec2 displaySize) {
         if (ImGui::TreeNodeEx(thinkId.c_str(), openFlags)) {
             thinkGuard.pop();
             ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - 1);
-            textUnformattedMultiline(state.mdConfig, entry.thinking);
+            renderMarkdown(state, entry.thinking);
             ImGui::PopTextWrapPos();
             renderSeparator("End ", "-", ImGui::GetContentRegionMax().x - 4, true);
             ImGui::TreePop();
@@ -209,7 +227,7 @@ static void renderNestedMessage(TuiState& state, size_t i, ImVec2 displaySize) {
     }
 
     ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - 1);
-    textUnformattedMultiline(state.mdConfig, entry.text, renderAsMarkdown(entry.type));
+    renderMarkdown(state, entry.text, renderAsMarkdown(entry.type));
     ImGui::PopTextWrapPos();
 
     ImGui::PushID((int)(i + state.chat.outputLines.size()));
@@ -259,7 +277,7 @@ static bool renderSingleHeader(TuiState& state, const ChatMessage& entry, ImVec2
             if (ImGui::TreeNodeEx(thinkId.c_str(), thinkFlags)) {
                 thinkGuard.pop();
                 ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - 1);
-                textUnformattedMultiline(state.mdConfig, entry.thinking);
+                renderMarkdown(state, entry.thinking);
                 ImGui::PopTextWrapPos();
                 renderSeparator("End ", "-", ImGui::GetContentRegionMax().x - 4, true);
                 ImGui::TreePop();
@@ -267,8 +285,7 @@ static bool renderSingleHeader(TuiState& state, const ChatMessage& entry, ImVec2
         }
 
         ImGui::PushTextWrapPos(ImGui::GetContentRegionMax().x - 1);
-        textUnformattedMultiline(state.mdConfig, entry.text,
-                                 allowMarkdown && renderAsMarkdown(entry.type));
+        renderMarkdown(state, entry.text, allowMarkdown && renderAsMarkdown(entry.type));
         ImGui::PopTextWrapPos();
 
         std::string buttonId = " [c] ##" + std::to_string(entry.id);
@@ -303,96 +320,82 @@ static void renderSingleHeader(TuiState& state, size_t i, ImVec2 displaySize,
     }
 }
 
-static void markdownFormatCallback(const ImGui::MarkdownFormatInfo& markdownFormatInfo_,
-                                   bool start_) {
-    // TODO: This must be a runtime parameter because it is different depending on backend
-#ifdef IMGUI_HAS_TEXTURES
-    ImGui::defaultMarkdownFormatCallback(markdownFormatInfo_, start_);
-#else
-    auto* userData =
-        reinterpret_cast<::llmfun::tui::TuiState*>(markdownFormatInfo_.config->userData);
-    auto& style = userData->mdStyle;
-
-    switch (markdownFormatInfo_.type) {
-    case ImGui::MarkdownFormatType::HEADING:
-        if (start_) {
-            const auto idx =
-                std::min((markdownFormatInfo_.level > 0 ? markdownFormatInfo_.level : 1) - 1, 3);
-            ImGui::PushStyleColor(ImGuiCol_Text, style.heading[idx]);
-            ImGui::TextUnformatted(style.headingPrefix[idx].c_str());
-            ImGui::SameLine(0.0f, 0.0f);
-        } else {
-            ImGui::PopStyleColor();
-        }
-        break;
-    case ImGui::MarkdownFormatType::EMPHASIS: {
-        const char* marker;
-        ImVec4 color;
-        if (markdownFormatInfo_.level == 1) {
-            marker = "_";
-            color = style.italic;
-        } else {
-            marker = "**";
-            color = style.strong;
-        }
-        if (start_) {
-            ImGui::PushStyleColor(ImGuiCol_Text, color);
-            ImGui::TextUnformatted(marker);
-            ImGui::SameLine(0.0f, 0.0f);
-        } else {
-            ImGui::SameLine(0.0f, 0.0f);
-            ImGui::TextUnformatted(marker);
-            ImGui::PopStyleColor();
-        }
-    } break;
-    // Terminal has no monospace face: wrap the span in literal backticks,
-    // same trick as the EMPHASIS markers above.
-    case ImGui::MarkdownFormatType::INLINE_CODE:
-        if (start_) {
-            ImGui::PushStyleColor(ImGuiCol_Text, style.inlineCode);
-            ImGui::TextUnformatted("`");
-            ImGui::SameLine(0.0f, 0.0f);
-        } else {
-            ImGui::SameLine(0.0f, 0.0f);
-            ImGui::TextUnformatted("`");
-            ImGui::PopStyleColor();
-        }
-        break;
-    case ImGui::MarkdownFormatType::LINK:
-        if (start_) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered]);
-        } else {
-            ImGui::PopStyleColor();
-            if (markdownFormatInfo_.itemHovered) {
-                ImGui::UnderLine(ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered]);
-            }
-        }
-        break;
-    default:
-        ImGui::defaultMarkdownFormatCallback(markdownFormatInfo_, start_);
-        break;
+void initMarkdownTextMode(TuiState& state) {
+    RichMd::MarkdownOptions options;
+    options.fontOptions.regularSize = 1.0f;
+    // 1-cell rows: the terminal grid has one row per line, so headers must not
+    // grow (a larger header would eat rows the chat layout does not budget).
+    for (int i = 0; i < 6; ++i)
+        options.fontOptions.headerSizeFactors[i] = 1.0f;
+    options.selectableText = false; // no selection -> Ctrl+C stays quit
+    options.hardSoftBreaks = true;  // newline = one row (chat messages, not docs)
+    // Link click copies the URL to the clipboard (behavior preserved from the
+    // previous markdown library's link callback); images render as nothing
+    // (no asset reads, no texture attempts, no stderr warning on the
+    // grid).
+    options.callbacks.OnOpenLink = [](std::string url) { ImGui::SetClipboardText(url.c_str()); };
+    options.callbacks.OnImage = nullptr;
+    state.mdContext = RichMd::CreateContext(options);
+    // Adds the rich fonts NOW: this must precede ImTui_ImplText_Init() (which
+    // the text backend runs right after us), because that call builds and
+    // locks the atlas — a font added to a locked atlas would resolve its
+    // glyph queries to the closest existing bake (16px -> 1/16 scale) and
+    // render as invisible 1px slivers.
+    RichMd::GetFontLoaderFunction()();
+    ImGuiIO& io = ImGui::GetIO();
+    // Pre-create the EXACT 1.0f bakes rich_md will push on every frame, and
+    // preload their glyph ranges, before the first frame (during a frame the
+    // atlas is locked, so a missing bake would resolve to the closest
+    // existing one, and unloaded glyphs would come back as an invisible
+    // synthetic fallback with no quad emitted).
+    for (ImFont* f : io.Fonts->Fonts) {
+        ImFontBaked* baked = f->GetFontBaked(1.0f);
+        baked->FindGlyph(f->FallbackChar);
+        baked->FindGlyph((ImWchar)' ');
+        for (ImWchar c = 0x20; c <= 0xFF; ++c)
+            baked->FindGlyph(c);
     }
-#endif
+    RichMd::GetStyle().subSupScale = 1.0f; // sub/sup stay 1 cell tall on the grid
 }
 
-static void markdownLinkCallback(ImGui::MarkdownLinkCallbackData data_) {
-    std::string url(data_.link, data_.linkLength);
-    if (!data_.isImage) {
-        ImGui::SetClipboardText(url.c_str());
-    }
+void finishMarkdownTextMode(TuiState& state) {
+    ImGuiIO& io = ImGui::GetIO();
+    // Pin io.FontDefault to the imtui 1px font, found BY NAME: matching on
+    // LegacySize==1.0f alone is ambiguous (the rich code font is also baked
+    // at 1px in this profile), and the name is set by AddFontDefaultBitmap.
+    ImFont* imtuiFont = nullptr;
+    for (ImFont* f : io.Fonts->Fonts)
+        if (f->Sources[0]->Name && std::string(f->Sources[0]->Name) == "ProggyClean.ttf") {
+            IM_ASSERT(imtuiFont == nullptr);  // exactly one match
+            IM_ASSERT(f->LegacySize == 1.0f); // and it is the 1px font
+            imtuiFont = f;
+        }
+    IM_ASSERT(imtuiFont != nullptr);
+    // Pin: keeps the whole UI (not just the markdown) at 1-cell metrics.
+    // No fonts may be added after this call: they would render at their own
+    // size against the locked atlas, outside the 1-cell grid.
+    io.FontDefault = imtuiFont;
 }
 
-void initMarkdownConfig(TuiState& state) {
-    auto& mdConfig = state.mdConfig;
+void initMarkdownGuiMode(TuiState& state) {
+    RichMd::MarkdownOptions options; // defaults: Roboto 16 body, scaled
+                                     // headers, Inconsolata code (accepted)
+    options.hardSoftBreaks = true;   // newline = one line (chat messages)
+    options.selectableText = false;  // no selection -> Ctrl+C stays quit
+    options.callbacks.OnOpenLink = [](std::string url) { ImGui::SetClipboardText(url.c_str()); };
+    options.callbacks.OnImage = nullptr; // no image asset reads, in both profiles
+    // Lazy fonts (loaded at the first Render): the GL3 backend supports
+    // dynamic texture updates, so no warm-up is needed here.
+    state.mdContext = RichMd::CreateContext(options);
+}
 
-    mdConfig.linkCallback = &markdownLinkCallback;
-
-    // TODO: This must be a runtime parameter because it is different depending on backend
-    mdConfig.headingFormats[0] = {nullptr, true};
-    mdConfig.headingFormats[1] = {nullptr, true};
-    mdConfig.headingFormats[2] = {nullptr, false};
-    mdConfig.userData = &state;
-    mdConfig.formatCallback = &markdownFormatCallback;
+void destroyMarkdown(TuiState& state) {
+    if (state.mdContext) {
+        // Frees the rich textures: must run while the rendering backend is
+        // still alive (the tuiDestroyState caller guarantees that order).
+        RichMd::DestroyContext(state.mdContext);
+        state.mdContext = nullptr;
+    }
 }
 
 static int InputResizeCallback(ImGuiInputTextCallbackData* data) {
@@ -549,7 +552,7 @@ static void renderTabChat(TuiState& state, bool focusInput_, Log& log) {
         // The child sits below the menu bar, at the same content-origin
         // padding the flow-placed panels get; its bottom reserves the whole
         // input group (status row + input row incl. the button stack), which
-        // sits bottom-aligned at the window bottom (AD-2/AD-3).
+        // sits bottom-aligned at the window bottom.
         ImVec2 outPos(rootPad.x + static_cast<float>(lpw), rootPad.y + menuBarH);
         ImVec2 outSize(DisplaySize.x - outPos.x - colSlack,
                        std::max(1.0f, DisplaySize.y - outPos.y - groupH));
@@ -737,7 +740,7 @@ static void renderTabChat(TuiState& state, bool focusInput_, Log& log) {
         suppressInputRowNavCursor();
 
         // The input group: status line on top, then the field with the
-        // Send/Prev/Next stack beside it (plan/system_design.md AD-2).
+        // Send/Prev/Next stack beside it.
         ImGui::SetCursorPos(groupPos);
         ImGui::BeginGroup();
 
