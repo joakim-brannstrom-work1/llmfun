@@ -27,6 +27,12 @@ set(IMGUI_RICHMD_WITH_LATEX OFF CACHE BOOL "" FORCE)
 set(IMGUI_RICHMD_WITH_DOWNLOAD_IMAGES OFF CACHE BOOL "" FORCE)
 set(IMGUI_RICHMD_WITH_MERMAID ON CACHE BOOL "" FORCE)
 set(IMGUI_RICHMD_EMBED_ASSETS ON CACHE BOOL "" FORCE)
+# The GUI's default UI font (Roboto-Medium, copied from
+# vendor/imgui/imgui/misc/fonts/) rides in rich_md's embedded-asset table:
+# initMarkdownGuiMode() reads it via ReadAssetDefault and installs it as
+# io.FontDefault. Without it the first frame auto-adds ImGui's built-in
+# ProggyClean and the whole (non-markdown) UI renders with it.
+set(IMGUI_RICHMD_EMBED_EXTRA_FILES "fonts/Roboto/Roboto-Medium.ttf")
 set(IMGUI_RICHMD_STB_IMAGE_IMPLEMENTATION ON CACHE BOOL "" FORCE)
 set(IMGUI_RICHMD_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(IMGUI_RICHMD_BUILD_TESTS OFF CACHE BOOL "" FORCE)

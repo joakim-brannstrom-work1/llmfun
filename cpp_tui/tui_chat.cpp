@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -384,6 +386,31 @@ void finishMarkdownTextMode(TuiState& state) {
     io.FontDefault = imtuiFont;
 }
 
+// The GUI's default UI font: Roboto-Medium, embedded in the binary through
+// rich_md's asset table (IMGUI_RICHMD_EMBED_EXTRA_FILES in CMakeLists.txt)
+// and installed as io.FontDefault so every widget outside rich_md's own
+// font pushes (menu bar, buttons, session panel, input field, status bar)
+// uses it. Without this, the first frame auto-adds ImGui's built-in
+// ProggyClean as Fonts[0] and the UI renders with it.
+static void initGuiDefaultFont() {
+    ImGuiIO& io = ImGui::GetIO();
+    RichMd::AssetBytes bytes = RichMd::ReadAssetDefault("fonts/Roboto/Roboto-Medium.ttf");
+    if (!bytes || bytes->empty())
+        return; // keep ImGui's built-in default
+    ImFontConfig cfg;
+    std::snprintf(cfg.Name, sizeof(cfg.Name), "Roboto-Medium 16");
+    // The atlas keeps the data for its whole lifetime and frees it
+    // (FontDataOwnedByAtlas), so it gets its own copy of the bytes.
+    void* data = IM_ALLOC(bytes->size());
+    std::memcpy(data, bytes->data(), bytes->size());
+    ImFont* font = io.Fonts->AddFontFromMemoryTTF(data, (int)bytes->size(), 16.0f, &cfg);
+    if (font == nullptr) {
+        IM_FREE(data);
+        return;
+    }
+    io.FontDefault = font;
+}
+
 void initMarkdownGuiMode(TuiState& state) {
     RichMd::MarkdownOptions options; // defaults: Roboto 16 body, scaled
                                      // headers, Inconsolata code (accepted)
@@ -394,6 +421,7 @@ void initMarkdownGuiMode(TuiState& state) {
     // Lazy fonts (loaded at the first Render): the GL3 backend supports
     // dynamic texture updates, so no warm-up is needed here.
     state.mdContext = RichMd::CreateContext(options);
+    initGuiDefaultFont();
 }
 
 void destroyMarkdown(TuiState& state) {
