@@ -128,7 +128,8 @@ int tuiInit(TuiState* state, TuiBackendMode mode) {
 
     IMGUI_CHECKVERSION();
     ImGuiContext* context = ImGui::CreateContext();
-    ImGui::GetIO().IniFilename = nullptr;
+    ImGui::GetIO().IniFilename =
+        state->inner->iniFilename.empty() ? nullptr : state->inner->iniFilename.c_str();
     state->inner->ownedContext = context;
 
     std::unique_ptr<::llmfun::tui::Backend> backend;

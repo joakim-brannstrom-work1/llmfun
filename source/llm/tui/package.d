@@ -323,7 +323,6 @@ interface TUIListener {
 }
 
 interface TUICommands {
-    void uiMsg(UiSetIniFile m);
     void uiMsg(UiChatMessage m);
     void uiMsg(UiChatThinkMessage m);
     void uiMsg(UiFinalAnswer m);
@@ -418,7 +417,7 @@ class TextUserInterfaceActor : TUICommands {
     // from onSpawn. On success the active backend and any fallback note are
     // logged; the note also seeds the status line. The ui field takes the
     // state on every path so its dtor tears it down once.
-    this(TypedAddress!TUIListener listener, long maxWidth, TuiBackendMode mode) {
+    this(TypedAddress!TUIListener listener, Path iniFile, long maxWidth, TuiBackendMode mode) {
         assert(maxWidth >= 0 && maxWidth <= 10_000,
                 "maxWidth out of int-safe range: " ~ maxWidth.to!string);
         this.listenerAddress = listener;
@@ -427,6 +426,23 @@ class TextUserInterfaceActor : TUICommands {
         state = tuiCreateState();
         ui = TextUserInterface(state);
         ui.setMaxWidth(cast(int) maxWidth);
+        ui.setIniFile(iniFile);
+    }
+
+    // Headless injection seam (tests): raw C state pointer, no init; a
+    // by-value TextUserInterface parameter would double-free the state (its
+    // copy's dtor runs at ctor exit, then the field's dtor runs again in
+    // onExit). Ownership transfers on successful return only; a throw
+    // (assert) leaves the state with the caller.
+    this(TypedAddress!TUIListener listener, Path iniFile, long maxWidth, TuiState* state) {
+        assert(maxWidth >= 0 && maxWidth <= 10_000,
+                "maxWidth out of int-safe range: " ~ maxWidth.to!string);
+        this.listenerAddress = listener;
+        this.state = state;
+        ui = TextUserInterface(state);
+        ui.setMaxWidth(cast(int) maxWidth);
+        ui.setUiAsStdLogger;
+        ui.setIniFile(iniFile);
     }
 
     // Backend attach, run from onSpawn on the actor's own thread: the window
@@ -454,21 +470,6 @@ class TextUserInterfaceActor : TUICommands {
         ui.setUiAsStdLogger;
         if (!note.empty)
             ui.setStatusText(note);
-    }
-
-    // Headless injection seam (tests): raw C state pointer, no init; a
-    // by-value TextUserInterface parameter would double-free the state (its
-    // copy's dtor runs at ctor exit, then the field's dtor runs again in
-    // onExit). Ownership transfers on successful return only; a throw
-    // (assert) leaves the state with the caller.
-    this(TypedAddress!TUIListener listener, long maxWidth, TuiState* state) {
-        assert(maxWidth >= 0 && maxWidth <= 10_000,
-                "maxWidth out of int-safe range: " ~ maxWidth.to!string);
-        this.listenerAddress = listener;
-        this.state = state;
-        ui = TextUserInterface(state);
-        ui.setMaxWidth(cast(int) maxWidth);
-        ui.setUiAsStdLogger;
     }
 
     void onSpawn(ActorRef selfRef) {
@@ -574,11 +575,6 @@ class TextUserInterfaceActor : TUICommands {
             postProcess();
     }
 
-    void uiMsg(UiSetIniFile a) {
-        // do not call postProcess because this is only an initialization
-        ui.setIniFile(a.path);
-    }
-
     void uiMsg(UiChatMessage a) {
         ui.addChatMessage(a.msg, null, a.type);
         postProcess;
@@ -671,10 +667,6 @@ class TextUserInterfaceActor : TUICommands {
         listener.uiTerminated();
         sendExit(selfRef.address, ExitReason.userShutdown);
     }
-}
-
-struct UiSetIniFile {
-    Path path;
 }
 
 struct UiInitHistory {

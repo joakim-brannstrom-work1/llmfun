@@ -178,6 +178,8 @@ struct LlmConfig {
     long maxAlwaysApplyTokens = 4000;
     bool disableSkills = false;
 
+    Path uiInitFile;
+
     RagDatabaseConfig ragPrimary = RagDatabaseConfig((ProgramName ~ "/data/rag.sqlite3").Path,
             "Recent project source code, documentation and files added with tools loadFileToRAG, loadContentToRAG");
     RagDatabaseConfig[][string] ragSecondary;
@@ -262,6 +264,12 @@ struct LlmConfig {
             nudges.recovery.hardNudges = defaultNudgeFiles(NudgeKind.recovery, true);
         if (nudges.compression.prompt.empty)
             nudges.compression.prompt = DefaultCompressionNudge;
+
+        if (uiInitFile.empty) {
+            import my.xdg : xdgDataHome;
+
+            uiInitFile = xdgDataHome ~ Path(ProgramName) ~ "ui.ini";
+        }
     }
 
     /// Directory where the LLM can work with assets, create files etc.

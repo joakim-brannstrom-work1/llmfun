@@ -998,11 +998,10 @@ class AppAgentActor {
         // onSpawn and all frames on the same thread (design: single UI
         // thread drives the C API).
         tui_ = sys.spawnBounded!(Config.detached, TextUserInterfaceActor)(1000,
-                TypedAddress!TUIListener(self_.address().lock()),
+                TypedAddress!TUIListener(self_.address().lock()), app.llmConf.uiInitFile,
                 app.llmConf.tui.maxWidth, resolveTuiBackendMode(app.conf_));
         app.uiMsg = new UiMessenger(new TuiChannelSink(tui_));
         monitor(self_.address(), tui_);
-        app.uiMsg.setIniFile(app.llmConf.dataDir ~ "imgui.ini"); // ONCE
         app.uiMsg.initHistory(app.agent_.getUserQueries.map!(a => a.content).array.idup);
         app.agent_.setStreamUpdate(app.makeStreamCallback);
 

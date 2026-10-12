@@ -203,9 +203,8 @@ void tuiSetLogging(TuiState& state, bool onOff) { state.isLogActive = onOff; }
 void tuiSetMaxWidth(TuiState& state, int maxWidth) { state.maxWidth = maxWidth; }
 
 void tuiSetIniFilename(TuiState& state, const std::string& filename) {
-    // TODO: this doesn't work. It ends up creating junk files.
-    // state.iniFilename = filename;
-    // ImGui::GetIO().IniFilename = state.iniFilename.c_str();
+    if (state.iniFilename.empty())
+        state.iniFilename = filename;
 }
 
 void tuiInitQueryHistory(TuiState& state, const std::vector<std::string>& history) {

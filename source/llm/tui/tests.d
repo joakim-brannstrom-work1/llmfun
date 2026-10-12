@@ -19,8 +19,9 @@ module llm.tui.tests;
 import core.sync : Condition, Mutex;
 import std.datetime : Duration, SysTime, Clock, dur;
 
-import my.actor;
 import my.actor.registration : implActor;
+import my.actor;
+import my.path : Path;
 
 import llm.session : SessionId;
 import llm.tui;
@@ -199,7 +200,7 @@ private final class TuiDriveFixture {
         // 3-arg ctor: raw C state (owned once by `ui`), no backend, so the
         // C render path no-ops (headless).
         actor = new TextUserInterfaceActor(TypedAddress!TUIListener(dListener.address.lock),
-                80, tuiCreateState());
+                Path.init, 80, tuiCreateState());
         dActor = new DrivenActor!TextUserInterfaceActor(actor);
 
         // Bootstrap: onSpawn runs and arms the repeating self-tick at

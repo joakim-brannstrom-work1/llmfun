@@ -29,7 +29,6 @@ interface TuiSink {
     void finalAnswer(string msg);
     void clearChat();
     void logFile(bool useFile);
-    void setIniFile(string path);
     void streamStatusText(string status);
     void streamChatMessage(string msg, string thinking);
     void streamChatDone();
@@ -89,10 +88,6 @@ class TuiChannelSink : TuiSink {
 
     override void logFile(bool useFile) {
         ch.uiMsg(UiLogFile(useFile));
-    }
-
-    override void setIniFile(string path) {
-        ch.uiMsg(UiSetIniFile(Path(path)));
     }
 
     override void streamStatusText(string status) {
@@ -166,9 +161,6 @@ class TuiBlockedSink : TuiSink {
     }
 
     override void logFile(bool useFile) {
-    }
-
-    override void setIniFile(string path) {
     }
 
     override void streamStatusText(string status) {
@@ -277,10 +269,6 @@ class TuiRecordingSink : TuiSink {
         record("logFile", useFile ? "on" : "off");
     }
 
-    override void setIniFile(string path) {
-        record("setIniFile", path);
-    }
-
     override void streamStatusText(string status) {
         record("streamStatusText", status);
     }
@@ -375,10 +363,6 @@ class UiMessenger {
 
     void logFile(bool useFile) {
         sink.logFile(useFile);
-    }
-
-    void setIniFile(string path) {
-        sink.setIniFile(path);
     }
 
     void streamStatusText(string status) {
