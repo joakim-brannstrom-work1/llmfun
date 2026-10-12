@@ -288,7 +288,7 @@ static bool renderSingleHeader(TuiState& state, const ChatMessage& entry, ImVec2
         renderMarkdown(state, entry.text, allowMarkdown && renderAsMarkdown(entry.type));
         ImGui::PopTextWrapPos();
 
-        std::string buttonId = " [c] ##" + std::to_string(entry.id);
+        std::string buttonId = " Copy ##" + std::to_string(entry.id);
         if (ImGui::Button(buttonId.c_str())) {
             ImGui::SetClipboardText(entry.text.c_str());
         } else if (ImGui::IsItemHovered()) {
@@ -327,8 +327,8 @@ void initMarkdownTextMode(TuiState& state) {
     // grow (a larger header would eat rows the chat layout does not budget).
     for (int i = 0; i < 6; ++i)
         options.fontOptions.headerSizeFactors[i] = 1.0f;
-    options.selectableText = false; // no selection -> Ctrl+C stays quit
-    options.hardSoftBreaks = true;  // newline = one row (chat messages, not docs)
+    options.selectableText = true;
+    options.hardSoftBreaks = true; // newline = one row (chat messages, not docs)
     // Link click copies the URL to the clipboard (behavior preserved from the
     // previous markdown library's link callback); images render as nothing
     // (no asset reads, no texture attempts, no stderr warning on the
@@ -381,7 +381,7 @@ void initMarkdownGuiMode(TuiState& state) {
     RichMd::MarkdownOptions options; // defaults: Roboto 16 body, scaled
                                      // headers, Inconsolata code (accepted)
     options.hardSoftBreaks = true;   // newline = one line (chat messages)
-    options.selectableText = false;  // no selection -> Ctrl+C stays quit
+    options.selectableText = true;
     options.callbacks.OnOpenLink = [](std::string url) { ImGui::SetClipboardText(url.c_str()); };
     options.callbacks.OnImage = nullptr; // no image asset reads, in both profiles
     // Lazy fonts (loaded at the first Render): the GL3 backend supports

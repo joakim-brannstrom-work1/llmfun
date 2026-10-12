@@ -151,18 +151,6 @@ bool tuiRender(TuiState& state) {
 
     ImGuiIO& io = ImGui::GetIO();
 
-    // audit: accepted for BOTH modes - Ctrl+C exits the app in the
-    // GUI too (terminal parity: the key is documented as quit). GUI copy is
-    // unaffected: it goes through the [c] buttons / markdown links calling
-    // ImGui::SetClipboardText (platform clipboard), and Ctrl+V paste is
-    // handled by the input widget, not by this binding. Markdown text
-    // selection is disabled (selectableText=false in both profiles), so
-    // rich_md's Ctrl+C-at-selection copy never engages; enabling selection
-    // later requires revisiting this quit binding first.
-    // TODO: activate selection
-    if (io.KeyCtrl && (ImGui::IsKeyPressed(ImGuiKey_C))) {
-        return false;
-    }
     if (ImGui::IsKeyPressed(ImGuiKey_End)) {
         state.autoScroll = true;
     }

@@ -259,7 +259,7 @@ int tuiRender(TuiState* state) {
     if (!state->inner->backend)
         return 1;
     const bool continueRender = ::llmfun::tui::tuiRender(*state->inner);
-    // A closed GUI window (backend exit request) ends the loop like Ctrl+C.
+    // A closed GUI window (backend exit request) ends the loop.
     return (continueRender && !state->inner->backend->shouldClose()) ? 1 : 0;
 }
 
