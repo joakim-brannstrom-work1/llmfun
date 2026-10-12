@@ -144,7 +144,7 @@ int tuiInit(TuiState* state, TuiBackendMode mode) {
         backend = ::llmfun::tui::makeNcursesBackend();
         initialized = backend->init(error);
     } else if (mode == TuiBackendMode_Gui) {
-        backend = ::llmfun::tui::makeGuiBackend();
+        backend = ::llmfun::tui::makeGuiBackend(state->inner->iniFilename);
         initialized = backend->init(error);
         if (initialized)
             ::llmfun::tui::initMarkdownGuiMode(*state->inner);
@@ -153,7 +153,7 @@ int tuiInit(TuiState* state, TuiBackendMode mode) {
         // backend first. On failure, fall back to the terminal UI iff both
         // stdio ends are TTYs — a full-screen TUI drawn into a pipe is
         // useless, so there the GUI error is the result.
-        backend = ::llmfun::tui::makeGuiBackend();
+        backend = ::llmfun::tui::makeGuiBackend(state->inner->iniFilename);
         initialized = backend->init(error);
         if (initialized) {
             ::llmfun::tui::initMarkdownGuiMode(*state->inner);

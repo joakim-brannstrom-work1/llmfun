@@ -103,6 +103,10 @@ int main() {
     // v4 single-handle flow: Auto mode (the real app's default). This process
     // runs on the pty as both stdio ends, so a GUI-unavailable environment
     // falls back to the terminal backend here.
+    // Before tuiInit: the filename is captured into io.IniFilename when the
+    // ImGui context is created.
+    tuiSetIniFilename(state, makeStr("imgui2.ini"));
+
     if (tuiInit(state, TuiBackendMode_Auto) != 0) {
         String err = tuiLastError();
         if (err.data && err.len > 0)
@@ -115,7 +119,6 @@ int main() {
     }
     tuiSetLogging(state, true);
     tuiSetStatusText(state, makeStr("Context: 0/0 tokens | Model: none | Ready"));
-    tuiSetIniFilename(state, makeStr("imgui2.ini"));
 
     // Same headless seed as the app's main.cpp.
     SessionItem sessions[] = {

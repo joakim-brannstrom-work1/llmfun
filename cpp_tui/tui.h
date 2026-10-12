@@ -357,10 +357,11 @@ void tuiSetLogging(TuiState& state, bool onOff);
 /// size is the cap.
 void tuiSetMaxWidth(TuiState& state, int maxWidth);
 
-/// Set the filename that imgui save window settings to.
-/// By default it is in the "$cwd/imgui.ini".
-/// Call this **after** `ImGui::CreateContext()` but **before** your main loop starts calling
-/// `ImGui::NewFrame()`.
+/// Set the file imgui persists its settings to (io.IniFilename); the GUI
+/// backend stores the window size in `<filename>.win`.
+/// Call this before the backend attach creates the ImGui context (`tuiInit`
+/// in the v4 C API flow), which captures the name; a later call has no
+/// effect. Empty disables persistence.
 void tuiSetIniFilename(TuiState& state, const std::string& filename);
 
 void tuiInitQueryHistory(TuiState& state, const std::vector<std::string>& history);

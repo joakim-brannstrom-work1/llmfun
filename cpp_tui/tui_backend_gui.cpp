@@ -2,6 +2,7 @@
 /// ImTui is bypassed entirely in GUI mode: stock Dear ImGui renders through
 /// the vendored GLFW platform backend and OpenGL3 renderer backend.
 #include "tui_backend.h"
+#include "tui_gui_window.h"
 
 #include <GLFW/glfw3.h>
 
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <utility>
 
 namespace llmfun::tui {
 
@@ -31,8 +33,11 @@ std::string lastGlfwErrorText() {
     return glfwLastError.empty() ? std::string{"(no GLFW error message)"} : glfwLastError;
 }
 
-constexpr int WindowWidth = 800;
-constexpr int WindowHeight = 600;
+// Fallback window size when no persisted size is available.
+constexpr int DefaultWindowWidth = 800;
+constexpr int DefaultWindowHeight = 600;
+// Persisted window size: a sibling of the imgui settings file (ui.ini.win).
+constexpr const char* WindowSizeSuffix = ".win";
 // audit: window title pinned to "llmfun"; verified on screen via the X11
 // window list.
 constexpr const char* WindowTitle = "llmfun";
@@ -100,6 +105,8 @@ void applyDpiScale() {
 
 class GuiBackend final : public Backend {
 public:
+    explicit GuiBackend(std::string iniFilename) : iniFilename(std::move(iniFilename)) {}
+
     bool init(std::string& error) override {
         glfwLastError.clear();
         glfwSetErrorCallback(glfwErrorCallback);
@@ -109,18 +116,25 @@ public:
             return false;
         }
 
+        // Restore the persisted window size; missing or malformed files keep
+        // the built-in default.
+        int width = DefaultWindowWidth;
+        int height = DefaultWindowHeight;
+        if (!iniFilename.empty())
+            loadWindowSize(iniFilename + WindowSizeSuffix, width, height);
+
         // attempt 1: GL 3.0 + GLSL 130; retry once: GL 2.1 + GLSL 120.
         // Each attempt passes its OWN pinned shader string — never nullptr.
         int attempt = 0;
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
-        window = glfwCreateWindow(WindowWidth, WindowHeight, WindowTitle, nullptr, nullptr);
+        window = glfwCreateWindow(width, height, WindowTitle, nullptr, nullptr);
         if (window != nullptr) {
             attempt = 1;
         } else {
             glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
             glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
-            window = glfwCreateWindow(WindowWidth, WindowHeight, WindowTitle, nullptr, nullptr);
+            window = glfwCreateWindow(width, height, WindowTitle, nullptr, nullptr);
             if (window != nullptr)
                 attempt = 2;
         }
@@ -178,6 +192,14 @@ public:
     }
 
     void shutdown() override {
+        // Persist the window size while the window is still alive; the next
+        // start recreates the window with it.
+        if (!iniFilename.empty() && window != nullptr) {
+            int width = 0;
+            int height = 0;
+            glfwGetWindowSize(window, &width, &height);
+            saveWindowSize(iniFilename + WindowSizeSuffix, width, height);
+        }
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         glfwDestroyWindow(window);
@@ -191,10 +213,13 @@ public:
 
 private:
     GLFWwindow* window = nullptr;
+    std::string iniFilename;
 };
 
 } // namespace
 
-std::unique_ptr<Backend> makeGuiBackend() { return std::make_unique<GuiBackend>(); }
+std::unique_ptr<Backend> makeGuiBackend(const std::string& iniFilename) {
+    return std::make_unique<GuiBackend>(iniFilename);
+}
 
 } // namespace llmfun::tui

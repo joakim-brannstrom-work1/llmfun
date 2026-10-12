@@ -53,6 +53,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Before tuiInit: the filename is captured into io.IniFilename when the
+    // ImGui context is created.
+    tuiSetIniFilename(state, makeStr("imgui2.ini"));
+
     if (tuiInit(state, mode) != 0) {
         std::fputs(guiFlag ? "Failed to initialize GUI backend.\n"
                            : "Failed to initialize TUI. Check terminal compatibility.\n",
@@ -68,7 +72,6 @@ int main(int argc, char** argv) {
 
     tuiSetLogging(state, true);
     tuiSetStatusText(state, makeStr("Context: 0/0 tokens | Model: none | Ready"));
-    tuiSetIniFilename(state, makeStr("imgui2.ini"));
 
     // Standalone max-width cap via LLMFUN_TUI_MAX_WIDTH (env var only, no
     // CLI flag). Debugging aid: the user-facing config is the D YAML

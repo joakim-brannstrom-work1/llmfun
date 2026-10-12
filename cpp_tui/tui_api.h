@@ -363,9 +363,11 @@ void tuiSetLogging(TuiState* state, int onOff);
  */
 void tuiSetMaxWidth(TuiState* state, int maxWidth);
 
-/* Set the filename that imgui save window settings to.
-    By default it is in the "$cwd/imgui.ini".
-    Call this **after** `tuiInit` but **before** your main loop starts calling `tuiBackendNewFrame`.
+/* Set the file imgui persists its settings to (io.IniFilename); the GUI
+    backend stores the window size in a sibling file `<filename>.win`.
+    Call this BEFORE `tuiInit`: the name is captured when tuiInit creates the
+    ImGui context, and a later call has no effect. NULL or an empty filename
+    disables persistence (imgui's "$cwd/imgui.ini" default is not used).
  */
 void tuiSetIniFilename(TuiState* state, String filename);
 

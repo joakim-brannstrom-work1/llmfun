@@ -36,6 +36,9 @@ struct Backend {
 
 std::unique_ptr<Backend> makeNcursesBackend();
 std::unique_ptr<Backend> makeNullBackend();
-std::unique_ptr<Backend> makeGuiBackend();
+/// `iniFilename` is the imgui settings file (io.IniFilename); the backend
+/// persists the window size in a sibling file (<iniFilename>.win). Empty
+/// disables the persistence.
+std::unique_ptr<Backend> makeGuiBackend(const std::string& iniFilename);
 
 } // namespace llmfun::tui

@@ -71,6 +71,7 @@ add_library(llmfun_tui_lib STATIC
     tui_backend_ncurses.cpp
     tui_backend_null.cpp
     tui_backend_gui.cpp
+    tui_gui_window.cpp
     tui_common.cpp
     tui_widgets.cpp
     session_panel.cpp
@@ -184,6 +185,13 @@ target_link_libraries(imtui_ncurses_fold_redraw_test PRIVATE imtui-ncurses)
 # Standalone unit test for the session fuzzy matcher. Links ONLY the standard library (no imtui/ncurses/ImGui), which also verifies that session_fuzzy.h compiles standalone (no TUI dependency). Built by the normal `make -f tui.mak` and run headless from the build dir.
 add_executable(test_session_fuzzy
     test_session_fuzzy.cpp
+)
+
+# Standalone unit test for the GUI window-size persistence helpers (tui_gui_window): roundtrip, malformed-file rejection, range clamping and the save-side guards. Compiles the helper TU directly - links only the standard library (no GLFW/ImGui/display). Built by the normal `make -f tui.mak` and run headless from the build dir:
+#   ./test_gui_window
+add_executable(test_gui_window
+    test_gui_window.cpp
+    tui_gui_window.cpp
 )
 
 # Panel-level headless smoke harness for the session filter and the filter nav-focus hardening. Drives the real TuiState through the llmfun_tui frame loop (skipping only the terminal write) and asserts on the C++ state and the TScreen cell grid (labels, order, "no matches", UTF-8 validity, match highlight colors, nav/active id stability, log lines). Runs headless from the build dir:
