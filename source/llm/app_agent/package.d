@@ -57,10 +57,24 @@ struct AgentApp {
         SessionMeta activeSession;
         SessionId pendingDeleteId; // session id awaiting /delete confirmation
 
-        // True while the in-memory chat differs from the last persisted state. commitActiveSession() only writes (and bumps updatedAt) when this is set, so mere navigation - switching or re-clicking a row - never rewrites a file and never changes the sidebar sort order. Sorting is by the latest message in a session. Invariant: every code path that appends persisted content to the chat must set `chatDirty`; the commit is otherwise no-op-gated to protect sidebar `updatedAt` ordering.
+        // True while the in-memory chat differs from the last persisted state.
+        // commitActiveSession() only writes (and bumps updatedAt) when this is
+        // set, so mere navigation - switching or re-clicking a row - never
+        // rewrites a file and never changes the sidebar sort order. Sorting is
+        // by the latest message in a session. Invariant: every code path that
+        // appends persisted content to the chat must set `chatDirty`; the
+        // commit is otherwise no-op-gated to protect sidebar `updatedAt`
+        // ordering.
         bool chatDirty;
 
-        // The startup system prompt, cached exactly where startup computes it (setupSession's setSystemPrompt call site). activateSession re-applies it on every session switch: Chat.clear keeps history[0] and loaded docs carry no system entries, so without the re-apply the previous chat's prompt would survive the switch. Written only at the startup call site; empty until it runs - an early activation then re-applies nothing (a harmless no-op; the startup call still sets the real prompt).
+        // The startup system prompt, cached exactly where startup computes it
+        // (setupSession's setSystemPrompt call site). activateSession
+        // re-applies it on every session switch: Chat.clear keeps history[0]
+        // and loaded docs carry no system entries, so without the re-apply the
+        // previous chat's prompt would survive the switch. Written only at the
+        // startup call site; empty until it runs - an early activation then
+        // re-applies nothing (a harmless no-op; the startup call still sets
+        // the real prompt).
         string systemPrompt_;
         ServerStat lastServerStat;
         bool debugMode;
@@ -966,17 +980,14 @@ class AppAgentActor {
 
         app.updateRagMemory();
 
-        // Bounded-mailbox canary: the legacy
-        // std.concurrent TUI mailbox was bounded at 100; the actor path
-        // uses 1000 — deliberately higher, because 100 proved too
-        // restrictive. When the TUI mailbox is full, sends from actor
-        // workers are dropped — never blocked — and counted in
+        // When the TUI mailbox is full, sends from actor
+        // workers are dropped - never blocked - and counted in
         // `tui_.addr.get.dropped` (blocking a pool worker is the deadlock
         // the bound prevents); only non-actor threads, like this
-        // supervisor, may block on a full mailbox. Residual, accepted:
-        // stream messages may be dropped during a real stall — the TUI
-        // renders frames anyway, so a dropped frame message is safe;
-        // control messages are low-rate and the mailbox drains at frame
+        // supervisor, may block on a full mailbox.
+        // Residual, accepted: stream messages may be dropped during a real
+        // stall — the TUI renders frames anyway, so a dropped frame message is
+        // safe; control messages are low-rate and the mailbox drains at frame
         // rate, so their drop probability is negligible.
         // Config.detached: the TUI actor must own one FIXED thread. Its
         // GLFW window/GL context are thread-affine - created in onSpawn and
