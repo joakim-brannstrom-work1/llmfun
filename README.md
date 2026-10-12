@@ -60,6 +60,18 @@ mutually exclusive.
 `LLMFUN_TUI_BACKEND=auto|gui|tui` selects the backend from the environment when no flag is given
 (precedence: CLI flag > environment > Auto); an unknown value warns and falls back to Auto.
 
+The GUI font can be customized through two environment variables (GUI mode
+only; the terminal UI is unaffected):
+
+- `LLMFUN_GUI_FONT` — path to a TTF font file. Replaces the embedded
+  default font (ProggyClean, 13 px). A path that cannot be loaded prints
+  `LLMFUN_GUI_FONT: cannot load '<path>'; using the embedded font` to
+  stderr and keeps the embedded font.
+- `LLMFUN_GUI_FONT_SIZE` — pixel size of the font set by
+  `LLMFUN_GUI_FONT` (default 16). Unset, empty, non-numeric, or
+  out-of-range values (must be greater than 0 and at most 512) keep the
+  default. Has no effect without `LLMFUN_GUI_FONT`.
+
 ```bash
 llmfun agent [options]
 llmfun agent --tui        # terminal UI; no GUI attempt
