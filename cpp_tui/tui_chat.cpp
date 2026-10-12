@@ -233,7 +233,7 @@ static void renderNestedMessage(TuiState& state, size_t i, ImVec2 displaySize) {
     ImGui::PopTextWrapPos();
 
     ImGui::PushID((int)(i + state.chat.outputLines.size()));
-    if (ImGui::Button(" [c] ")) {
+    if (ImGui::Button("Copy")) {
         ImGui::SetClipboardText(entry.text.c_str());
     }
     if (ImGui::IsItemHovered()) {
