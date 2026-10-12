@@ -14,11 +14,11 @@
 //           absolute indices); the two inline-formatted paragraphs
 //           re-join byte-exactly to their source text (single spaces
 //           between the wrapped rows); the long paragraph takes >=2 rows;
-//           "Title One", the two list rows and "quote block" match the
+//           "Title One", the two list rows and "a quote block" match the
 //           trimmed row EXACTLY (the pinned rendered form is
-//           "-item one" / "-item two" — bullet rendered directly
-//           adjacent to the item text, no space; the markdown source
-//           is "- item one");
+//           "- item one" / "- item two", with the marker's space restored
+//           and the quote's first character present; the source markdown
+//           is "- item one" / "> a quote block");
 //           the code block's right-aligned "Copy" button row (containment)
 //           precedes the two code rows (the code block's child window
 //           sizes over two passes — asserted only after >=2 frames).
@@ -436,14 +436,14 @@ void caseA(llmfun::tui::TuiState& state) {
     expect(matched == std::strlen(kLongParagraph),
            "case A: long paragraph rows do not rejoin byte-exactly to the source text");
 
-    // The rendered (trimmed) form is pinned as "-item one" / "-item two" —
-    // the bullet marker renders directly adjacent to the item text (no
-    // space); the source markdown is "- item one".
-    int y1 = findRowExact("-item one", end);
+    // The rendered (trimmed) forms after the BLOCK_LI SameLine/Indent fix:
+    // the marker's gap and the quote's first character are no longer eaten
+    // ("-item one" -> "- item one", "quote" row keeps its "a").
+    int y1 = findRowExact("- item one", end);
     expect(y1 >= 0, "case A: 'item one' list row not found");
-    int y2 = findRowExact("-item two", y1 + 1);
+    int y2 = findRowExact("- item two", y1 + 1);
     expect(y2 >= 0, "case A: 'item two' list row not found");
-    int y3 = findRowExact("quote block", y2 + 1);
+    int y3 = findRowExact("a quote block", y2 + 1);
     expect(y3 >= 0, "case A: 'quote block' row not found");
     int y4 = findRow("Copy", y3 + 1);
     expect(y4 >= 0, "case A: code-block 'Copy' button row not found");

@@ -356,6 +356,13 @@ void initMarkdownTextMode(TuiState& state) {
             baked->FindGlyph(c);
     }
     RichMd::GetStyle().subSupScale = 1.0f; // sub/sup stay 1 cell tall on the grid
+    // The bar thicknesses are pixel defaults (quote 2.0, admonition 3.0). On
+    // the 1-cell grid they paint 2-3 whole cell columns starting half a cell
+    // left of the content, so the bar erases the content's first cell(s)
+    // ("> `Foo` bar" -> "  oo bar"; "> [!NOTE]" -> "OTE"). One cell wide,
+    // strictly left of the content, is the grid-correct bar.
+    RichMd::GetStyle().quoteBarThickness = 1.0f;
+    RichMd::GetStyle().admonitionBarThickness = 1.0f;
 }
 
 void finishMarkdownTextMode(TuiState& state) {

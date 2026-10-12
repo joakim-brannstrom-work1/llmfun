@@ -153,14 +153,27 @@ void Renderer::BLOCK_LI(const MD_BLOCK_LI_DETAIL* d, bool e)
 			add_block_gap(style.listItemGap);
 
 		list_info& nfo = m_list_stack.back();
+		// LLMFUN PATCH (imtui): keep the marker's SameLine position across
+		// the Indent() below. ImGui::Indent() resets CursorPos.x to the
+		// indented line start (imgui.cpp Indent()), which in the 1-cell grid
+		// discards the SameLine offset: IndentSpacing is 1 cell while "1." +
+		// its gap needs 3, so the item content would overlap the marker and
+		// the text backend's same-cell dedup (imtui-impl-text.cpp) would eat
+		// the space after an inline span ("1. `Foo` bar" -> "1.Foobar").
+		float open_x = 0.0f;
+		bool open_x_valid = false;
 		if (d && d->is_task) {
 			render_task_marker(d->task_mark == 'x' || d->task_mark == 'X');
 			ImGui::SameLine();
+			open_x = ImGui::GetCursorPosX();
+			open_x_valid = true;
 			if (nfo.is_ol)
 				++nfo.cur_ol;
 		} else if (nfo.is_ol) {
 			ImGui::Text("%d%c", nfo.cur_ol++, nfo.delim);
 			ImGui::SameLine();
+			open_x = ImGui::GetCursorPosX();
+			open_x_valid = true;
 		} else {
 			if (nfo.delim == '*') {
 				float cx = ImGui::GetCursorPosX();
@@ -170,10 +183,14 @@ void Renderer::BLOCK_LI(const MD_BLOCK_LI_DETAIL* d, bool e)
 			} else {
 				ImGui::Text("%c", nfo.delim);
 				ImGui::SameLine();
+				open_x = ImGui::GetCursorPosX();
+				open_x_valid = true;
 			}
 		}
 
 		ImGui::Indent();
+		if (open_x_valid)
+			ImGui::SetCursorPosX(open_x);
 	} else {
 		ImGui::Unindent();
 	}
