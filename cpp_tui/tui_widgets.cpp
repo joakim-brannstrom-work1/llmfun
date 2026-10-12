@@ -31,6 +31,7 @@ bool renderButton(const std::string& label, int width, bool active, ImVec4 color
     ImGui::SetCursorScreenPos(ImVec2(p0.x + ImGui::GetStyle().FramePadding.x, labelY));
     ImGui::Text("%s", label.c_str());
     ImGui::PopStyleColor(npop);
+    ImGui::GetCurrentWindow()->DC.CursorPosPrevLine.y = p0.y;
     ImGui::PopID();
 
     return result;
