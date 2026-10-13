@@ -76,6 +76,14 @@ class Agent : IBasicAgent {
         // Package (not private): llm.agent.tests (and the pool-wiring
         // tests) construct an Agent and assert on the broker pool/state.
         AgentContext toolCtx;
+
+        // Armed by syncContextFromChat after a session load/change: the context
+        // size is then a pessimistic approximation (chars / ApproxTokenSize) and
+        // the "almost full" reading it yields is very likely wrong. The first
+        // automatic compression after such a load is blocked (see compress) so
+        // the first message never compresses off the stale estimate. Consumed on
+        // first use. Package-visible for the first-message regression test.
+        bool firstMessageAfterLoad;
     }
 
     private {
@@ -577,6 +585,16 @@ class Agent : IBasicAgent {
         import llm.common.config : ApproxTokenSize;
         import llm.tool_call.broker : applyPrune, scanInactiveTools;
 
+        // The first automatic compression after a session load/change is
+        // blocked. syncContextFromChat left prevStat.context as a pessimistic
+        // approximation (chars / ApproxTokenSize); that "almost full" reading
+        // is very likely wrong, so the first message after a load must not
+        // compress off it. A forced compression (a genuine server overflow) or
+        // an explicit agent compression request still proceeds.
+        if (firstMessageAfterLoad && !force && !toolCtx.agentCompressionRequest) {
+            firstMessageAfterLoad = false;
+            return typeof(return)(compressed: true);
+        }
         if (!needCompression(threshold) && !force && !toolCtx.agentCompressionRequest)
             return typeof(return)(compressed: true);
         scope (exit) {
@@ -646,9 +664,6 @@ Continue your work from where you left off.";
     /// Run the agent until completion (no more tool calls, no more thinking needed)
     override ProcessResult runToCompletion(void delegate(ProcessResult) step = null,
             SummaryAgent.ProgressCallback compressCallback = null, bool delegate() interrupt = null) @trusted {
-        // make sure there is room in the context before doing anything
-        this.compress(callback: compressCallback);
-
         taskDone_ = false;
         taskDoneMessage_ = null;
         ProcessResult result;
@@ -810,6 +825,10 @@ Continue your work from where you left off.";
     /// Sync prevStat.context from current chat context size. Called after loading chat history so the agent knows the starting context.
     void syncContextFromChat() @safe {
         prevStat = ServerStat(startContext: chat.approxContextSize);
+        // The just-synced context size is a pessimistic approximation: arm the
+        // first-message block so the next automatic compression cannot trigger
+        // off this stale estimate (see compress).
+        firstMessageAfterLoad = true;
     }
 
     /// Save chat history to dir / name_history.json
