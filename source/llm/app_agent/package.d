@@ -283,18 +283,40 @@ struct AgentApp {
         foreach (m; result.chat) {
             this.processChatMessage(m, printUser: false);
         }
-        // Append-site audit: every Agent-layer append is reported through result.chat - process() sets rval.chat = chat.lastResponses (agent) - so a non-empty turn means persisted content was appended: assistant text (parseResponse), tool traffic + feedback warnings + the taskDone ToolMessage (handleToolCalls), vision, and compression continuation (Agent.compress, appended after the previous turn's resetResponseIndex, before the next lastResponses). Not persisted content, no flag: addUserQuery (submit sets the flag itself), Chat.setSystemPrompt (history[0], stripped at commit; on the first turn of a fresh chat it can appear in the slice, benign - prevIndex defaults to 0, a nothing-appending turn returns null, and any real append sets the flag anyway), Chat.load (replay; activateSession resets the flag first), beginNewTurn (allocates a turn id, appends nothing).
+        // Append-site audit: every Agent-layer append is reported through
+        // result.chat - process() sets rval.chat = chat.lastResponses (agent)
+        // - so a non-empty turn means persisted content was appended:
+        // assistant text (parseResponse), tool traffic + feedback warnings +
+        // the taskDone ToolMessage (handleToolCalls), vision, and compression
+        // continuation (Agent.compress, appended after the previous turn's
+        // resetResponseIndex, before the next lastResponses). Not persisted
+        // content, no flag: addUserQuery (submit sets the flag itself),
+        // Chat.setSystemPrompt (history[0], stripped at commit; on the first
+        // turn of a fresh chat it can appear in the slice, benign - prevIndex
+        // defaults to 0, a nothing-appending turn returns null, and any real
+        // append sets the flag anyway), Chat.load (replay; activateSession
+        // resets the flag first), beginNewTurn (allocates a turn id, appends
+        // nothing).
         //
-        // Set the flag HERE, not in processChatMessage - that is shared with the replay loop in activateSession and must keep the freshly loaded chat clean (a dirty replay would rewrite the just-loaded file).
+        // Set the flag HERE, not in processChatMessage - that is shared with
+        // the replay loop in activateSession and must keep the freshly loaded
+        // chat clean (a dirty replay would rewrite the just-loaded file).
         if (result.chat.length > 0)
             chatDirty = true;
         commitActiveSession();
     }
 
-    /// Save the current agent chat to the active session file.
-    /// Strips system messages before persisting.
-    ///
-    /// Gated on `chatDirty`: a clean chat (nothing changed since the last save) skips the write entirely, so switching sessions, re-clicking the active row, or a clean shutdown can never bump `updatedAt` and reorder the sidebar. The flag is set by real content changes (a user query, `/clear`, a compression that rewrote history, or an agent turn appending persisted content; the per-turn setter is in `processResult`) and cleared here on success; a failed save keeps it so the next commit retries.
+    // Save the current agent chat to the active session file. Strips system
+    // messages before persisting.
+    //
+    // Gated on `chatDirty`: a clean chat (nothing changed since the last save)
+    // skips the write entirely, so switching sessions, re-clicking the active
+    // row, or a clean shutdown can never bump `updatedAt` and reorder the
+    // sidebar. The flag is set by real content changes (a user query,
+    // `/clear`, a compression that rewrote history, or an agent turn appending
+    // persisted content; the per-turn setter is in `processResult`) and
+    // cleared here on success; a failed save keeps it so the next commit
+    // retries.
     package void commitActiveSession() @trusted nothrow {
         if (!chatDirty)
             return;
