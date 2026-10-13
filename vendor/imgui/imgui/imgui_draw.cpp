@@ -6392,8 +6392,16 @@ begin:
                     }
                 }
 
-                col &= 0x00FFFFFF;
-                col |= (c << 24);
+                // LLMFUN PATCH: the codepoint-in-alpha encoding is only for the
+                // imtui text backend. The GUI's OpenGL shader multiplies the
+                // vertex color, so clobbering the alpha byte scaled glyph
+                // opacity by (codepoint & 0xFF) / 255 (dim ASCII, bright
+                // Latin-1; e.g. åäö brighter than a-z).
+                if (ImTui_TextEncodingActive)
+                {
+                    col &= 0x00FFFFFF;
+                    col |= (c << 24);
+                }
                 // Support for untinted glyphs
                 ImU32 glyph_col = glyph->Colored ? col_untinted : col;
 
