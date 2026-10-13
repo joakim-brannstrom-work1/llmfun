@@ -303,16 +303,18 @@ void renderTabChatSessionPanel(TuiState& state, Log& log) {
     // The collapsed strip and the header buttons are
     // column constants too; colUnits() keeps their character widths in the
     // pixel profile (identity in the grid).
-    const auto panelWClosed = colUnits(8);
+    const auto panelWClosed = colUnits(panel.PanelWCollapsed);
     const bool canQueue = state.readyStatus;
 
     // Outer child: panel border/background, id unchanged. The header
-    // (Close/Open, New, separator) stays fixed; the rows live in their own
-    // scrollable child sized to the remaining panel height.
+    // (New, collapse toggle, separator) stays fixed; the rows live in their
+    // own scrollable child sized to the remaining panel height.
     ImGui::BeginChild("Session child window", ImVec2(panel.panelW - 1, 0), true);
     if (!panel.panelOpen) {
         panel.panelW = panelWClosed;
-        if (renderButton("Open", panelWClosed, false, panel.activeButton)) {
+        // The ">" toggle fills the strip's content width (the child is
+        // panelW - 1), so the collapsed strip stays a narrow column.
+        if (renderButton(">", panel.panelW - 1, false, panel.activeButton)) {
             panel.pendingDeleteId.clear();
             panel.panelOpen = true;
             panel.panelW = colUnits(panel.PanelWActivated);
@@ -322,15 +324,8 @@ void renderTabChatSessionPanel(TuiState& state, Log& log) {
         return;
     }
 
-    if (renderButton("Close", panelWClosed, false, panel.activeButton)) {
-        panel.pendingDeleteId.clear();
-        panel.renameActive = false;
-        panel.renameFocus = false;
-        panel.panelOpen = false;
-        panel.panelW = panelWClosed;
-        log("session panel: close\n");
-    }
-    sameLineAfterButton(panelWClosed, ImGui::CalcTextSize("Close").x);
+    // Header row: "New" on the left, the "<" collapse toggle at the far
+    // right edge of the panel (aligned with the separator below).
     if (renderButton("New", colUnits(5), false, panel.activeButton)) {
         panel.pendingDeleteId.clear();
         if (canQueue) {
@@ -339,6 +334,17 @@ void renderTabChatSessionPanel(TuiState& state, Log& log) {
         } else {
             log("session panel: new skipped (busy)\n");
         }
+    }
+    const int toggleW = colUnits(3);
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetContentRegionMax().x - toggleW);
+    if (renderButton("<", toggleW, false, panel.activeButton)) {
+        panel.pendingDeleteId.clear();
+        panel.renameActive = false;
+        panel.renameFocus = false;
+        panel.panelOpen = false;
+        panel.panelW = panelWClosed;
+        log("session panel: close\n");
     }
 
     renderSeparator("Sessions ", "-", ImGui::GetContentRegionMax().x, true);
@@ -729,14 +735,14 @@ int colUnits(int cols) {
 int leftPanelWidth(const TuiState& s) {
     // One left-panel slot: the pipeline panel wins whenever it has
     // agents - open or collapsed; otherwise the session panel renders when
-    // open and stays an 8-column "Open" strip when closed, so the output area
-    // never covers the panel's Open button (mirrors the pipeline panel's
-    // collapsed width). The collapsed strip is a column
+    // open and stays a narrow ">" strip when closed, so the output area
+    // never covers the panel's toggle button. The collapsed strip is a column
     // constant as well, so it goes through colUnits() to stay aligned with
     // the panels' own collapsed width in the pixel profile.
     return !s.left.agents.empty()
                ? s.left.panelW
-               : (s.sessionPanel.panelOpen ? s.sessionPanel.panelW : colUnits(8));
+               : (s.sessionPanel.panelOpen ? s.sessionPanel.panelW
+                                           : colUnits(ChatTabSessionPanel::PanelWCollapsed));
 }
 
 } // namespace llmfun::tui

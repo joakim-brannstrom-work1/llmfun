@@ -203,6 +203,10 @@ struct ChatTabSessionPanel {
     ImVec4 matchColor = ImVec4(1.0f, 0.85f, 0.45f, 1.0f);     // filter match highlight
     int panelW = 0; // 0 = unset; init to PanelWActivated on first render
     static constexpr int PanelWActivated = 30;
+    // Collapsed strip width: the narrow column holding the ">" toggle when
+    // the panel is closed (the "<" toggle on the open header row collapses
+    // to it). Distinct from PanelWActivated (the full 30-column panel).
+    static constexpr int PanelWCollapsed = 4;
     bool panelOpen{true}; // auto-open at startup
 
     std::vector<SessionEntry> sessions; // full snapshot

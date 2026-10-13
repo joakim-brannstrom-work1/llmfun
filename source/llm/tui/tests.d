@@ -164,9 +164,9 @@ unittest {
     auto listener = sys.spawn!RecordingTUIListener(latch);
 
     // Headless TUI: real state, no backend (the C frame calls no-op). The
-    // 3-arg ctor takes the raw state so `ui` owns it exactly once.
-    auto tui = sys.spawn!TextUserInterfaceActor(
-            TypedAddress!TUIListener(listener.addr), 80, tuiCreateState());
+    // 4-arg ctor takes the raw state so `ui` owns it exactly once.
+    auto tui = sys.spawn!TextUserInterfaceActor(TypedAddress!TUIListener(listener.addr),
+            Path.init, 80, tuiCreateState());
 
     // spawn! instantiates TextUserInterfaceActor, compile-gating the hooks
     // (onSpawn/onExit/onException/onError) and the full TUICommands surface.

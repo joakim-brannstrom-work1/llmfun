@@ -91,6 +91,10 @@ struct Grid {
     std::vector<unsigned char> fg;
 };
 
+// Forward: defined further down with the other grid helpers; needed by the
+// early scenarios (S0) for column checks.
+int findCol(const Grid& g, int y, const std::string& needle);
+
 Grid grid() {
     Grid g;
     g.nx = g_screen.nx;
@@ -433,6 +437,26 @@ void clickRowByTitle(const std::string& needle) {
     click(x + 1, y);
 }
 
+// Click the first cell holding glyph c (top-to-bottom, left-to-right).
+// clickRowByTitle can't target the right-aligned "<" collapse toggle or the
+// ">" strip toggle, so those are clicked by their exact glyph cell.
+void clickChar(char c) {
+    Grid g = grid();
+    int y = -1, x = -1;
+    for (int yy = 0; yy < g.ny && y < 0; ++yy) {
+        const int* row = &g.ch[yy * g.nx];
+        for (int xx = 0; xx < g.nx; ++xx)
+            if (row[xx] == c) {
+                y = yy;
+                x = xx;
+                break;
+            }
+    }
+    if (y < 0)
+        fail("glyph not found for click: '" + std::string(1, c) + "'");
+    click(x, y);
+}
+
 int navId() {
     ImGuiContext& g = *ImGui::GetCurrentContext();
     return (int)g.NavId;
@@ -459,7 +483,7 @@ void resetClean() {
             continue;
         }
         if (!p.panelOpen) {
-            int y = findRow(grid(), "Open");
+            int y = findRow(grid(), ">");
             if (y >= 0) {
                 int x = firstNonSpace(grid(), y);
                 click(x + 1, y);
@@ -497,15 +521,19 @@ void scenario0_calibration() {
     Grid g = grid();
     allRowsValidUtf8(g, "S0");
 
-    int yClose = findRow(g, "Close");
-    if (yClose < 0)
-        fail("S0: 'Close' button row not found");
-    if (findRow(g, "New") != yClose)
-        fail("S0: 'New' not on the Close row");
+    // Header row: "New" on the left, the "<" collapse toggle at the far
+    // right of the panel; the "Sessions" separator is the next row.
+    int yNew = findRow(g, "New");
+    if (yNew < 0)
+        fail("S0: 'New' button row not found");
+    if (findRow(g, "<") != yNew)
+        fail("S0: '<' toggle not on the New row");
+    if (findCol(g, yNew, "<") <= findCol(g, yNew, "New"))
+        fail("S0: '<' toggle not to the right of New");
 
     int ySep = sepRowY();
-    if (ySep <= yClose)
-        fail("S0: separator not below Close/New row");
+    if (ySep <= yNew)
+        fail("S0: separator not below New/< row");
 
     // Filter row: directly under the separator, empty (frame only).
     std::string frow = rowText(g, ySep + 1);
@@ -1226,7 +1254,7 @@ void scenario20_close_reopen() {
     clickFilter();
     typeAll("eta");
     idle(1);
-    clickRowByTitle("Close"); // the Close button shares the header row
+    clickChar('<'); // the "<" collapse toggle is at the far right of the header
     idle(1);
     if (g_state.sessionPanel.panelOpen)
         fail("S20: panel not closed");
@@ -1236,14 +1264,12 @@ void scenario20_close_reopen() {
         fail("S20: filter lost when the panel was closed");
     {
         Grid g = grid();
-        if (findRow(g, "Open") < 0)
-            fail("S20: collapsed 'Open' strip not rendered");
+        if (findRow(g, ">") < 0)
+            fail("S20: collapsed '>' strip not rendered");
         if (findRow(g, "Eta migrate") >= 0)
             fail("S20: session rows rendered while the panel is closed");
     }
-    int y = findRow(grid(), "Open");
-    int x = firstNonSpace(grid(), y);
-    click(x + 1, y);
+    clickChar('>');
     idle(2);
     if (!g_state.sessionPanel.panelOpen)
         fail("S20: panel not reopened");
@@ -1366,7 +1392,7 @@ int findCol(const Grid& g, int y, const std::string& needle) {
 // tracks the buffer's ACTUAL post-frame line count (AD-2/AD-3; invariants
 // I1/I2/I3/I6). Grid pins: status row 19 for a 1-line buffer, 3 for a
 // 20-line one; Send/Prev/Next labels at column 71 in every state (frame
-// left = lpw + inputWidth = 69 for lpw 30 and 8 alike, +2 FramePadding).
+// left = lpw + inputWidth = 69 for lpw 30, 8 and 4 alike, +2 FramePadding).
 void scenario24_input_group_geometry() {
     g_phase = "S24 input group geometry";
     resetClean();
@@ -1457,19 +1483,20 @@ void scenario24_input_group_geometry() {
     setInputBuf(buf20);
     checkCell("S24 open-session 20-line", 30, buf20);
 
-    // State 2: session panel collapsed (lpw 8).
-    clickRowByTitle("Close");
+    // State 2: session panel collapsed (lpw 4) - the "<" toggle on the open
+    // header row collapses it to the narrow ">" strip.
+    clickChar('<');
     idle(1);
     if (g_state.sessionPanel.panelOpen)
         fail("S24: session panel not closed");
     setInputBuf(buf1);
-    checkCell("S24 collapsed-session 1-line", 8, buf1);
+    checkCell("S24 collapsed-session 1-line", 4, buf1);
     setInputBuf(buf20);
-    checkCell("S24 collapsed-session 20-line", 8, buf20);
+    checkCell("S24 collapsed-session 20-line", 4, buf20);
 
     // State 3: pipeline open (lpw 30) - reopen the session panel first so
     // the state is canonical, then occupy the slot with an agent.
-    clickRowByTitle("Open");
+    clickChar('>');
     idle(1);
     if (!g_state.sessionPanel.panelOpen)
         fail("S24: session panel not reopened");
