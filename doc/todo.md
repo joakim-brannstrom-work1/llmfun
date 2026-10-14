@@ -22,8 +22,8 @@
 - Each message that is processed should have their processing time recorded and other useful statistics such as tokens/s, total tokens etc.
 - Sometimes the agent stop after a compression. It starts working again with a /c
 - memory consolidation is too slow. It has to be more automated. Maybe something like a configured max number of memories that can be kept? Or that it tells the LLM that it will remove the "10 oldes" so if there is any information worth keeping in them the LLM has to "write one new memory" containing the important facts.
+- Need to add a concept of short and long term memory. Short term are up to 7 days old and can be accessed through listMemories(short), the agent is instructed to only look at short term memories on startup, long term are accessed through listMemories(long), automatic migration from short to long term. Memory consolidation run on the short term. Long term hmm maybe choose two random memories that the agent are asked to either merge to one or delete one of them. Or we have a max age of memories and those older than that are automatically removed.
 - when the context is at 90% only a call to requestCompression should be accepted. Everything else is blocked.
-- imgui 1.92 use a queue for key pressed. When a user hold down a key they queue up but the consumer (the GUI thread) only run at 60hz which mean that the GUI start to "lag behind" the queue. Maybe there is a function in imgui 1.92 which can check if there are more events in the queue and then schedule a GUI refresh immediately?
 - agent.md summary must be executed async in case it is "severly slowed down"
 - a /c must also remove all nudges from latest message and up to hmm ten messages back in the history. This is because sometimes a nudge has been added because of a network failure and if the network then comes back online the model/agent becomes confused.
 
