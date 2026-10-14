@@ -53,7 +53,7 @@ unittest {
 
 // Fail-fast: a configured nudge file that is missing fails the AGENT
 // CONSTRUCTION with the same "Prompt file not found" error a missing AGENT.md
-// produces — before any request is wasted. The override names a file that
+// produces - before any request is wasted. The override names a file that
 // exists nowhere in the fixture prompt dir.
 unittest {
     import std.datetime : Clock;
@@ -84,8 +84,8 @@ unittest {
 }
 
 // Wholesale override + eager load at model switch: resetModel swaps the
-// ENTIRE policy — fields the model block does not restate fall back to struct
-// defaults, NOT to the global customization — and the model's own templates are
+// ENTIRE policy - fields the model block does not restate fall back to struct
+// defaults, NOT to the global customization - and the model's own templates are
 // eagerly loaded from the construction prompt dir.
 unittest {
     import std.datetime : Clock;
@@ -208,7 +208,7 @@ version (unittest) {
     /// Test seam for the runToCompletion loop: `Agent.process` is public and
     /// virtual (not final, not private), so a subclass can feed the loop canned
     /// ProcessResults without any HTTP endpoint. The canned results need only
-    /// the fields the loop reads — status and hasToolCall.
+    /// the fields the loop reads - status and hasToolCall.
     class CannedProcessAgent : Agent {
         ProcessResult[] canned;
         size_t served;
@@ -237,7 +237,7 @@ version (unittest) {
 // exhausts the default 2+1 ladder and fails the turn with
 // Status.agentStuckInLoop. The CannedProcessAgent seam feeds the loop without
 // any HTTP endpoint. Also carries the harness-traffic acceptance: the nudges
-// are userQuery:false — invisible in the dialogue/trace projections, and they
+// are userQuery:false - invisible in the dialogue/trace projections, and they
 // never open or fragment a turn.
 unittest {
     import std.datetime : Clock;
@@ -287,7 +287,7 @@ unittest {
 }
 
 // Wholesale per-model override: the model block restates only softStrikes:1
-// — everything else (hardStrikes, file lists) falls back to struct defaults, so
+// - everything else (hardStrikes, file lists) falls back to struct defaults, so
 // strike 1 uses the shipped soft nudge and strike 2 the shipped hard one.
 unittest {
     import std.datetime : Clock;
@@ -335,7 +335,7 @@ unittest {
     assert(agent.keepReasoningStrikes == 3);
 }
 
-// `enabled: false` short-circuits to true — no counter increment: the
+// `enabled: false` short-circuits to true - no counter increment: the
 // loop runs on with no nudge injected and ends via the MaxConsecutiveSameStatus
 // backstop (4 identical needMoreThinking results), not via ladder exhaustion.
 // The fixture omits the keep-reasoning files entirely: if the disabled kind's
@@ -377,7 +377,7 @@ unittest {
 }
 
 // Pin: a pipeline-retry message added via addContinueMessage consumes no
-// strikes and never routes through the ladder — the retry path bypasses the
+// strikes and never routes through the ladder - the retry path bypasses the
 // escalation mechanism entirely (caller-supplied text).
 unittest {
     import std.datetime : Clock;
@@ -408,7 +408,7 @@ unittest {
     assert(agent.chat.getReasoningTrace.length == 0, "not in the trace projection");
 }
 
-// Regression: an ok round WITH tool calls is a fresh round — it injects no
+// Regression: an ok round WITH tool calls is a fresh round - it injects no
 // nudge and resets the strike counters (per-turn lifecycle), so a healthy
 // multi-round turn never drifts toward ladder exhaustion. The soft marker on
 // the second keep-reasoning nudge proves the reset: without it, strike 2 would
@@ -582,7 +582,7 @@ unittest {
     assert(agent.chat.getMessages.length == 1,
             "per-model threshold 0.9: silent at 83% where the global 0.8 fires");
 
-    // threshold 0.6: fires at the same usage — earlier than the global 0.8.
+    // threshold 0.6: fires at the same usage - earlier than the global 0.8.
     auto eager = new CannedProcessAgent("integration", makeAgentTestConfig(tmpDir));
     eager.addUserQuery("x".replicate(13_600));
     eager.syncContextFromChat();
@@ -591,7 +591,7 @@ unittest {
     assert(eager.chat.getMessages.length == 2,
             "per-model threshold 0.6 fires at 83% (the global 0.8 would not yet)");
     // Exact-at boundary (strict >): with threshold 0.75 the trigger point is
-    // exactly 6144 tokens — at it the nudge stays silent, one token above
+    // exactly 6144 tokens - at it the nudge stays silent, one token above
     // fires.
     CodeModelConfig boundCfg;
     boundCfg.modelName = "boundary-model";
@@ -625,7 +625,7 @@ unittest {
 
 // `compression.enabled: false` silences the nudge at any usage: the
 // guard returns before the threshold check, and loadNudgeTexts loads no
-// template for the disabled kind (nudgeTexts_.compression stays empty — even a
+// template for the disabled kind (nudgeTexts_.compression stays empty - even a
 // guard bug could not substitute anything).
 unittest {
     import std.array : replicate;
@@ -653,11 +653,11 @@ unittest {
     assert(agent.chat.getMessages.length == 1, "disabled compression: no nudge at any usage");
 }
 
-// Feedback warnings: gating only — the text stays owned by
-// FeedbackEngine. The legacy constants are gone: intervalSecs and
-// minToolCalls drive the two gates. The first-warning sentinel
-// (toolCallWarnCounter == -1) fires regardless of minToolCalls once the
-// interval has passed - the sentinel start is SysTime.init.
+// Feedback warnings: gating only - the text stays owned by
+// FeedbackEngine. The config's intervalSecs and minToolCalls drive the
+// two gates. The first-warning sentinel (toolCallWarnCounter == -1) fires
+// regardless of minToolCalls once the interval has passed - the sentinel
+// start is SysTime.init.
 unittest {
     import std.datetime : Clock, SysTime;
     import std.file : mkdirRecurse, write;
@@ -686,7 +686,7 @@ unittest {
     StreamResponse.ToolCall[long] calls;
     calls[0] = StreamResponse.ToolCall(id: "1", name: "no_such_tool", arguments: "{}");
 
-    // Sentinel: the first warning fires regardless of minToolCalls — the
+    // Sentinel: the first warning fires regardless of minToolCalls - the
     // interval has passed (lastToolCallWarning starts at SysTime.init).
     auto llmConf = makeAgentTestConfig(tmpDir);
     auto agent = new CannedProcessAgent("integration", llmConf, monitor);
@@ -713,7 +713,7 @@ unittest {
     assert(feedbackWarnings(gated) == 1, "minToolCalls 50: the counter gate blocks");
 
     // minToolCalls boundary (strict >): with intervalSecs 0 the clock gate
-    // always passes after the rewind, so the counter gate is exercised alone —
+    // always passes after the rewind, so the counter gate is exercised alone -
     // counter == minToolCalls is still blocked, minToolCalls + 1 fires.
     auto llmConfBound = makeAgentTestConfig(tmpDir);
     llmConfBound.nudges.feedback.intervalSecs = 0;
@@ -722,7 +722,7 @@ unittest {
     bound.handleToolCalls(null, calls); // sentinel fires
     assert(feedbackWarnings(bound) == 1);
     bound.lastToolCallWarning = SysTime.init; // keep the clock gate open
-    foreach (i; 0 .. 2) // gates see counters 1, 2 — 2 == minToolCalls blocks
+    foreach (i; 0 .. 2) // gates see counters 1, 2 - 2 == minToolCalls blocks
         bound.handleToolCalls(null, calls);
     assert(feedbackWarnings(bound) == 1, "counter == minToolCalls: equality blocks");
     bound.handleToolCalls(null, calls); // the gate sees 3 > 2: fires
@@ -795,7 +795,7 @@ unittest {
     assert(agent.toolCtx.broker.activated.empty, "fresh broker: no activations");
 
     // Convenience-ctor agents get an unfiltered member filter (ReFilter.init),
-    // so their pool is unfiltered too — the pool can never disagree with the
+    // so their pool is unfiltered too - the pool can never disagree with the
     // request path.
     auto unfiltered = new Agent("integration", llmConf, null, null);
     auto regU = getFunctions();
@@ -832,7 +832,7 @@ unittest {
 
     auto llmConf = makeAgentTestConfig(tmpDir);
     llmConf.toolBroker.enabled = true; // broker on: the neverHide union-back scenario pins brokerEnabled below
-    // A filter that matches nothing hides the WHOLE registry — except the
+    // A filter that matches nothing hides the WHOLE registry - except the
     // default neverHideTools (["taskDone"]), which is unioned back.
     llmConf.toolFilter.include = ["^no_such_tool_pattern$"];
 
@@ -892,7 +892,7 @@ unittest {
             "zero activation counts: alphabetical group order expected:\n" ~ desc);
 
     // Rebuild-at-activation (the change point): the raw selectTools output
-    // carries the bare UDA text, so the delegate must recompose — otherwise the
+    // carries the bare UDA text, so the delegate must recompose - otherwise the
     // configured vocabulary disappears from the model's view after the first
     // activation.
     agent.toolCtx.rebuildTools();
@@ -958,7 +958,7 @@ unittest {
         // global block still carries hiddenTags: ["workarea"].
         freshEachTime = freshEachTime && conf.hiddenTags.length == 1
             && conf.hiddenTags[0] == "workarea";
-        conf.hiddenTags = []; // unhide-all (D7): the group's tools join the array
+        conf.hiddenTags = []; // unhide-all: the group's tools join the array
         conf.groups["workarea"].tools ~= "readFile2"; // element-level mutation too
     });
 
@@ -1022,7 +1022,7 @@ unittest {
             "agent_t7_empty_desc_probe"), "an undescribed group must not be advertised");
 }
 
-// The instructive refusal at the dispatch site — the three
+// The instructive refusal at the dispatch site - the three
 // refusal paths and the visible-dispatch control. Registry-absent and
 // config-excluded (⇒ not in the pool) messages stay unchanged; the
 // hidden-but-pooled case (tagged, never activated) names the recovery path, and the
@@ -1089,14 +1089,14 @@ unittest {
     auto agent = new Agent("integration", llmConf, null, null);
 
     // Tier-1: the tool is absent from the registry entirely (⇒ absent from the
-    // pool) — the opaque unknown-tool refusal, unchanged.
+    // pool) - the opaque unknown-tool refusal.
     auto unknown = dispatch(agent, "agent_t8_no_such_tool");
     assert(unknown.content == "error: unknown tool agent_t8_no_such_tool", unknown.content);
     assert(!unknown.success());
     assert(unknown.toolName == "agent_t8_no_such_tool");
 
     // Tier-2: the tool exists but the config filter excludes it (⇒ not in the
-    // pool either) — the not-available refusal, unchanged.
+    // pool either) - the not-available refusal.
     auto llmConf2 = makeAgentTestConfig(tmpDir);
     llmConf2.toolFilter.include = ["^no_such_tool_pattern$"];
     auto excluded = new Agent("integration", llmConf2, null, null, null, llmConf2.toolFilter.to());
@@ -1107,7 +1107,7 @@ unittest {
     assert(unavailable.toolName == "writeFile");
 
     // Tier-3: the tool is in the pool but hidden from this agent (tagged, never
-    // activated) — the instructive refusal names the recovery path.
+    // activated) - the instructive refusal names the recovery path.
     auto hidden = dispatch(agent, "agent_t8_tier3_fixture");
     assert(hidden.content == "error: tool 'agent_t8_tier3_fixture' is not visible to this agent in the current session (visibility resets when chat history is loaded or the session changes)" ~ "; discover tools with `listToolTags`, then make them visible with `loadToolTag`.",
             hidden.content);
@@ -1128,7 +1128,7 @@ unittest {
     assert(ok.success());
 }
 
-// Compression-point pruning — the scan/apply split inside Agent.compress
+// Compression-point pruning - the scan/apply split inside Agent.compress
 // The scan reads the intact pre-compression chat; the
 // apply (broker state + tools-array rebuild) runs only when the compression
 // actually rewrote history (originalLength != newLength || purgedCount > 0).
@@ -1196,7 +1196,7 @@ version (unittest) {
 //     assert(namesOf(agent.tools).canFind("agent_t9_unused_fixture"));
 //     assert(namesOf(agent.tools).canFind("taskDone"), "neverHide stays in the head");
 //
-//     // Usage: a real tool CALL through the dispatch site — the only thing
+//     // Usage: a real tool CALL through the dispatch site - the only thing
 //     // that counts. The unused fixture never gets a call.
 //     StreamResponse.ToolCall[long] calls;
 //     calls[0] = StreamResponse.ToolCall(id: "1", name: "agent_t9_used_fixture", arguments: "{}");
@@ -1221,9 +1221,9 @@ version (unittest) {
 //     agent.addUserQuery("s3");
 //
 //     auto res = agent.compress(0.9, true);
-//     assert(res.compressed, "the chat must actually compress (rewrite) for the D39 gate");
+//     assert(res.compressed, "the chat must actually compress (rewrite) for the prune-apply gate");
 //     assert(res.originalLength > res.newLength,
-//             "the failed summary rewrites the history: the oversized candidate is dropped (D39 gate input)");
+//             "the failed summary rewrites the history: the oversized candidate is dropped");
 //
 //     // The prune applied: the unused activated fixture is gone from the next
 //     // tools array, the used one survives (its call sits in the verbatim epoch),
@@ -1280,15 +1280,15 @@ unittest {
     agent.toolCtx.rebuildTools();
     assert(namesOf(agent.tools).canFind("agent_t9_noop_fixture"));
 
-    // A used tool: a no-op compression must not prune it either — nothing is
+    // A used tool: a no-op compression must not prune it either - nothing is
     // pruned at all when the history is not rewritten.
     StreamResponse.ToolCall[long] calls;
     calls[0] = StreamResponse.ToolCall(id: "1", name: "agent_t9_noop_fixture", arguments: "{}");
     agent.handleToolCalls(null, calls);
 
     // 3 messages: below the summary.compress floor (1 + KeepLast), so the
-    // forced compression no-ops: originalLength/newLength stay .init and the
-    // The rule (0 != 0 || 0 > 0) is false.
+    // forced compression no-ops: originalLength/newLength stay .init and
+    // the rule (0 != 0 || 0 > 0) is false.
     agent.setSystemPrompt("sys");
     agent.addUserQuery("q1");
     agent.addUserQuery("q2");
@@ -1297,14 +1297,14 @@ unittest {
     auto res = agent.compress(0.9, true);
     assert(!res.compressed, "the chat is too short: summary.compress no-ops");
     assert(res.originalLength == 0 && res.newLength == 0 && res.purgedCount == 0,
-            "no-rewrite fields stay .init, so the D39 gate is false");
+            "no-rewrite fields stay .init, so the prune-apply gate is false");
     auto after = JSONValue(agent.tools).toString;
     assert(before == after, "a no-op compression must not touch the tools array");
     assert(agent.toolCtx.broker.activated.canFind("agent_t9_noop_fixture"),
             "no prune: the used tool stays activated");
     assert(namesOf(agent.tools).canFind("agent_t9_noop_fixture"));
     assert(namesOf(agent.tools).canFind("agent_t9_noop_unused"),
-            "the D39 gate skipped the apply: an unused activated tool survives a no-op");
+            "the prune-apply gate skipped the apply: an unused activated tool survives a no-op");
     assert(agent.toolCtx.broker.activated.canFind("agent_t9_noop_unused"),
             "the activation list keeps the unused tool when history is not rewritten");
 }
@@ -1324,179 +1324,7 @@ version (unittest) {
     }
 }
 
-// TODO: this test call a real llm which it shall NEVER DO
-// @("broker metrics: the tools_request estimate, the tier-3 refusal, the discovery miss+hit pair with activation, and the prune count all land in the agent's MetricMonitor JSONL")
-// unittest {
-//     import std.algorithm : canFind, count, filter, map;
-//     import std.array : array, replicate;
-//     import std.datetime : Clock;
-//     import std.file : mkdirRecurse, readText, write;
-//     import std.format : format;
-//     import std.json : JSONOptions, JSONValue, parseJSON;
-//     import std.path : buildPath;
-//     import std.range : empty;
-//     import std.string : splitLines;
-//
-//     import my.path : Path;
-//
-//     import llm.common.config : ApproxTokenSize;
-//     import llm.metric.monitor : MetricMonitor;
-//     import llm.tool_call : RegFunction, addFunction, toParams;
-//     import llm.tool_call.discovery : ListToolTagsParams, listToolTags;
-//
-//     auto now = Clock.currTime();
-//     auto tmpDir = format("llmfun_test/agent_t10_metrics_%d_%d", now.toUnixTime(), now.stdTime);
-//     mkdirRecurse(tmpDir);
-//     scope (exit)
-//         cleanupAgentTestDir(tmpDir);
-//     write(tmpDir ~ "/SUMMARY.md", "Summarize text.");
-//     writeDefaultNudgeFiles(tmpDir);
-//
-//     // Three workarea-tagged fixtures registered BEFORE agent construction, so
-//     // all are in the pool (the pool is built at ctor time from the live
-//     // registry): the tier-3 refusal target plus the used/unused prune pair.
-//     addFunction(RegFunction(name: "agent_t10_tier3_fixture", desc: "t10 tier3 fixture", params: toParams!T10FixtureParams,
-//             callback: &t10FixtureCallback, tags: ["workarea"]));
-//     addFunction(RegFunction(name: "agent_t10_used_fixture", desc: "t10 used fixture", params: toParams!T10FixtureParams, callback: &t10FixtureCallback,
-//             tags: ["workarea"]));
-//     addFunction(RegFunction(name: "agent_t10_unused_fixture", desc: "t10 unused fixture", params: toParams!T10FixtureParams,
-//             callback: &t10FixtureCallback, tags: ["workarea"]));
-//
-//     // The agent's own JSONL sink: a real MetricMonitor on a fresh file (the
-//     // feedback gating tolerates null monitors, but the metrics sites need a
-//     // real sink). A real Agent (not CannedProcessAgent) so process() runs the
-//     // real request site; the empty server type never dials out.
-//     auto dataFile = buildPath(tmpDir, "monitor.jsonl").Path;
-//     auto monitor = new MetricMonitor(dataFile);
-//     auto agent = new Agent("integration", makeAgentTestConfig(tmpDir), monitor, null);
-//
-//     string[] namesOf(JSONValue[] ts) {
-//         string[] n;
-//         foreach (t; ts)
-//             n ~= t["function"]["name"].str;
-//         return n;
-//     }
-//
-//     // Per-kind JSONL reader over the agent's monitor file (re-read per call:
-//     // events accumulate as the test runs).
-//     JSONValue[] byKind(string kind) {
-//         return readText(dataFile).splitLines
-//             .map!(a => parseJSON(a))
-//             .filter!(j => "kind" in j && j["kind"].str == kind)
-//             .array;
-//     }
-//
-//     // 1. tools_request: the per-request tools size + schema token estimate.
-//     // The event fires BEFORE the requester dials (the request itself fails
-//     // offline with an unknown endpoint, which process() reports as
-//     // unknownFailure).
-//     agent.process(null);
-//     auto reqs = byKind("tools_request");
-//     assert(reqs.length == 1);
-//     assert(reqs[0]["agent"].str == "integration");
-//     assert(reqs[0]["toolsCount"].integer == cast(long) agent.tools.length);
-//     long schemaTokens;
-//     foreach (t; agent.tools)
-//         schemaTokens += t.toString(JSONOptions.doNotEscapeSlashes).length;
-//     assert(reqs[0]["schemaTokens"].integer == schemaTokens / ApproxTokenSize,
-//             "schemaTokens uses the ApproxTokenSize heuristic");
-//
-//     // 2. tool_refusal: the tier-3 instructive refusal (the fixture is in the
-//     // pool but not yet activated, so it is not in agent.tools).
-//     StreamResponse.ToolCall[long] calls;
-//     calls[0] = StreamResponse.ToolCall(id: "1", name: "agent_t10_tier3_fixture", arguments: "{}");
-//     agent.handleToolCalls(null, calls);
-//     auto refusals = byKind("tool_refusal");
-//     assert(refusals.length == 1);
-//     assert(refusals[0]["tool"].str == "agent_t10_tier3_fixture");
-//     assert(refusals[0]["tier"].integer == 3);
-//     assert(refusals[0]["agent"].str == "integration");
-//
-//     // 3. tag_discovery / tag_activation: the miss records known=false and
-//     // nothing else; the hit activates the tag's visible tools (the fixtures)
-//     // and records the activated count (the tag's pool size).
-//     auto miss = listToolTags(agent.toolCtx, ListToolTagsParams(tag: "nope"));
-//     assert(!miss.success);
-//     auto discoveries = byKind("tag_discovery");
-//     assert(discoveries.length == 1);
-//     assert(discoveries[0]["tag"].str == "nope");
-//     assert(!discoveries[0]["known"].boolean);
-//
-//     auto hit = listToolTags(agent.toolCtx, ListToolTagsParams(tag: "workarea"));
-//     assert(hit.success);
-//     auto activations = byKind("tag_activation");
-//     assert(activations.length == 1);
-//     assert(activations[0]["tag"].str == "workarea");
-//     assert(activations[0]["toolsActivated"].integer == cast(
-//             long) agent.toolCtx.pool.count!(f => f.tags.canFind("workarea")));
-//     assert(byKind("tag_discovery").length == 2, "the miss and the hit both record");
-//
-//     // 4. broker_prune: a rewriting compression prunes the unused activated
-//     // fixture; the used one survives (the same recipe as the prune
-//     // test). The system prompt must be set BEFORE the tool traffic.
-//     StreamResponse.ToolCall[long] usedCalls;
-//     usedCalls[0] = StreamResponse.ToolCall(id: "1", name: "agent_t10_used_fixture", arguments: "{}");
-//     agent.setSystemPrompt("sys");
-//     agent.handleToolCalls(null, usedCalls);
-//
-//     agent.addUserQuery("x".replicate(9000)); // ~4500 tokens > TokenBudget (4096)
-//     agent.addUserQuery("s1");
-//     agent.addContinue();
-//     agent.addUserQuery("s2");
-//     agent.addContinue();
-//     agent.addUserQuery("s3");
-//
-//     auto res = agent.compress(0.9, true);
-//     assert(res.compressed, "the chat must actually compress (rewrite) for the D39 gate");
-//     assert(res.originalLength > res.newLength);
-//
-//     auto prunes = byKind("broker_prune");
-//     assert(prunes.length == 1);
-//
-//     // The prune count is registry-state-dependent: other modules' tests leak
-//     // workarea-tagged fixtures that my workarea hit activates, so the scan
-//     // prunes them too. The invariant: the unused fixture is among the pruned;
-//     // the used one and the refusal fixture (whose refusal is delivered as a
-//     // tool result, which counts as a use) survive.
-//     assert(prunes[0]["pruned"].integer >= 1, "the unused activated fixture is pruned");
-//
-//     // The used fixture and the tier-3-refused fixture survive; the unused
-//     // one is gone.
-//     auto names = namesOf(agent.tools);
-//     assert(names.canFind("agent_t10_used_fixture"), "a used tool survives the prune");
-//     assert(names.canFind("agent_t10_tier3_fixture"),
-//             "the tier-3 refusal is a use: the fixture survives");
-//     assert(!names.canFind("agent_t10_unused_fixture"), "the unused fixture is pruned");
-//
-//     // 5. broker_seed: a restore that actually seeds - the hand-built
-//     // chat.load + seedBrokerFromChat seam the seed-on-load tests use. After
-//     // the prune above, the unused fixture is the only pool tool whose name
-//     // no longer sits in the activation list, so a history proving its use
-//     // re-activates exactly it: "seeded": 1 (the used and refused fixtures
-//     // are already activated, and activation is sticky).
-//     agent.chat.load(parseJSON(`{
-//         "messages": [
-//             {"role": "assistant", "content": null, "reasoning_content": "",
-//              "tool_calls": [{"id": "2", "type": "function",
-//                              "function": {"name": "agent_t10_unused_fixture", "arguments": "{}"}}]},
-//             {"role": "tool", "content": "out", "tool_call_id": "2",
-//              "name": "agent_t10_unused_fixture"}
-//         ]
-//     }`));
-//     agent.seedBrokerFromChat();
-//
-//     auto seeds = byKind("broker_seed");
-//     assert(seeds.length == 1, "a restore that seeds lands exactly one broker_seed event");
-//     assert(seeds[0]["seeded"].integer == 1);
-//     assert(seeds[0]["agent"].str == "integration");
-//
-//     // Idempotency (D7): a second seed of the same chat fires nothing.
-//     agent.seedBrokerFromChat();
-//     assert(byKind("broker_seed").length == 1, "a no-op seed records no event");
-//
-// }
-
-// --- Seed-on-load: the load-path inverse of the compression-time prune ---
+// Seed-on-load: the load-path inverse of the compression-time prune
 
 version (unittest) {
     import std.json : JSONValue;
@@ -1640,7 +1468,7 @@ unittest {
     auto before = JSONValue(agent.tools).toString;
     agent.seedBrokerFromChat();
 
-    assert(agent.toolCtx.broker.activated.empty, "kill switch off: nothing is seeded (D6)");
+    assert(agent.toolCtx.broker.activated.empty, "kill switch off: nothing is seeded");
     assert(JSONValue(agent.tools).toString == before,
             "kill switch off: the tools array is untouched by the seed");
 }
@@ -1672,7 +1500,7 @@ unittest {
     auto agent = new Agent("integration", makeAgentTestConfig(tmpDir), null, null);
 
     // A history whose only structured call targets taskDone: untagged
-    // (alwaysOn) and neverHide - the seeder must skip both (D2).
+    // (alwaysOn) and neverHide - the seeder must skip both.
     agent.chat.load(parseJSON(`{
         "messages": [
             {"role": "assistant", "content": null, "reasoning_content": "",
@@ -1684,14 +1512,13 @@ unittest {
     agent.seedBrokerFromChat();
 
     assert(agent.toolCtx.broker.activated.empty,
-            "an alwaysOn/neverHide call never enters the activation list (D2)");
+            "an alwaysOn/neverHide call never enters the activation list");
     assert(JSONValue(agent.tools).toString == before,
             "an alwaysOn-only history must not touch the tools array");
     assert(namesOf(agent.tools).canFind("taskDone"), "alwaysOn stays in the head");
 }
 
-@(
-        "seed-on-load: a second seed of the same chat is a no-op - nothing newly activated, no rebuild (D7)")
+@("seed-on-load: a second seed of the same chat is a no-op - nothing newly activated, no rebuild")
 unittest {
     import std.algorithm : canFind;
     import std.datetime : Clock;
@@ -1735,7 +1562,7 @@ unittest {
     }`));
     // Counting rebuild hook installed BEFORE the first seed: the first seed
     // (something newly activated) must fire exactly one rebuild, the second
-    // (nothing newly activated) none (D7). The wrapper forwards to the
+    // (nothing newly activated) none. The wrapper forwards to the
     // default rebuild so the tools array still gets recomposed.
     size_t rebuilds;
     auto defaultRebuild = agent.toolCtx.rebuildTools;
@@ -1748,7 +1575,7 @@ unittest {
     assert(agent.toolCtx.broker.activated.canFind("agent_t11_idem_fixture"));
 
     agent.seedBrokerFromChat(); // second seed: sticky activation, seeded == 0
-    assert(rebuilds == 1, "the second seed must fire no rebuild (D7)");
+    assert(rebuilds == 1, "the second seed must fire no rebuild");
     assert(agent.toolCtx.broker.activated.canFind("agent_t11_idem_fixture"),
             "the activation is sticky");
     assert(namesOf(agent.tools).canFind("agent_t11_idem_fixture"), "the seeded tool stays visible");
@@ -1847,7 +1674,7 @@ unittest {
     // the live registry and the array + discovery description rebuilt through
     // toolCtx.rebuildTools (the MCP connect hook). The tag vocabulary is config-side and read
     // at rebuild time; it is preset before construction, so the recomposed
-    // description carries the tag — if the hook did not recompose, the raw
+    // description carries the tag - if the hook did not recompose, the raw
     // selectTools output would carry the bare UDA text and the tag would
     // vanish.
     registerMcpTool("mcp_ext_t12_e2e", "ext tool for the e2e recompose test",
@@ -1865,7 +1692,7 @@ unittest {
     assert(listDesc.canFind("\n\nTags: " ~ tag), listDesc);
 
     // Discovery loop: list the tag (activates it), then the harness-side
-    // rebuild — the MCP tool becomes visible in the array.
+    // rebuild - the MCP tool becomes visible in the array.
     auto resp = listToolTags(agent.toolCtx, ListToolTagsParams(tag));
     assert(resp.success, resp.msg);
     agent.toolCtx.rebuildTools();
@@ -1873,7 +1700,7 @@ unittest {
             "the MCP tool becomes visible after its tag is activated");
 }
 
-@("Kill switch off: the MCP connect hook rebuilds the legacy tools array, so an MCP tool becomes visible without activation")
+@("Kill switch off: the MCP connect hook rebuilds the pre-broker tools array, so an MCP tool becomes visible without activation")
 unittest {
     import std.algorithm : canFind;
     import std.datetime : Clock;
@@ -1905,7 +1732,7 @@ unittest {
     agent.onMcpServerConnected();
 
     assert(agent.tools.canFind!(e => e["function"]["name"].str == "mcp_ext_t12_legacy"),
-            "the legacy path emits registry ∩ toolFilter regardless of tags");
+            "the kill-switch path emits registry ∩ toolFilter regardless of tags");
 }
 
 @(
@@ -1970,4 +1797,150 @@ unittest {
     // the absence check keeps one alwaysOn entry and the tools array one entry.
     coder.resetModel(llmConf.activeCodeModel);
     assert(namesOf(coder.tools).count!(n => n == "pipelineOutput") == 1);
+}
+
+// The measured LLM call Duration is stamped once at message
+// construction - the assistant Message in parseResponse, each ToolMessage in
+// handleToolCalls. Injected Durations keep the asserts deterministic; the
+// wall-clock path is covered E2E. The default parameter leaves direct
+// two-arg call sites unstamped (NoProcessingTime).
+unittest {
+    import std.datetime : Clock, dur;
+    import std.file : mkdirRecurse, write;
+    import std.format : format;
+    import std.path : buildPath;
+    import std.sumtype : has;
+
+    import llm.chat : MessageTime, NoProcessingTime, ToolMessage, ToolResponse;
+    import llm.types : StreamMessage;
+
+    import my.path : Path;
+
+    auto now = Clock.currTime();
+    auto tmpDir = format("llmfun_test/agent_stamp_%d_%d", now.toUnixTime(), now.stdTime);
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        cleanupAgentTestDir(tmpDir);
+    write(tmpDir ~ "/SUMMARY.md", "Summarize text.");
+    writeDefaultNudgeFiles(tmpDir);
+    auto monitor = new MetricMonitor(buildPath(tmpDir, "metrics.jsonl").Path);
+    auto llmConf = makeAgentTestConfig(tmpDir);
+    // Close the feedback gates: with a live monitor and the default config the
+    // first-call sentinel would add a warning Message and shift the counts.
+    llmConf.nudges.feedback.enabled = false;
+    auto agent = new CannedProcessAgent("stamp", llmConf, monitor);
+
+    // LLM stamp: drive parseResponse with a canned StreamResponse.
+    StreamResponse sp = StreamResponse(ServerStat.init);
+    sp.message = StreamMessage(role: "assistant", content: "hello", finishReason: "stop");
+    auto status = agent.parseResponse(sp, MessageTime(1234.dur!"msecs"));
+    assert(status == ProcessResult.Status.ok);
+    auto msgs = agent.chat.getMessages;
+    assert(msgs.length == 1);
+    assert(msgs[0].match!((Message m) => m.processTime() == MessageTime(1234.dur!"msecs"),
+            (_) => false));
+
+    // Tool stamp: llmCall on the ToolMessage (the tool-execution stamp on the
+    // ToolResponse is asserted in its own test). The default parameter leaves
+    // messages unstamped.
+    StreamResponse.ToolCall[long] calls;
+    calls[0] = StreamResponse.ToolCall(id: "1", name: "no_such_tool", arguments: "{}");
+    agent.handleToolCalls(null, calls, MessageTime(555.dur!"msecs"));
+    msgs = agent.chat.getMessages;
+    assert(msgs.length == 3); // tool message + tool response (no nudge: monitor gates closed)
+    assert(msgs[1].match!((ToolMessage m) => m.processTime() == MessageTime(555.dur!"msecs"),
+            (_) => false));
+    assert(msgs[2].match!((ToolResponse m) => m.toolCallId == "1", (_) => false));
+
+    StreamResponse.ToolCall[long] bare;
+    bare[0] = StreamResponse.ToolCall(id: "2", name: "no_such_tool", arguments: "{}");
+    agent.handleToolCalls(null, bare); // default parameter: unstamped
+    msgs = agent.chat.getMessages;
+    assert(msgs[3].match!((ToolMessage m) => m.processTime().has!NoProcessingTime, (_) => false));
+}
+
+// The measured per-call tool-execution Duration is stamped on each
+// ToolResponse: the value stored is the measured responseTimeMs - the
+// display path never re-measures. Both calls run a 10 ms sleep fixture so
+// each measurement is non-zero - every built-in tool fast-fails in < 1 ms
+// in the unit environment, and the integer-millisecond measurement would
+// report 0. The live monitor keeps the monitor.record path under test; the
+// feedback gate is closed so the first-call sentinel does not add a
+// warning Message and shift the counts.
+version (unittest) {
+    import core.thread : Thread;
+    import std.datetime : dur;
+    import std.json : JSONValue;
+
+    import llm.tool_call : Context, ExecuteFuncResult;
+
+    /// Empty params struct for the sleep fixture (nothing to decode).
+    private struct ToolTimeSleepParams {
+    }
+
+    /// Sleeps so the per-call execution time measures non-zero.
+    private ExecuteFuncResult toolTimeSleepCallback(Context ctx, JSONValue args) {
+        Thread.sleep(10.dur!"msecs");
+        return ExecuteFuncResult("slept", true);
+    }
+}
+
+unittest {
+    import std.datetime : Clock, Duration;
+    import std.file : mkdirRecurse, write;
+    import std.format : format;
+    import std.path : buildPath;
+    import my.path : Path;
+    import logger = std.logger;
+
+    import llm.chat : MessageTime, NoProcessingTime, ToolResponse;
+    import llm.tool_call : RegFunction, addFunction, toParams;
+
+    addFunction(RegFunction(name: "agent_tooltime_sleep", desc: "tooltime sleep fixture",
+            params: toParams!ToolTimeSleepParams, callback: &toolTimeSleepCallback));
+
+    auto now = Clock.currTime();
+    auto tmpDir = format("llmfun_test/agent_tooltime_%d_%d", now.toUnixTime(), now.stdTime);
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        cleanupAgentTestDir(tmpDir);
+    write(tmpDir ~ "/SUMMARY.md", "Summarize text.");
+    writeDefaultNudgeFiles(tmpDir);
+    auto monitor = new MetricMonitor(buildPath(tmpDir, "metrics.jsonl").Path);
+    auto llmConf = makeAgentTestConfig(tmpDir);
+    // Close the feedback gate: with a live monitor and the default config the
+    // first-call sentinel would add a warning Message and shift the counts.
+    llmConf.nudges.feedback.enabled = false;
+    auto agent = new CannedProcessAgent("tooltime", llmConf, monitor);
+
+    // Multi-tool step: each ToolResponse carries its OWN per-call duration
+    // (measured around its own iteration: startTime at the loop top).
+    StreamResponse.ToolCall[long] calls;
+    calls[0] = StreamResponse.ToolCall(id: "1", name: "agent_tooltime_sleep", arguments: "{}");
+    calls[1] = StreamResponse.ToolCall(id: "2", name: "agent_tooltime_sleep", arguments: "{}");
+    agent.handleToolCalls(null, calls);
+
+    auto msgs = agent.chat.getMessages;
+    assert(msgs.length == 4); // 2 x (tool message + tool response)
+    Duration d0;
+    Duration d1;
+    // Extract each stamp with an expression-lambda match, then assert with a
+    // single-level block-lambda match: a nested match! call inside a
+    // block-lambda handler makes LDC infer "delegate that returns a delegate"
+    // and dispatch nothing, so the assertions would pass vacuously. Also keep
+    // the catch-alls single-expression arrow lambdas (`(_) => assert(0)`): an
+    // arrow+block handler in one match! call breaks std.sumtype instantiation
+    // under LDC 1.42 ("expected return type of `bool`, not
+    // `void delegate() @safe`").
+    auto mt0 = msgs[1].match!((ToolResponse m) => m.processTime(),
+            (_) => MessageTime(NoProcessingTime()));
+    auto mt1 = msgs[3].match!((ToolResponse m) => m.processTime(),
+            (_) => MessageTime(NoProcessingTime()));
+    mt0.match!((Duration d) { assert(d > Duration.init); d0 = d; }, (_) => assert(0));
+    mt1.match!((Duration d) { assert(d > Duration.init); d1 = d; }, (_) => assert(0));
+    // Distinct per-call values in practice (two independent measurements); the
+    // unit environment cannot force different times for two calls of the same
+    // fixture, so equality is possible and acceptable - distinctness is
+    // exercised E2E, where real tools take different times.
+    logger.info("per-call tool times: ", d0, " / ", d1);
 }

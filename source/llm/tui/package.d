@@ -1,15 +1,19 @@
 module llm.tui;
 
+import core.time : Duration;
 import logger = std.logger;
 import std.algorithm : filter, among, min, max;
 import std.array : appender, Appender, empty, array;
+import std.conv : text;
 import std.logger;
+import std.sumtype : match;
 
 import my.path : Path;
 import my.actor;
+import my.time : prettyDuration;
 
 import llm.session : SessionId;
-
+import llm.chat : MessageTime, NoProcessingTime;
 import llmfun_tui;
 
 // Convert a D string to an inbound API `String` (no allocation)
@@ -55,6 +59,19 @@ string shortSummary(string msg) nothrow {
         .filter!(a => (a.isAlphaNum || a.isWhite))
         .until!(a => a == '\n')
         .take(100).array;
+}
+
+// The single display-policy site for the message time suffix.
+// No suffix when no time was measured or the stored value is negative (corrupt - trace and stop).
+// Otherwise: " [<prettyDuration(d)>]". Tier formatting is my.time.prettyDuration's job.
+package string timeSuffix(MessageTime time) {
+    return time.match!((Duration d) {
+        if (d < Duration.init) {
+            logger.tracef("negative processing time %s: treated as no processing time", d);
+            return "";
+        }
+        return " [" ~ prettyDuration(d) ~ "]";
+    }, (NoProcessingTime nt) => "");
 }
 
 // A D `Logger` implementation that captures log entries and drains them for display in the TUI log tab.
@@ -144,6 +161,9 @@ struct TextUserInterface {
     package {
         string query_;
         string statusText;
+        // Last header summary computed by addChatMessage (test seam: the
+        // llm.tui.tests module is in package llm.tui and can read it).
+        string lastChatSummary;
         // Set when the C frame reports user-terminated (GUI window close);
         // consumed by the actor's postProcess exit handshake.
         bool userTerminated_;
@@ -162,8 +182,22 @@ struct TextUserInterface {
         return tuiHasMoreEvents() == 1;
     }
 
-    void addChatMessage(string msg, string thinking, TuiChatMessageType type) {
-        string summary = shortSummary(msg);
+    void addChatMessage(string msg, string thinking, TuiChatMessageType type,
+            size_t nr, MessageTime time) {
+        string summary;
+        if (nr == 0) {
+            summary = shortSummary(msg);
+        } else {
+            auto head = "[" ~ nr.text ~ "]";
+            auto body = shortSummary(msg);
+            auto tail = timeSuffix(time);
+            if (body.empty) {
+                summary = tail.empty ? head : head ~ " " ~ tail;
+            } else {
+                summary = head ~ " " ~ body ~ tail;
+            }
+        }
+        lastChatSummary = summary;
         auto s = String(summary.ptr, summary.length);
         auto q = String(msg.ptr, msg.length);
         auto t = String(thinking.ptr, thinking.length);
@@ -604,17 +638,17 @@ class TextUserInterfaceActor : TUICommands {
     }
 
     void uiMsg(UiChatMessage a) {
-        ui.addChatMessage(a.msg, null, a.type);
+        ui.addChatMessage(a.msg, null, a.type, a.nr, a.time);
         postProcess;
     }
 
     void uiMsg(UiChatThinkMessage a) {
-        ui.addChatMessage(a.msg, a.thinking, a.type);
+        ui.addChatMessage(a.msg, a.thinking, a.type, a.nr, a.time);
         postProcess;
     }
 
     void uiMsg(UiFinalAnswer a) {
-        ui.addChatMessage(a.msg, null, TuiChatMessageType_FinalAnswer);
+        ui.addChatMessage(a.msg, null, TuiChatMessageType_FinalAnswer, a.nr, a.time);
         postProcess;
     }
 
@@ -704,12 +738,16 @@ struct UiInitHistory {
 struct UiChatMessage {
     string msg;
     TuiChatMessageType type = TuiChatMessageType_Assistant;
+    size_t nr = 0; // 0 = display-only line (undecorated)
+    MessageTime time = NoProcessingTime();
 }
 
 struct UiChatThinkMessage {
     string msg;
     string thinking;
     TuiChatMessageType type = TuiChatMessageType_Assistant;
+    size_t nr = 0;
+    MessageTime time = NoProcessingTime();
 }
 
 struct UiStreamChatMessage {
@@ -722,6 +760,8 @@ struct UiStreamChatDone {
 
 struct UiFinalAnswer {
     string msg;
+    size_t nr = 0;
+    MessageTime time = NoProcessingTime();
 }
 
 struct UiClearChat {

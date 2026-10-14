@@ -36,16 +36,19 @@ expose the dialogue and reasoning views; the indexers reuse the same classifiers
  */
 module llm.chat;
 
+import core.time : Duration;
 import logger = std.logger;
 import std.algorithm : filter, map, sum, min, canFind, startsWith;
 import std.array : array, replace, appender;
 import std.conv : to, text;
+import std.datetime : dur;
 import std.exception : collectException;
 import std.json : JSONValue, JSONOptions, parseJSON, JSONType;
 import std.range : enumerate, isOutputRange, empty;
-import std.sumtype : SumType, match;
+import std.sumtype : SumType, has, match;
 import std.typecons : Tuple, tuple;
 import std.utf : byUTF, toUTF8, validate, UTFException;
+
 import llm.common.config : ApproxTokenSize;
 import llm.utility : getValue, summarizeToolCalls, summarizeToolResponse;
 
@@ -491,21 +494,15 @@ Chat.MessageT[] dialogueOf(const(Chat.MessageT)[] msgs) @safe nothrow pure {
     return result;
 }
 
-// Trace classifier (pure, Chat-free): reasoning entries in canonical order —
+// Trace classifier (pure, Chat-free): reasoning entries in canonical order -
 // non-final ToolMessages (tool calls), every ToolResponse (tool outputs), and
-// all thinking strings (Message.thinking). Membership is not exclusive: an
-// assistant final Message carrying both content and thinking appears in both
-// projections — entries are returned whole and cannot be split. Harness
-// control traffic (user-role Messages with userQuery == false) is excluded
-// even if it carried thinking. ToolMessage membership is exclusive: a final
-// (taskDone) ToolMessage's thinking is not carried — revisit if the
-// pre-taskDone reasoning ever needs to be indexed.
+// all thinking strings (Message.thinking).
 Chat.MessageT[] traceOf(const(Chat.MessageT)[] msgs) @safe nothrow {
     Chat.MessageT[] result;
     foreach (msg; msgs) {
         const bool isTrace = msg.match!((Message m) {
             if (m.role == Role.user && !m.isUserQuery)
-                return false; // harness control traffic is in neither projection
+                return false; // harness control traffic
             return !m.thinking.empty;
         }, (ToolMessage m) { return !m.isFinalAnswer(); }, (ToolResponse m) {
             return true;
@@ -555,6 +552,25 @@ private JSONValue saveDataWithTurnId(JSONValue saveData, long turnId) @trusted {
     }
     if (turnId != 0) {
         outData["turn_id"] = turnId;
+    }
+    return outData;
+}
+
+// In-memory processing time: a measured duration, or "no processing time was
+// measured" (legacy, unmeasured, or explicitly removed).
+struct NoProcessingTime {
+}
+
+alias MessageTime = SumType!(Duration, NoProcessingTime);
+
+private JSONValue remove(JSONValue data, string key) @trusted {
+    if (data.type != JSONType.object || (key !in data))
+        return data;
+    JSONValue outData;
+    foreach (k, val; data.object) {
+        if (k != key) {
+            outData[k] = val;
+        }
     }
     return outData;
 }
@@ -636,6 +652,41 @@ struct VisionMessage {
     }
 }
 
+mixin template SaveDataProcessTime() {
+    // Processing time in milliseconds, stored under save_data["processMs"].
+    // NoProcessingTime when the key is absent, saveData is not an object, or the
+    // value is not a number. An explicit 0 stays Duration(0).
+    MessageTime processTime() @safe const {
+        if (saveData.type != JSONType.object) {
+            return MessageTime(NoProcessingTime());
+        }
+        auto v = "processMs" in saveData;
+        if (v is null) {
+            return MessageTime(NoProcessingTime());
+        }
+        try {
+            long ms = v.integer; // throws for non-numeric JSON
+            return MessageTime(ms.dur!"msecs");
+        } catch (Exception e) {
+            logger.trace(e.msg).collectException;
+        }
+        return MessageTime(NoProcessingTime());
+    }
+
+    // Sets the processing time. Duration stores its milliseconds under the key
+    // (initializing saveData if it is not an object); NoProcessingTime removes the
+    // key when present so unmeasured messages keep the minimal file shape.
+    void setProcessTime(MessageTime t) @safe {
+        t.match!((Duration d) {
+            if (saveData.type != JSONType.object) {
+                saveData = JSONValue();
+            }
+            saveData["processMs"] = d.total!"msecs";
+        }, (NoProcessingTime nt) { saveData = saveData.remove("processMs"); });
+    }
+
+}
+
 struct Message {
 @safe:
     mixin TurnIdMixin;
@@ -661,6 +712,8 @@ struct Message {
         }
     }
 
+    mixin SaveDataProcessTime;
+
     size_t length() @safe const nothrow {
         return content.length;
     }
@@ -680,7 +733,7 @@ struct Message {
         return false;
     }
 
-    // toJson — REST API: does NOT include thinking (no change needed)
+    // toJson - REST API: does NOT include thinking (no change needed)
     JSONValue toJson() @safe {
         auto j = JSONValue(["role": role.to!string, "content": content]);
         if (!thinking.empty)
@@ -778,6 +831,8 @@ struct ToolMessage {
         this.metadata = metadata;
         this.saveData = saveData;
     }
+
+    mixin SaveDataProcessTime;
 
     size_t length() @safe const {
         return toolCalls.toString(JSONOptions.doNotEscapeSlashes).length;
@@ -916,6 +971,8 @@ struct ToolResponse {
             }
         }
     }
+
+    mixin SaveDataProcessTime;
 
     size_t length() @safe const nothrow {
         return content.length;
@@ -1339,6 +1396,64 @@ unittest {
     assert(m2.turnId == 2);
 }
 
+@("processTime round-trips through save_data") unittest {
+    auto m = Message(Role.assistant, userQuery: false, content: "hi", thinking: null);
+    m.setProcessTime(MessageTime(1234.dur!"msecs"));
+    auto loaded = Message();
+    loaded.fromJson(m.toSaveJson());
+    assert(loaded.processTime() == MessageTime(1234.dur!"msecs"));
+    // explicit 0 round-trips as 0, NOT "absent"
+    auto zero = Message(Role.assistant, userQuery: false, content: "z", thinking: null);
+    zero.setProcessTime(MessageTime(0.dur!"msecs"));
+    auto zeroLoaded = Message();
+    zeroLoaded.fromJson(zero.toSaveJson());
+    assert(zeroLoaded.processTime() == MessageTime(0.dur!"msecs"));
+    // absent key / no save_data / legacy doc / corrupt value -> NoProcessingTime
+    assert(Message(Role.assistant, userQuery: false, content: "x", thinking: null).processTime()
+            .has!NoProcessingTime);
+    auto legacy = Message();
+    legacy.fromJson(parseJSON(`{"role": "assistant", "content": "old"}`));
+    assert(legacy.processTime().has!NoProcessingTime);
+    auto corrupt = Message();
+    corrupt.fromJson(parseJSON(
+            `{"role": "assistant", "content": "c", "save_data": {"processMs": "fast"}}`));
+    assert(corrupt.processTime().has!NoProcessingTime);
+    // negative stored -> negative Duration
+    auto neg = Message();
+    neg.fromJson(parseJSON(
+            `{"role": "assistant", "content": "n", "save_data": {"processMs": -1200}}`));
+    assert(neg.processTime() == MessageTime(-1200.dur!"msecs"));
+    // removal keeps the other saveData keys; fresh message stays key-free
+    auto kept = Message(Role.assistant, userQuery: false, content: "k", thinking: null);
+    kept.saveData["other"] = "v";
+    kept.setProcessTime(MessageTime(5.dur!"msecs"));
+    kept.setProcessTime(MessageTime(NoProcessingTime()));
+    assert(("other" in kept.saveData) !is null);
+    assert(("processMs" in kept.saveData) is null);
+    assert(Message(Role.assistant, userQuery: false, content: "f", thinking: null).saveData
+            == JSONValue.init);
+    // REST toJson never emits the key
+    auto rest = Message(Role.assistant, userQuery: false, content: "r", thinking: null);
+    rest.setProcessTime(MessageTime(7.dur!"msecs"));
+    assert(("processMs" in rest.toJson()) is null);
+}
+
+@("ToolMessage processTime round-trips through save_data") unittest {
+    auto t = ToolMessage(null, JSONValue.emptyArray);
+    t.setProcessTime(MessageTime(42.dur!"msecs"));
+    auto loaded = ToolMessage();
+    loaded.fromJson(t.toSaveJson());
+    assert(loaded.processTime() == MessageTime(42.dur!"msecs"));
+}
+
+@("ToolResponse processTime round-trips through save_data") unittest {
+    auto t = ToolResponse(content: "r", toolCallId: "1", toolName: "t", success: true);
+    t.setProcessTime(MessageTime(42.dur!"msecs"));
+    auto loaded = ToolResponse();
+    loaded.fromJson(t.toSaveJson());
+    assert(loaded.processTime() == MessageTime(42.dur!"msecs"));
+}
+
 @("pure-legacy file gains boundaries at user-query positions")
 unittest {
     auto chat = Chat();
@@ -1620,7 +1735,7 @@ unittest {
     auto dialogue = chat.getDialogueHistory;
     auto trace = chat.getReasoningTrace;
 
-    // Dual classification: the whole entry appears in both projections —
+    // Dual classification: the whole entry appears in both projections -
     // the dialogue indexer indexes the content (and strips thinking), the
     // reasoning indexer uses the thinking. One message cannot be split
     // across projections.
@@ -1665,7 +1780,7 @@ unittest {
     auto dialogue = chat.getDialogueHistory;
     auto trace = chat.getReasoningTrace;
 
-    assert(dialogue.length == 1); // only the query — no final text response
+    assert(dialogue.length == 1); // only the query - no final text response
     assert(dialogue[0].match!((Message m) => m.isUserQuery, (_) => false));
     assert(trace.length == 1); // the thinking string is reasoning material
     assert(trace[0].match!((Message m) => m.thinking == "reasoning without a text response",

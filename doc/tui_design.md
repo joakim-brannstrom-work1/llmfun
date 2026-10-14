@@ -120,6 +120,41 @@ The TUI supports seven message types, each with distinct color coding. See `Chat
 
 Messages can contain collapsible **thinking/reasoning** content (the `thinking` field in `ChatMessageParam`), displayed as expandable sections within the message.
 
+### Message header decoration ([NR] + [TIME])
+
+Persistent chat messages render a decorated header: `[NR] <summary>`
+plus a ` [TIME]` suffix when a processing time was measured.
+
+- **NR** is the message's 1-based ordinal among the session's
+  displayed persistent messages. It is **not stored** — it is a pure
+  function of the persisted session file (the displayable predicate
+  over the history) and is derived at send time (live turn, user
+  echo) and at replay time (session switch, startup) on the AppAgent
+  actor thread. `/clear` (session `clear()`) restarts numbering at
+  [1]. Any instance loading the same file replays the same NRs
+  (cross-instance comparable).
+- **TIME** is measured only where the work happened: the LLM-call
+  `Duration` for assistant/tool-call lines, the per-call tool
+  execution `Duration` for tool results. In memory it is
+  `MessageTime = SumType!(Duration, NoProcessingTime)`; it persists
+  as a millisecond number under `save_data.processMs` (absent key =
+  `NoProcessingTime` — never a `0ms` misrepresentation). Unmeasured
+  messages render **no suffix** (there is no unknown-time glyph); a
+  corrupt negative stored value is treated the same (traced, no
+  suffix).
+- Formatting is `my.time.prettyDuration` (mylib,
+  `vendor/mylib/source/my/time.d`): `<1s` → `NNNms`, `<60s` → `S.Ds`
+  (one decimal, truncated), `<1h` → `Mm Ss`, else `Hh Mm`.
+- **Display-only lines are undecorated** (nr = 0 → bare summary):
+  help text, compression/session-operation notices, plugin sends
+  through the unchanged public `sendChatMessage` seam.
+- **One-shot CLI is undecorated**: `TuiBlockedSink` accepts but
+  ignores `(nr, time)` — byte-stable output (OQ3).
+- No C/C++ change: `TUI_API_VERSION` stays 4. The C++ header widget
+  ID embeds the monotonic `entry.id`, so it is stable across frames
+  despite the now-decorated summary; Copy copies the raw message
+  text, not the decorated header.
+
 ### Markdown Support
 
 Markdown renders through the vendored `imgui_rich_md` library (static lib +

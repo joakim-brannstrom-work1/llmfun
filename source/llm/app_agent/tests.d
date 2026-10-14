@@ -41,10 +41,17 @@ import llmfun_tui;
 version (unittest) {
     import llm.common.config : EmbedConfig, RemoteEmbedConfig;
     import llm.common.embedder : Embedder, EmbedResult, EmbedError;
+    import llm.test_util : testArea;
 
-    /// Minimal headless LlmConfig for constructing a real Agent in tests: one code model (never contacted) plus a temp summary prompt file. dataDir is intentionally NOT created so dispose()'s saveState() is a no-op - the tests never write a state.json.
-    ///
-    /// Coupling invariants: the Agent is built with null SkillManager/MetricMonitor/RAG (tolerated by the constructor) and a model name that is never contacted; any future Agent constructor change must keep this helper compiling and passing.
+    // Minimal headless LlmConfig for constructing a real Agent in tests: one
+    // code model (never contacted) plus a temp summary prompt file. dataDir is
+    // intentionally NOT created so dispose()'s saveState() is a no-op - the
+    // tests never write a state.json.
+    //
+    // Coupling invariants: the Agent is built with null
+    // SkillManager/MetricMonitor/RAG (tolerated by the constructor) and a
+    // model name that is never contacted; any future Agent constructor change
+    // must keep this helper compiling and passing.
     package LlmConfig testLlmConfig(string tmpDir) {
         import std.file : mkdirRecurse, write;
         import std.path : buildPath;
@@ -63,6 +70,26 @@ version (unittest) {
         cfg.promptDir = [promptDir.Path];
         cfg.dataDir = buildPath(tmpDir, "no-state").Path;
         return cfg;
+    }
+
+    /// Test seam for runAgent-level tests: `Agent.process` is public and
+    /// virtual, so a subclass can feed the runToCompletion loop canned
+    /// ProcessResults without an HTTP endpoint (same pattern as
+    /// CannedProcessAgent in llm.agent.tests).
+    private class CannedAgent : Agent {
+        import llm.types : ProcessResult;
+        import my.filter : ReFilter;
+
+        ProcessResult[] canned;
+        size_t served;
+
+        this(string name, LlmConfig llmConf) {
+            super(name, llmConf, null, null, null, ReFilter.init);
+        }
+
+        override ProcessResult process(bool delegate() interrupt) @trusted nothrow {
+            return canned[served++];
+        }
     }
 
     // Two-phase exit block fakes: the cheap-model seam for the real worker (module scope:
@@ -175,11 +202,14 @@ unittest {
     assert(reg.execute(app, "/code") == AgentStatus.active);
 }
 
-// TurnID header round-trip: the high-water mark written by `commitActiveSession` survives a `SessionStore.save` and seeds the counter on reload. Exercises the same chain commitActiveSession uses (`extra["next_turn_id"]` -> save -> load -> `Chat.load`) without a live Agent: `Chat` and `SessionStore` cover the whole seam.
+// TurnID header round-trip: the high-water mark written by
+// `commitActiveSession` survives a `SessionStore.save` and seeds the counter
+// on reload. Exercises the same chain commitActiveSession uses
+// (`extra["next_turn_id"]` -> save -> load -> `Chat.load`) without a live
+// Agent: `Chat` and `SessionStore` cover the whole seam.
 @("TurnID header round-trip: high-water mark")
 unittest {
     import std.datetime : Clock;
-    import std.file : mkdirRecurse;
     import std.format : format;
     import std.json : JSONValue, JSONType;
 
@@ -190,10 +220,10 @@ unittest {
 
     // stdTime (100ns resolution) keeps two runs in the same second from colliding on the temp dir.
     auto now = Clock.currTime();
-    auto tmpDir = format("llmfun_test/turnid_commit_%d_%d", now.toUnixTime(), now.stdTime);
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("turnid_commit");
+    ;
     scope (exit)
-        cleanupTurnIdTmp(tmpDir);
+        tmpDir.cleanup();
 
     auto store = new SessionStore(tmpDir.Path);
     auto meta = store.create();
@@ -204,7 +234,8 @@ unittest {
     chat.addUserQuery("second question");
     assert(chat.nextTurnId() == 2);
 
-    // commitActiveSession's persistence seam: header high-water mark -> save, with the same null_ guard as the production path (app_agent/package.d).
+    // commitActiveSession's persistence seam: header high-water mark -> save,
+    // with the same null_ guard as the production path (app_agent/package.d).
     if (meta.extra.type == JSONType.null_) {
         meta.extra = JSONValue.emptyObject;
     }
@@ -227,24 +258,12 @@ unittest {
     }
 }
 
-/// Removes a turn-id test session dir; failures only log (test hygiene).
-private void cleanupTurnIdTmp(string dir) {
-    import std.exception : collectException;
-    import std.file : rmdirRecurse;
-
-    import logger = std.logger;
-
-    try {
-        rmdirRecurse(dir);
-    } catch (Exception e) {
-        logger.trace(e.msg).collectException;
-    }
-}
-
-// Regression: every agent turn that appends persisted content (tool traffic, the final taskDone answer) must be committed by processResult's per-step commit - a turn after the first commit of a run used to be silently dropped on session switch / app restart
+// Regression: every agent turn that appends persisted content (tool traffic,
+// the final taskDone answer) must be committed by processResult's per-step
+// commit - a turn after the first commit of a run used to be silently dropped
+// on session switch / app restart
 @("every agent turn that appends persisted content must be committed")
 unittest {
-    import std.file : exists, mkdirRecurse, rmdirRecurse;
     import std.json : JSONType, JSONValue;
     import std.path : buildPath;
 
@@ -257,12 +276,7 @@ unittest {
     import llm.types : ProcessResult;
     import my.filter : ReFilter;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_process_result_dirty");
-    if (exists(tmpDir))
-        rmdirRecurse(tmpDir);
-    mkdirRecurse(tmpDir);
-    scope (exit)
-        rmdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_process_result_dirty");
 
     auto cfg = testLlmConfig(tmpDir);
     auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
@@ -270,10 +284,15 @@ unittest {
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     app.llmConf = cfg;
     app.sessionStore = store;
-    // AgentApp's ctor leaves agent_ null (production creates it in AppAgentActor.startSetup); tests that drive the Agent assign it manually, as the sibling tests below.
+    // AgentApp's ctor leaves agent_ null (production creates it in
+    // AppAgentActor.startSetup); tests that drive the Agent assign it
+    // manually, as the sibling tests below.
     app.agent_ = new Agent("main", cfg, null, null, null, ReFilter.init);
 
-    // The session as it looks after a committed query: one user message, persisted directly through the store, then activated. Loading resets the app's dirty flag (activateSession, before its replay loop), so the turn below starts from a clean, persisted state.
+    // The session as it looks after a committed query: one user message,
+    // persisted directly through the store, then activated. Loading resets the
+    // app's dirty flag (activateSession, before its replay loop), so the turn
+    // below starts from a clean, persisted state.
     auto meta = store.create();
     JSONValue doc;
     JSONValue userMsg;
@@ -283,7 +302,14 @@ unittest {
     app.activeSession = store.save(meta.id, meta, doc);
     app.switchToSession(meta.id);
 
-    // Turn 2 - appends ONLY agent-layer content, exactly as production does: handleToolCalls adds the taskDone ToolMessage (with the final answer in save_data) and its ToolResponse (agent), process() reports the appended slice through ProcessResult.chat (rval.chat = chat.lastResponses), and runToCompletion hands it to processResult as the step hook (the &this.processResult delegate). Before the fix this turn was never persisted: the flag stayed false and the commit was a no-op, so a session switch/restart lost the final answer.
+    // Turn 2 - appends ONLY agent-layer content, exactly as production does:
+    // handleToolCalls adds the taskDone ToolMessage (with the final answer in
+    // save_data) and its ToolResponse (agent), process() reports the appended
+    // slice through ProcessResult.chat (rval.chat = chat.lastResponses), and
+    // runToCompletion hands it to processResult as the step hook (the
+    // &this.processResult delegate). Before the fix this turn was never
+    // persisted: the flag stayed false and the commit was a no-op, so a
+    // session switch/restart lost the final answer.
     JSONValue call;
     call["id"] = "call_1";
     call["type"] = "function";
@@ -316,7 +342,8 @@ unittest {
     assert(hasFinalAnswer,
             "the final-answer turn must be persisted: a save_data.taskDoneAnswer message must be in the session file");
 
-    // Replaying the persisted doc yields the final-answer message (the replayed chat renders the green FinalAnswer header).
+    // Replaying the persisted doc yields the final-answer message (the
+    // replayed chat renders the green FinalAnswer header).
     Chat replayed;
     replayed.load(saved.doc);
     bool sawFinalAnswer;
@@ -329,10 +356,14 @@ unittest {
     assert(sawFinalAnswer, "the persisted final answer must load back as a ToolMessage");
 }
 
-// Regression: the final-answer turn of a two-turn run. Turn 1 is a user query committed through the app-level submit primitives; turn 2 resets the flag and appends ONLY agent tool traffic (the taskDone ToolMessage carrying the final answer) - its persistence depends entirely on processResult's per-turn dirty-flag set, because the submit path never sets the flag again. That turn used to be silently dropped on session switch / app restart
+// Regression: the final-answer turn of a two-turn run. Turn 1 is a user query
+// committed through the app-level submit primitives; turn 2 resets the flag
+// and appends ONLY agent tool traffic (the taskDone ToolMessage carrying the
+// final answer) - its persistence depends entirely on processResult's per-turn
+// dirty-flag set, because the submit path never sets the flag again. That turn
+// used to be silently dropped on session switch / app restart
 @("final-answer turn after a committed user query is persisted")
 unittest {
-    import std.file : exists, mkdirRecurse, rmdirRecurse;
     import std.json : JSONType, JSONValue;
     import std.path : buildPath;
 
@@ -345,12 +376,9 @@ unittest {
     import llm.types : ProcessResult;
     import my.filter : ReFilter;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_final_answer_persist");
-    if (exists(tmpDir))
-        rmdirRecurse(tmpDir);
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_final_answer_persist");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto cfg = testLlmConfig(tmpDir);
     auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
@@ -453,7 +481,6 @@ unittest {
 /// Regression: a session switch re-applies the cached startup system prompt activateSession clears the chat with `Chat.clear`, which keeps `history[0]`, and loaded docs carry no system entries, so without the re-apply the previous chat's prompt would survive the switch.
 @("session switch re-applies the startup system prompt")
 unittest {
-    import std.file : exists, mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
     import std.sumtype : match;
 
@@ -475,12 +502,9 @@ unittest {
         return found;
     }
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_system_prompt_switch");
-    if (exists(tmpDir))
-        rmdirRecurse(tmpDir);
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_system_prompt_switch");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto cfg = testLlmConfig(tmpDir);
     auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
@@ -572,16 +596,23 @@ unittest {
 }
 
 @("dispatcher-level pending-delete parity")
-
 unittest {
-    // The most safety-critical behavior of the dispatcher: a stale `pendingDeleteId` must never make the next `/delete <n>` confirm-delete without re-prompting. runAgent's parity guard (`query.startsWith("/delete") && !slashCommands_.isRegistered(query)`) clears /delete-prefixed NON-commands; the top rule clears everything else; registered /delete-prefixed commands are left to their handlers. The registry's unknown path does NOT clear pending state.
+    // The most safety-critical behavior of the dispatcher: a stale
+    // `pendingDeleteId` must never make the next `/delete <n>` confirm-delete
+    // without re-prompting. runAgent's parity guard
+    // (`query.startsWith("/delete") && !slashCommands_.isRegistered(query)`)
+    // clears /delete-prefixed NON-commands; the top rule clears everything
+    // else; registered /delete-prefixed commands are left to their handlers.
+    // The registry's unknown path does NOT clear pending state.
     import llm.app_config : UserConfig;
 
     // Blocked UiMessenger - the unknown path writes via writeln, never a null uiMsg dereference.
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     auto stale = SessionId("stale-id");
 
-    // Registered /delete-prefixed command: the dispatcher must NOT clear — the handler owns the delete state machine. deleteprobe's handler does not touch pendingDeleteId, so any dispatcher clear would be visible.
+    // Registered /delete-prefixed command: the dispatcher must NOT clear - the
+    // handler owns the delete state machine. deleteprobe's handler does not
+    // touch pendingDeleteId, so any dispatcher clear would be visible.
     app.registerSlashCommand(SlashCommand("deleteprobe", [], [],
             SlashArgMode.none, 900, (ref AgentApp a, string arg) => AgentStatus.active));
     app.pendingDeleteId = stale;
@@ -589,7 +620,10 @@ unittest {
     assert(app.pendingDeleteId == stale,
             "dispatcher must not clear pending for registered /delete-prefixed commands");
 
-    // `/deletefoo` (unregistered /delete-prefixed typo): the registry's unknown path does not clear pending, so runAgent's guard is the ONLY clearing path. Without it the next `/delete 3` would confirm-delete immediately instead of re-prompting.
+    // `/deletefoo` (unregistered /delete-prefixed typo): the registry's
+    // unknown path does not clear pending, so runAgent's guard is the ONLY
+    // clearing path. Without it the next `/delete 3` would confirm-delete
+    // immediately instead of re-prompting.
     app.pendingDeleteId = stale;
     assert(app.runAgent("/deletefoo") == AgentStatus.active);
     assert(app.pendingDeleteId == SessionId.init,
@@ -600,7 +634,8 @@ unittest {
     assert(app.runAgent("/nope") == AgentStatus.active);
     assert(app.pendingDeleteId == SessionId.init, "non-/delete inputs clear via the top rule");
 
-    // `/delete` (registered, handler-owned): dispatch still reaches the handler; the empty-arg error path clears pending.
+    // `/delete` (registered, handler-owned): dispatch still reaches the
+    // handler; the empty-arg error path clears pending.
     app.pendingDeleteId = stale;
     assert(app.runAgent("/delete") == AgentStatus.active);
     assert(app.pendingDeleteId == SessionId.init);
@@ -660,14 +695,11 @@ unittest {
 // sidebar rename input validation (empty title rejected, long non-empty title accepted - no length cap, matches /rename)
 @("sidebar rename input validation")
 unittest {
-    import std.file : exists, rmdirRecurse, mkdirRecurse;
-    import std.path : buildPath;
     import std.array : replicate;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_rename_validate");
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_rename_validate");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto store = new SessionStore(tmpDir.Path);
     auto meta = store.create();
@@ -693,24 +725,27 @@ unittest {
 // error emitted, active meta unchanged, list still refreshed)
 @("sidebar rename-none error handling")
 unittest {
-    import std.file : exists, rmdirRecurse, mkdirRecurse, write;
+    import std.file : write;
     import std.path : buildPath;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_rename_none");
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_rename_none");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto store = new SessionStore(tmpDir.Path);
     auto meta = store.create();
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     app.sessionStore = store;
     app.activeSession = meta;
-    // Recording sink: the handler's error chat message and the sendSessionList() refresh are recorded synchronously, so the test can observe "error emitted" and "list still refreshed" without a UI thread or a mailbox.
+    // Recording sink: the handler's error chat message and the
+    // sendSessionList() refresh are recorded synchronously, so the test can
+    // observe "error emitted" and "list still refreshed" without a UI thread
+    // or a mailbox.
     auto sink = new TuiRecordingSink();
     app.uiMsg = new UiMessenger(sink);
 
-    // Unknown id (valid format, no file): rename -> none -> error message, active meta unchanged, list still refreshed.
+    // Unknown id (valid format, no file): rename -> none -> error message,
+    // active meta unchanged, list still refreshed.
     auto unknown = SessionId("20260618-153045-ffff");
     app.doSidebarRename(unknown, "New title");
     assert(sink.lastChatMessage() == "error: Failed to rename session 'ffff'.",
@@ -733,11 +768,7 @@ unittest {
 
 @(
         "stale pending-delete clearing by the sidebar New handler and store-exception degradation in a sidebar handler")
-
 unittest {
-    import std.file : exists, rmdirRecurse, mkdirRecurse;
-    import std.path : buildPath;
-
     // A store whose create() throws simulates a disk-full failure.
     static class ThrowingStore : SessionStore {
         this(string dir) {
@@ -749,38 +780,36 @@ unittest {
         }
     }
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_new_throw");
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_new_throw");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     app.sessionStore = new ThrowingStore(tmpDir);
     auto stale = SessionId("stale-pending");
     app.pendingDeleteId = stale;
 
-    // The handler clears pendingDeleteId on entry even though the create() below throws; the exception is caught and logged as a chat message - the receive loop keeps running.
+    // The handler clears pendingDeleteId on entry even though the create()
+    // below throws; the exception is caught and logged as a chat message - the
+    // receive loop keeps running.
     app.doSidebarNew();
     assert(app.pendingDeleteId == SessionId.init,
             "New handler must clear stale pending delete on entry");
 }
 
-// sidebar snapshot keeps store order (updatedAt descending) with the active marker; clicking must not reorder
-@("sidebar snapshot keeps store order")
+@(
+        "sidebar snapshot keeps store order (updatedAt descending) with the active marker; clicking must not reorder")
 unittest {
-    import std.file : exists, mkdirRecurse, rmdirRecurse, write;
+    import std.file : write;
     import std.format : format;
     import std.path : buildPath;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_snapshot_order");
-    // Clear any stale dir from a crashed earlier run so the deterministic store-order precondition cannot be disturbed by leftover files.
-    if (exists(tmpDir))
-        rmdirRecurse(tmpDir);
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_snapshot_order");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
-    // Three sessions with distinct updatedAt so the store order is deterministic: a (100) < c (200) < b (300) -> store order [b, c, a].
+    // Three sessions with distinct updatedAt so the store order is
+    // deterministic: a (100) < c (200) < b (300) -> store order [b, c, a].
     auto a = SessionId("20260618-153045-a1b2");
     auto b = SessionId("20260618-153045-b3c4");
     auto c = SessionId("20260618-153045-c5d6");
@@ -801,7 +830,8 @@ unittest {
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     app.sessionStore = store;
     app.activeSession.id = c; // the middle one is active
-    // Recording sink: each sendSessionList() snapshot is recorded synchronously (same pattern as the rename-none test).
+    // Recording sink: each sendSessionList() snapshot is recorded
+    // synchronously (same pattern as the rename-none test).
     auto sink = new TuiRecordingSink();
     app.uiMsg = new UiMessenger(sink);
 
@@ -843,20 +873,17 @@ unittest {
     assert(sink.countOf("sessionList") == 4, "sendSessionList must emit the empty snapshot");
 }
 
-// navigation never rewrites a session (updatedAt unchanged) and a dirty chat commits with an updatedAt bump
-@("navigation never rewrites a session")
+@(
+        "navigation never rewrites a session (updatedAt unchanged) and a dirty chat commits with an updatedAt bump")
 unittest {
-    import my.filter : ReFilter;
-    import std.file : exists, mkdirRecurse, rmdirRecurse, write;
+    import std.file : write;
     import std.format : format;
     import std.path : buildPath;
+    import my.filter : ReFilter;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_switch_no_bump");
-    if (exists(tmpDir))
-        rmdirRecurse(tmpDir);
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_switch_no_bump");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto cfg = testLlmConfig(tmpDir);
     auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
@@ -896,7 +923,8 @@ unittest {
             "switching back must not bump updatedAt either");
     assert(app.activeSession.id == newer, "setup: active is the newer session again");
 
-    // A real content change (a user query) marks the chat dirty and the commit bumps updatedAt.
+    // A real content change (a user query) marks the chat dirty and the commit
+    // bumps updatedAt.
     const long beforeQuery = app.activeSession.updatedAt;
     app.agent_.addUserQuery("hello newer");
     app.chatDirty = true;
@@ -911,19 +939,15 @@ unittest {
 }
 
 @("dispose() sweeps empty non-active sessions on exit")
-
 unittest {
-    import my.filter : ReFilter;
-    import std.file : exists, mkdirRecurse, rmdirRecurse;
+    import std.file : exists;
     import std.json : JSONValue;
     import std.path : buildPath;
+    import my.filter : ReFilter;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_dispose_sweep");
-    if (exists(tmpDir))
-        rmdirRecurse(tmpDir);
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_dispose_sweep");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto cfg = testLlmConfig(tmpDir);
 
@@ -948,7 +972,9 @@ unittest {
     app.sessionStore = store;
     app.activeSession = active;
     app.agent_ = new Agent("main", cfg, null, null, null, ReFilter.init);
-    // The in-memory chat carries the active session's user message, as in production after a query: the dirty flag is set so commitActiveSession() persists it BEFORE the sweep.
+    // The in-memory chat carries the active session's user message, as in
+    // production after a query: the dirty flag is set so commitActiveSession()
+    // persists it BEFORE the sweep.
     app.agent_.addUserQuery("active hello");
     app.chatDirty = true;
 
@@ -966,24 +992,19 @@ unittest {
 }
 
 @("dispose() with a null session store")
-
 unittest {
     import my.filter : ReFilter;
-    import std.file : exists, mkdirRecurse, rmdirRecurse;
-    import std.path : buildPath;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_dispose_null_store");
-    if (exists(tmpDir))
-        rmdirRecurse(tmpDir);
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_dispose_null_store");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto cfg = testLlmConfig(tmpDir);
 
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     app.llmConf = cfg;
-    // A failed setupSession leaves the store null while agent_ is set and the active id empty; dispose() must not dereference the store.
+    // A failed setupSession leaves the store null while agent_ is set and the
+    // active id empty; dispose() must not dereference the store.
     app.agent_ = new Agent("main", cfg, null, null, null, ReFilter.init);
     app.dispose(); // must not throw
     assert(app.agent_ is null, "dispose() must clear the agent");
@@ -991,16 +1012,13 @@ unittest {
 
 @("dispose() keeps the active session even when empty")
 unittest {
-    import my.filter : ReFilter;
-    import std.file : exists, mkdirRecurse, rmdirRecurse;
+    import std.file : exists;
     import std.path : buildPath;
+    import my.filter : ReFilter;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_dispose_all_empty");
-    if (exists(tmpDir))
-        rmdirRecurse(tmpDir);
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_dispose_all_empty");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto cfg = testLlmConfig(tmpDir);
 
@@ -1022,23 +1040,23 @@ unittest {
             "empty non-active session must be swept on exit");
 }
 
-// switch-after-compression resets stat().startContext to the target chat's approxContextSize
 //
-// Regression lock for the activate pipeline: activateSession must call syncContextFromChat() AFTER chat.load so prevStat no longer carries the previous session's context. The "compressed" state is modeled headlessly (no server call): loading the small session and syncing leaves exactly the invariant a real compression leaves behind (prevStat.startContext == current chat context). A stale value would fail the asserts below.
-
+// Regression lock for the activate pipeline: activateSession must call
+// syncContextFromChat() AFTER chat.load so prevStat no longer carries the
+// previous session's context. The "compressed" state is modeled headlessly (no
+// server call): loading the small session and syncing leaves exactly the
+// invariant a real compression leaves behind (prevStat.startContext == current
+// chat context). A stale value would fail the asserts below.
+@("switch-after-compression resets stat().startContext to the target chat's approxContextSize")
 unittest {
     import my.filter : ReFilter;
     import std.array : replicate;
-    import std.file : exists, mkdirRecurse, rmdirRecurse;
     import std.json : JSONValue;
     import std.path : buildPath;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_switch_after_compression");
-    if (exists(tmpDir))
-        rmdirRecurse(tmpDir);
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_switch_after_compression");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto cfg = testLlmConfig(tmpDir);
 
@@ -1072,21 +1090,30 @@ unittest {
     app.activeSession = small;
     app.agent_ = new Agent("main", cfg, null, null, null, ReFilter.init);
 
-    // Model the post-compression state of the small session: the agent chat holds the (small) session history and prevStat is synced from it. staleStart is the value that would survive the switch if activateSession ever stopped calling syncContextFromChat.
+    // Model the post-compression state of the small session: the agent chat
+    // holds the (small) session history and prevStat is synced from it.
+    // staleStart is the value that would survive the switch if activateSession
+    // ever stopped calling syncContextFromChat.
     app.agent_.chat.load(smallDoc);
     app.agent_.syncContextFromChat();
     const long staleStart = app.agent_.stat().startContext;
-    // Modeling precondition only: syncContextFromChat() sets prevStat from the chat by construction, so this cannot fail for a production bug - it just confirms the model matches what a real compression leaves.
+    // Modeling precondition only: syncContextFromChat() sets prevStat from the
+    // chat by construction, so this cannot fail for a production bug - it just
+    // confirms the model matches what a real compression leaves.
     assert(staleStart == app.agent_.chat.approxContextSize,
             "setup: prevStat must hold the small session's context");
 
     app.switchToSession(large.id);
 
     assert(app.activeSession.id == large.id, "switch must land on the target session");
-    // The regression lock: startContext is reset to the TARGET chat's size. A stale compressed value (staleStart) fails this assert.
+    // The regression lock: startContext is reset to the TARGET chat's size. A
+    // stale compressed value (staleStart) fails this assert.
     assert(app.agent_.stat().startContext == app.agent_.chat.approxContextSize,
             "stat().startContext must be reset to the target chat's context after switching");
-    // Exact expectation derived from the payload defined above, immune to payload-size edits and to any plausible ApproxTokenSize change (both sides scale together), and still fails on a stale prevStat. The large payload is 400 'x' chars, the small one "short" (5 chars).
+    // Exact expectation derived from the payload defined above, immune to
+    // payload-size edits and to any plausible ApproxTokenSize change (both
+    // sides scale together), and still fails on a stale prevStat. The large
+    // payload is 400 'x' chars, the small one "short" (5 chars).
     import llm.common.config : ApproxTokenSize; // public, stable
     const long expectedLarge = largeUser["content"].str.length / ApproxTokenSize; // ~200
     assert(app.agent_.stat().startContext == expectedLarge,
@@ -1095,29 +1122,28 @@ unittest {
             "target context must be clearly larger than the stale compressed value");
 }
 
-// delete-active falls back to the most recently updated remaining session and the snapshot drops the deleted id
-
+@(
+        "delete-active falls back to the most recently updated remaining session and the snapshot drops the deleted id")
 unittest {
-    import my.filter : ReFilter;
-    import std.file : exists, mkdirRecurse, rmdirRecurse, write;
+    import std.file : write, exists;
     import std.format : format;
     import std.path : buildPath;
+    import my.filter : ReFilter;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_delete_active_fallback");
-    if (exists(tmpDir))
-        rmdirRecurse(tmpDir);
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_delete_active_fallback");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto cfg = testLlmConfig(tmpDir);
     auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
 
-    // Three sessions with distinct updatedAt: a (400, the active one to delete) > b (300, the expected fallback) > c (200).
+    // Three sessions with distinct updatedAt: a (400, the active one to
+    // delete) > b (300, the expected fallback) > c (200).
     auto a = SessionId("20260618-153045-a1b2");
     auto b = SessionId("20260618-153045-b3c4");
     auto c = SessionId("20260618-153045-c5d6");
-    // Test-only helper: userContent must be JSON-safe ASCII (no escaping). createdAt is arbitrary (100): only updatedAt matters for ordering.
+    // Test-only helper: userContent must be JSON-safe ASCII (no escaping).
+    // createdAt is arbitrary (100): only updatedAt matters for ordering.
     void writeSession(SessionId id, long updatedAt, string userContent) {
         write(buildPath(tmpDir, "chat", id.get ~ ".json"), format(
                 `{"title": "T", "createdAt": 100, "updatedAt": %d,` ~ `"messages": [{"role": "user", "content": "%s"}]}`,
@@ -1135,7 +1161,9 @@ unittest {
     auto aFile = store.load(a);
     assert(hasValue(aFile), "setup: active session file must load");
     app.activeSession = orElse(aFile, SessionFile()).meta;
-    // Recording sink: the fallback activation's sendSessionList() and the confirmation chat message are recorded synchronously (same pattern as the rename-none test).
+    // Recording sink: the fallback activation's sendSessionList() and the
+    // confirmation chat message are recorded synchronously (same pattern as
+    // the rename-none test).
     auto sink = new TuiRecordingSink();
     app.uiMsg = new UiMessenger(sink);
 
@@ -1150,7 +1178,8 @@ unittest {
     assert(exists(buildPath(tmpDir, "chat", c.get ~ ".json")),
             "the other remaining session file must survive");
 
-    // Snapshot: deleted id absent; the fallback is the most recently updated remaining session, so it leads the store order and is marked active.
+    // Snapshot: deleted id absent; the fallback is the most recently updated
+    // remaining session, so it leads the store order and is marked active.
     auto snap = sink.lastSessionList();
     assert(snap.length == 2, "snapshot must exclude the deleted id");
     assert(snap[0].id == b && snap[0].isActive,
@@ -1158,31 +1187,30 @@ unittest {
     assert(snap[1].id == c && !snap[1].isActive);
     assert(sink.countOf("sessionList") == 1, "delete-active must refresh the sidebar snapshot");
 
-    // Confirmation chat message on the fallback path (the exact string locks the user-facing wording). The replayed history went through chatThinkMessage, so the confirmation is the only recorded chatMessage.
+    // Confirmation chat message on the fallback path (the exact string locks
+    // the user-facing wording). The replayed history went through
+    // chatThinkMessage, so the confirmation is the only recorded chatMessage.
     assert(sink.chatMessages.length == 1 && sink.chatMessages[0] == "Session deleted: a1b2. Switched to 'T'.",
             "delete-active must emit the switch confirmation, got: " ~ sink.lastChatMessage());
 }
 
-// corrupt session files are skipped by listing and the sweep, and switchToSession keeps the current session on load failure
-@("corrupt session files are skipped by listing and the sweep")
+@("corrupt session files are skipped by listing and the sweep, and switchToSession keeps the current session on load failure")
 unittest {
-    import my.filter : ReFilter;
-    import std.file : exists, mkdirRecurse, rmdirRecurse, write;
+    import std.file : write, exists;
     import std.path : buildPath;
+    import my.filter : ReFilter;
 
-    auto tmpDir = buildPath("llmfun_test", "app_agent_corrupt_files");
-    if (exists(tmpDir))
-        rmdirRecurse(tmpDir);
-    mkdirRecurse(tmpDir);
+    auto tmpDir = testArea("app_agent_corrupt_files");
     scope (exit)
-        rmdirRecurse(tmpDir);
+        tmpDir.cleanup;
 
     auto cfg = testLlmConfig(tmpDir);
     auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
     auto good = store.create();
     auto emptyOther = store.create();
 
-    // Corrupt file with a valid id: present on disk, must never be listed, loaded, or swept.
+    // Corrupt file with a valid id: present on disk, must never be listed,
+    // loaded, or swept.
     auto corrupt = SessionId("20260618-153046-0bad");
     auto corruptPath = buildPath(tmpDir, "chat", corrupt.get ~ ".json");
     write(corruptPath, "{ not json !!!");
@@ -1200,11 +1228,15 @@ unittest {
     auto goodFile = store.load(good.id);
     assert(hasValue(goodFile), "setup: good session file must load");
     app.activeSession = orElse(goodFile, SessionFile()).meta;
-    // Recording sink: snapshots and chat messages are observed synchronously (same pattern as the rename-none test).
+    // Recording sink: snapshots and chat messages are observed synchronously
+    // (same pattern as the rename-none test).
     auto sink = new TuiRecordingSink();
     app.uiMsg = new UiMessenger(sink);
 
-    // Snapshot excludes the corrupt file. Both remaining sessions were created in the same second (updatedAt tie, id-desc tiebreak), so the exact order is not asserted here - only membership and the active marker (order semantics are covered by the snapshot-order test).
+    // Snapshot excludes the corrupt file. Both remaining sessions were created
+    // in the same second (updatedAt tie, id-desc tiebreak), so the exact order
+    // is not asserted here - only membership and the active marker (ordering
+    // is asserted by the store-order snapshot test).
     app.sendSessionList();
     auto snap = sink.lastSessionList();
     assert(snap.length == 2, "snapshot must exclude the corrupt file");
@@ -1220,13 +1252,19 @@ unittest {
     }
     assert(sink.countOf("sessionList") == 1, "sendSessionList must emit the snapshot");
 
-    // switchToSession on the corrupt id: error message, current session kept (the exact string locks the user-facing wording).
+    // switchToSession on the corrupt id: error message, current session kept
+    // (the exact string locks the user-facing wording).
     app.switchToSession(corrupt);
     assert(sink.lastChatMessage() == "error: Cannot load session '20260618-153046-0bad' (not found or corrupt). Staying in current session.",
             "switchToSession must emit the cannot-load error");
     assert(app.activeSession.id == good.id, "a failed load must keep the current session unchanged");
 
-    // The sweep removes only list() candidates: the corrupt file is never a candidate and survives untouched, the empty non-active session is removed, and the kept (active) id is exempted. Note: good is empty from creation (store.create() writes messages: []); the failed switch commits nothing (the chat is clean), so the keep-exemption is what protects it here; non-empty survival is covered by the store-level tests.
+    // The sweep removes only list() candidates: the corrupt file is never a
+    // candidate and survives untouched, the empty non-active session is
+    // removed, and the kept (active) id is exempted. Note: good is empty from
+    // creation (store.create() writes messages: []); the failed switch commits
+    // nothing (the chat is clean), so the keep-exemption is what protects it
+    // here; non-empty survival is covered by the store-level tests.
     auto swept = store.sweepEmptySessions(good.id);
     assert(swept.length == 1 && swept[0] == emptyOther.id,
             "sweep must remove only the empty non-active session");
@@ -1237,7 +1275,6 @@ unittest {
             "the kept session file must survive the sweep");
 }
 
-// ---------------------------------------------------------------------------
 // AppAgentActor integration
 //
 // Exercise the actor shell around AgentApp on a real my.actor System. The
@@ -1246,7 +1283,6 @@ unittest {
 // in llm.rag and llm.mcp_server); every test creates the System with the
 // no-arg makeSystem() and shuts it down in scope(exit) so no pool thread
 // outlives the test.
-// ---------------------------------------------------------------------------
 
 /// Mirrors the onException body AppAgentActor uses when a handler throws:
 /// report the failure to the supervisor, then exit with
@@ -1432,9 +1468,9 @@ unittest {
 
     // Runtime verification of the production wiring: the actor
     // DialogueIndex ctor with a NULL
-    // embedder factory — production shape: the worker resolves from the
+    // embedder factory - production shape: the worker resolves from the
     // process-global registry, empty in tests, so the worker degrades
-    // and its one-shot DiDegraded lands on sup, where it is stashed —
+    // and its one-shot DiDegraded lands on sup, where it is stashed -
     // must leave a LIVE worker handle, and the worker must answer a
     // drain. The RiJob-receipt half is covered by the reasoning_index
     // E2E test (same ctor, capture actor).
@@ -1469,13 +1505,15 @@ unittest {
 // the same phase methods the actor funnel calls: beginDispose (what startExit does for
 // uiTerminated) must answer DiDrained within ~10 s from the real worker BEFORE finishDispose
 // (what finishExit does) truncates the session store. The full startSetup is deliberately not
-// driven: it also spawns the interactive TUI actor (terminal I/O), which is out of unittest
-// scope -- semantics over realism, per the migration note. The AgentDone half runs the REAL
+// driven: it also spawns the interactive TUI actor (terminal I/O), which is out of
+// unittest scope: the test covers the exit sequence, not full startup realism.
+// The AgentDone half runs the REAL
 // actor funnel (startExit -> finishExit -> agentDone) on its default no-drain app: the actor's
 // private app field cannot be wired without startSetup, so the funnel's phase-1/phase-2 code
 // (beginDispose/finishDispose on a live AgentApp) is proven on the real worker above, and the
 // funnel's reply/cleanup/AgentDone path here.
-@"agent exit: the real worker drains before the store is truncated"unittest {
+@("agent exit: the real worker drains before the store is truncated")
+unittest {
     import core.thread : Thread;
     import std.datetime : Clock;
     import std.file : exists, mkdirRecurse;
@@ -1579,4 +1617,557 @@ unittest {
         code = ad.code;
     });
     assert(got && code == 0, "expected AgentDone(0) from the actor funnel within ~10 s");
+}
+
+// NR derivation: the single shared displayable predicate drives both the
+// ordinal walk and the display decision - live batches are numbered by
+// offset + position over the contiguous history tail, /clear restarts the
+// count at [1], and a session switch replays the other session's own NRs
+// (a measured turn shows the same [NR] and [TIME] as live).
+@("NR derivation: predicate, live offset, clear restart, session switch")
+unittest {
+    import std.path : buildPath;
+    import std.json : JSONValue;
+    import std.datetime : Duration, dur;
+    import llm.agent : Agent;
+    import llm.chat;
+    import llm.session : SessionStore;
+    import llm.types : ProcessResult;
+    import my.filter : ReFilter;
+
+    auto tmpDir = testArea("app_agent_nr");
+    scope (exit)
+        tmpDir.cleanup;
+
+    auto cfg = testLlmConfig(tmpDir);
+    auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
+
+    // 1. Predicate: the four arms, plus the two non-displayable Message cases
+    assert(isDisplayable(Chat.MessageT(Message(Role.assistant, false, "a", null))));
+    assert(isDisplayable(Chat.MessageT(Message(Role.user, true, "query", null))));
+    assert(!isDisplayable(Chat.MessageT(Message(Role.user, false, "nudge", null))));
+    assert(!isDisplayable(Chat.MessageT(Message(Role.system, false, "sys", null))));
+    JSONValue call;
+    call["id"] = "c1";
+    call["type"] = "function";
+    JSONValue fn;
+    fn["name"] = "querySemantic";
+    fn["arguments"] = "{}";
+    call["function"] = fn;
+    assert(isDisplayable(Chat.MessageT(ToolMessage(null, JSONValue([call])))));
+    assert(isDisplayable(Chat.MessageT(ToolResponse("ok", "c1", "querySemantic", true))));
+    assert(!isDisplayable(Chat.MessageT(ToolResponse("done", "c2", "taskDone", true))));
+    assert(isDisplayable(Chat.MessageT(VisionMessage("see", "data:image/png;base64,x"))));
+    assert(displayableCount([
+        Chat.MessageT(Message(Role.system, false, "s", null)),
+        Chat.MessageT(Message(Role.user, false, "n", null)),
+        Chat.MessageT(Message(Role.user, true, "q", null)),
+        Chat.MessageT(Message(Role.assistant, false, "a", null))
+    ]) == 2);
+
+    // 2. Live batch: offset + position; hidden result and nudge consume none
+    auto app = AgentApp(UserConfig.AgentChatConfig.init);
+    app.llmConf = cfg;
+    app.sessionStore = store;
+    app.agent_ = new Agent("main", cfg, null, null, null, ReFilter.init);
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
+    app.activeSession = store.create();
+
+    app.agent_.chat.setSystemPrompt("sys");
+    app.agent_.chat.add(Message(Role.assistant, false, "a1", null));
+    app.agent_.chat.add(Message(Role.assistant, false, "a2", null)); // offset = 2
+
+    auto q = Message(Role.user, true, "hello", null); // echoed before addUserQuery
+    auto a3 = Message(Role.assistant, false, "hello back", null);
+    a3.setProcessTime(MessageTime(432.dur!"msecs"));
+    auto tm = ToolMessage("thinking", JSONValue([call]));
+    tm.setProcessTime(MessageTime(120.dur!"msecs"));
+    auto tr = ToolResponse("ok", "c1", "querySemantic", true);
+    tr.setProcessTime(MessageTime(42.dur!"msecs"));
+    auto trh = ToolResponse("done", "c2", "taskDone", true); // hidden
+    auto nudge = Message(Role.user, false, "keep going", null);
+
+    // Mirror the production flow: the agent appends the turn's messages to
+    // the chat BEFORE the step hook (processResult) sees them, so the batch
+    // is the contiguous tail of the history.
+    app.agent_.chat.add(q);
+    app.agent_.chat.add(a3);
+    app.agent_.chat.add(tm);
+    app.agent_.chat.add(tr);
+    app.agent_.chat.add(trh);
+    app.agent_.chat.add(nudge);
+
+    ProcessResult result;
+    result.chat = [
+        Chat.MessageT(q), Chat.MessageT(a3), Chat.MessageT(tm),
+        Chat.MessageT(tr), Chat.MessageT(trh), Chat.MessageT(nudge)
+    ];
+    app.processResult(result);
+
+    assert(sink.stamps.length == 3, "user query, hidden result and nudge are not displayed live");
+    assert(sink.calls[0].kind == "chatThinkMessage"
+            && sink.calls[0].payload.startsWith("assistant: hello back"));
+    assert(sink.stamps[0].nr == 4); // 2 (offset) + 2nd displayable of the batch (q consumed 3)
+    assert(sink.stamps[0].time.match!((Duration d) { return d == 432.dur!"msecs"; },
+            (NoProcessingTime) { return false; }));
+    assert(sink.stamps[1].nr == 5);
+    assert(sink.stamps[2].nr == 6);
+    assert(sink.stamps[2].time.match!((Duration d) { return d == 42.dur!"msecs"; },
+            (NoProcessingTime) { return false; }));
+
+    // 3. taskDone finalAnswer carries the same (nr, time) as its tool-call line
+    sink.chatMessages.length = 0;
+    sink.stamps.length = 0;
+    JSONValue sd;
+    sd["taskDoneAnswer"] = JSONValue("The answer is 4.");
+    auto tm2 = ToolMessage(null, JSONValue([call]), JSONValue.init, sd);
+    tm2.setProcessTime(MessageTime(555.dur!"msecs"));
+    app.agent_.chat.add(tm2);
+    app.agent_.chat.add(trh);
+    ProcessResult r2;
+    r2.chat = [Chat.MessageT(tm2), Chat.MessageT(trh)];
+    app.processResult(r2);
+    assert(sink.chatMessages.length == 0); // tool-call line is a think message; hidden result sends nothing
+    assert(sink.stamps.length == 2, "tool-call line and finalAnswer are both recorded");
+    assert(sink.stamps[0].nr == 7 && sink.stamps[1].nr == 7); // same ordinal
+    assert(sink.stamps[1].time == sink.stamps[0].time);
+
+    // 4. /clear: history truncated to the system prompt → next is [1]
+    app.agent_.chat.clear;
+    ProcessResult r3;
+    r3.chat = [Chat.MessageT(Message(Role.assistant, false, "fresh", null))];
+    app.processResult(r3);
+    assert(sink.stamps[2].nr == 1);
+
+    // 5. Session switch: the other session's own NRs from [1], and a replay
+    //    of a measured turn shows the same [NR] and [TIME] as live
+    JSONValue doc;
+    JSONValue m1;
+    m1["role"] = "user";
+    m1["content"] = "what is 2+2?";
+    m1["save_data"] = JSONValue(["user": JSONValue(true)]);
+    JSONValue m2;
+    m2["role"] = "assistant";
+    m2["content"] = "4";
+    JSONValue sd2;
+    sd2["processMs"] = JSONValue(1200);
+    m2["save_data"] = sd2;
+    doc["messages"] = JSONValue([m1, m2]);
+    auto metaB = store.create();
+    store.save(metaB.id, metaB, doc); // sibling-test order: persist before activating
+    app.switchToSession(metaB.id); // commit A, then load + replay B from scratch
+    assert(sink.stamps[sink.stamps.length - 2].nr == 1); // "what is 2+2?" replayed as [1]
+    assert(sink.stamps[sink.stamps.length - 1].nr == 2);
+    assert(sink.stamps[sink.stamps.length - 1].time.match!((Duration d) {
+            return d == 1200.dur!"msecs";
+        }, (NoProcessingTime) { return false; }));
+}
+
+// The user-query echo is sent from runAgent AFTER the turn-start doCompress.
+// Its NR is the displayable count of the possibly-compressed history - the
+// query's true ordinal, no +1, and a compression that purged displayable
+// prefix messages cannot misnumber it (the count is read after doCompress
+// returns, so any rewrite is reflected).
+// The isActive() guard keeps the one-shot CLI output byte-stable (the
+// startSetup one-shot branch runs with the default TuiBlockedSink, which is
+// inactive and has no chat line for the prompt today).
+@("runAgent: user-query echo NR is the query's true ordinal")
+unittest {
+    import std.path : buildPath;
+    import std.datetime : Duration, dur;
+    import llm.chat;
+    import llm.session : SessionStore;
+    import llm.types : ProcessResult;
+
+    auto tmpDir = testArea("app_agent_echo");
+    scope (exit)
+        tmpDir.cleanup;
+
+    auto cfg = testLlmConfig(tmpDir);
+    auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
+
+    auto app = AgentApp(UserConfig.AgentChatConfig.init);
+    app.llmConf = cfg;
+    app.sessionStore = store;
+    auto agent = new CannedAgent("main", cfg);
+    app.agent_ = agent;
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
+    app.activeSession = store.create();
+    clearStopAgent();
+
+    // Non-displayable: consumes no ordinal. Set first: setSystemPrompt
+    // replaces history[0] (it would clobber the first seeded message).
+    app.agent_.chat.setSystemPrompt("sys");
+    // Two prior displayable messages: the query lands at ordinal 3.
+    app.agent_.chat.add(Message(Role.assistant, false, "a1", null));
+    app.agent_.chat.add(Message(Role.assistant, false, "a2", null));
+
+    agent.canned = [ProcessResult(status: ProcessResult.Status.networkFailure)];
+    app.runAgent("hello");
+
+    // The echo is the first persistent send, numbered 3 - the query's true
+    // ordinal in the persisted history (displayable count AFTER addUserQuery
+    // and the no-op turn-start doCompress), not a pre-derived 2 + 1.
+    assert(sink.stamps.length == 1, "only the echo is persistent for an empty batch");
+    assert(sink.calls[0].kind == "chatMessage" && sink.calls[0].payload == "hello");
+    assert(sink.stamps[0].nr == 3);
+    assert(sink.stamps[0].time.match!((Duration d) { return false; }, (NoProcessingTime) {
+            return true;
+        }));
+    auto msgs = app.agent_.chat.getMessages();
+    assert(msgs.length == 4); // system + a1 + a2 + query
+    assert(msgs[3].match!((Message m) {
+            return m.isUserQuery && m.content == "hello";
+        }, (_) => false), "the query is the last persisted entry");
+    assert(displayableCount(msgs) == 3, "the echo NR equals the persisted ordinal");
+
+    // Slash-consumed query: no persistent echo (query is consumed before the
+    // loop; the unknown-command notice is a display-only nr=0 line).
+    auto stampCount = sink.stamps.length;
+    app.runAgent("/nope");
+    assert(sink.stamps.length == stampCount + 1, "the unknown-command notice is sent");
+    assert(sink.stamps[$ - 1].nr == 0, "a consumed slash query must not be echoed");
+    assert(sink.chatMessages[$ - 1].startsWith("system: Unknown command"));
+
+    // One-shot byte-stability premise: the default sink is inactive, so the
+    // startSetup one-shot branch never emits the echo line.
+    auto oneShot = AgentApp(UserConfig.AgentChatConfig.init);
+    assert(!oneShot.uiMsg.isActive(), "the default one-shot sink is inactive");
+}
+
+// Persistence gate: processMs through the REAL persistence path -
+// commit -> file -> load -> replay. The committed session file carries
+// processMs for every measured message (system stripped at commit), and a
+// session switch replays the same [NR] (the ordinal in the history - never
+// renumbered) and the original [TIME] for measured messages; unmeasured
+// messages replay as NoProcessingTime (no suffix downstream).
+@("replay after session switch: same [NR] and original [TIME] as live")
+unittest {
+    import std.file : readText;
+    import std.path : buildPath;
+    import std.json : JSONValue, JSONType, parseJSON;
+    import std.datetime : Duration, dur;
+    import llm.agent : Agent;
+    import llm.chat;
+    import llm.session : SessionStore;
+    import llm.types : ProcessResult;
+    import my.filter : ReFilter;
+
+    auto tmpDir = testArea("app_agent_nr_replay");
+    scope (exit)
+        tmpDir.cleanup;
+
+    auto cfg = testLlmConfig(tmpDir);
+    auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
+    auto app = AgentApp(UserConfig.AgentChatConfig.init);
+    app.llmConf = cfg;
+    app.sessionStore = store;
+    app.agent_ = new Agent("main", cfg, null, null, null, ReFilter.init);
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
+
+    // Session A (active) with two pre-existing displayable messages;
+    // session B exists for the switch away (create() already wrote its
+    // file with messages: []).
+    auto metaA = store.create();
+    auto metaB = store.create();
+    app.activeSession = metaA;
+    app.agent_.chat.setSystemPrompt("sys");
+    app.agent_.chat.add(Message(Role.assistant, false, "a1", null));
+    app.agent_.chat.add(Message(Role.assistant, false, "a2", null));
+    // Direct chat.add is test-only: the production submit path sets the
+    // dirty flag itself, so set it explicitly for the pre-turn commit.
+    app.chatDirty = true;
+    app.commitActiveSession();
+
+    // Live turn: user query + measured reply/tool traffic. Mirror the
+    // production flow: the agent appends the turn's messages before the
+    // step hook, so the batch is the contiguous tail of the history.
+    auto q = Message(Role.user, true, "hello", null);
+    auto a3 = Message(Role.assistant, false, "hello back", null);
+    a3.setProcessTime(MessageTime(432.dur!"msecs"));
+    JSONValue call;
+    call["id"] = "c1";
+    call["type"] = "function";
+    JSONValue fn;
+    fn["name"] = "querySemantic";
+    fn["arguments"] = "{}";
+    call["function"] = fn;
+    auto tm = ToolMessage("thinking", JSONValue([call]));
+    tm.setProcessTime(MessageTime(120.dur!"msecs"));
+    auto tr = ToolResponse("ok", "c1", "querySemantic", true);
+    tr.setProcessTime(MessageTime(42.dur!"msecs"));
+    app.agent_.chat.add(q);
+    app.agent_.chat.add(a3);
+    app.agent_.chat.add(tm);
+    app.agent_.chat.add(tr);
+    ProcessResult result;
+    result.chat = [
+        Chat.MessageT(q), Chat.MessageT(a3), Chat.MessageT(tm), Chat.MessageT(tr)
+    ];
+    app.processResult(result); // commits session A at the end
+
+    // processMs actually persisted in the session file (system stripped at
+    // commit: a1, a2, q, a3, tm, tr)
+    auto fileJson = parseJSON(readText(buildPath(tmpDir, "chat", metaA.id.get ~ ".json")));
+    auto fileMsgs = fileJson["messages"].array;
+    assert(fileMsgs.length == 6, "system is stripped at commit; the file holds a1,a2,q,a3,tm,tr");
+    bool hasProcessMs(JSONValue m) {
+        return ("save_data" in m) && ("processMs" in m["save_data"]);
+    }
+    // Locate the measured messages by content, not by hardcoded index.
+    // The tool_calls check comes first: the ToolMessage's content is JSON
+    // null, so .str on it would throw.
+    size_t a3Idx = size_t.max, tmIdx = size_t.max, trIdx = size_t.max;
+    foreach (i, m; fileMsgs) {
+        if ("tool_calls" in m)
+            tmIdx = i;
+        else if (m["role"].str == "tool" && m["name"].str == "querySemantic")
+            trIdx = i;
+        else if (m["role"].str == "assistant"
+                && m["content"].type == JSONType.string && m["content"].str == "hello back")
+            a3Idx = i;
+    }
+    assert(a3Idx != size_t.max && tmIdx != size_t.max && trIdx != size_t.max,
+            "the three measured messages are in the file");
+    assert(fileMsgs[a3Idx]["save_data"]["processMs"].integer == 432, "a3 keeps its 432 ms");
+    assert(fileMsgs[tmIdx]["save_data"]["processMs"].integer == 120, "tm keeps its 120 ms");
+    assert(fileMsgs[trIdx]["save_data"]["processMs"].integer == 42, "tr keeps its 42 ms");
+    assert(!hasProcessMs(fileMsgs[0]) && !hasProcessMs(fileMsgs[1]), "a1/a2 were never measured");
+    assert(fileMsgs[2]["role"].str == "user" && fileMsgs[2]["content"].str == "hello");
+    assert(!hasProcessMs(fileMsgs[2]), "the user query was never measured");
+
+    // Live stamps for the turn: a3 [4], tm [5], tr [6] (q consumes ordinal
+    // 3 but is not displayed live - the echo is the user query's own job).
+    assert(sink.stamps.length == 3, "only the measured turn traffic displays live");
+    assert(sink.stamps.map!(s => s.nr).array == [4, 5, 6], "live turn ordinals");
+    assert(sink.stamps[0].time.match!((Duration d) { return d == 432.dur!"msecs"; },
+            (NoProcessingTime) { return false; }), "live a3 time");
+    assert(sink.stamps[1].time.match!((Duration d) { return d == 120.dur!"msecs"; },
+            (NoProcessingTime) { return false; }), "live tm time");
+    assert(sink.stamps[2].time.match!((Duration d) { return d == 42.dur!"msecs"; },
+            (NoProcessingTime) { return false; }), "live tr time");
+
+    // Switch away and back: the replay shows the SAME [NR] and [TIME] -
+    // the file content alone determines both (cross-instance property).
+    sink.chatMessages.length = 0;
+    sink.stamps.length = 0;
+    app.switchToSession(metaB.id);
+    assert(sink.stamps.length == 0, "empty session B replays nothing displayable");
+    app.switchToSession(metaA.id);
+    // Replay A: a1 [1], a2 [2], q [3] (user query now displayed),
+    // a3 [4] 432 ms, tm [5] 120 ms, tr [6] 42 ms.
+    assert(sink.stamps.length == 6, "all six displayable messages replayed");
+    assert(sink.stamps.map!(s => s.nr).array == [1, 2, 3, 4, 5, 6],
+            "replayed [NR] == live [NR] (persisted-NR property)");
+    assert(sink.stamps[0].time.match!((Duration d) { return false; }, (NoProcessingTime) {
+            return true;
+        }), "a1 replays unmeasured");
+    assert(sink.stamps[1].time.match!((Duration d) { return false; }, (NoProcessingTime) {
+            return true;
+        }), "a2 replays unmeasured");
+    assert(sink.stamps[2].time.match!((Duration d) { return false; }, (NoProcessingTime) {
+            return true;
+        }), "q replays unmeasured");
+    assert(sink.stamps[3].time.match!((Duration d) { return d == 432.dur!"msecs"; },
+            (NoProcessingTime) { return false; }), "a3 replays its original 432 ms");
+    assert(sink.stamps[4].time.match!((Duration d) { return d == 120.dur!"msecs"; },
+            (NoProcessingTime) { return false; }), "tm replays its original 120 ms");
+    assert(sink.stamps[5].time.match!((Duration d) { return d == 42.dur!"msecs"; },
+            (NoProcessingTime) { return false; }), "tr replays its original 42 ms");
+}
+
+// Backward-compat gate: a session file created BEFORE the processMs
+// feature (no save_data.processMs anywhere) must load and replay with
+// contiguous [NR] 1..N and NO [TIME] suffix (NoProcessingTime - unmeasured is
+// distinct from Duration(0)), and a later measured turn must commit WITHOUT
+// giving the legacy messages a processMs key. NR is a pure derivation (the
+// ordinal walk counts displayables), so there is nothing to migrate: if the
+// test exposes a gap, the fix belongs in the layer that causes it.
+@("legacy session files: contiguous NRs, no time suffix, clean round-trip")
+unittest {
+    import std.file : readText;
+    import std.path : buildPath;
+    import std.json : JSONValue, JSONType, parseJSON;
+    import std.datetime : Duration, dur;
+    import llm.agent : Agent;
+    import llm.chat;
+    import llm.session : SessionStore;
+    import llm.types : ProcessResult;
+    import my.filter : ReFilter;
+
+    auto tmpDir = testArea("app_agent_nr_legacy");
+    scope (exit)
+        tmpDir.cleanup;
+
+    auto cfg = testLlmConfig(tmpDir);
+    auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
+    auto app = AgentApp(UserConfig.AgentChatConfig.init);
+    app.llmConf = cfg;
+    app.sessionStore = store;
+    app.agent_ = new Agent("main", cfg, null, null, null, ReFilter.init);
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
+
+    // Legacy doc: pre-feature shape - no save_data.processMs anywhere. The
+    // save_data.user on the query is the pre-existing user-query marker, not
+    // part of this feature.
+    JSONValue doc;
+    JSONValue lu;
+    lu["role"] = "user";
+    lu["content"] = "old question";
+    lu["save_data"] = JSONValue(["user": JSONValue(true)]);
+    JSONValue la1;
+    la1["role"] = "assistant";
+    la1["content"] = "old answer one";
+    JSONValue la2;
+    la2["role"] = "assistant";
+    la2["content"] = "old answer two";
+    doc["messages"] = JSONValue([lu, la1, la2]);
+    auto meta = store.create();
+    store.save(meta.id, meta, doc);
+    auto throwawayMeta = store.create(); // a throwaway so the switch commits it
+    app.activeSession = throwawayMeta;
+
+    app.switchToSession(meta.id); // load + replay the legacy file
+
+    // Contiguous NRs 1..3, ALL unmeasured (NoProcessingTime, not Duration(0)).
+    assert(sink.stamps.length == 3);
+    assert(sink.stamps.map!(s => s.nr).array == [1, 2, 3]);
+    foreach (s; sink.stamps) {
+        assert(s.time.match!((Duration d) { return false; }, (NoProcessingTime) {
+                return true;
+            }), "legacy messages must replay as NoProcessingTime");
+    }
+
+    // Round-trip: a new measured turn commits the session; the legacy messages
+    // must not gain processMs. Mirror the production flow: the agent appends the
+    // turn's messages to the chat BEFORE the step hook, so the batch is the
+    // contiguous tail of the history.
+    auto q = Message(Role.user, true, "new question", null);
+    auto a1 = Message(Role.assistant, false, "new answer", null);
+    a1.setProcessTime(MessageTime(250.dur!"msecs"));
+    app.agent_.chat.add(q);
+    app.agent_.chat.add(a1);
+    ProcessResult result;
+    result.chat = [Chat.MessageT(q), Chat.MessageT(a1)];
+    app.processResult(result); // commits
+
+    // The measured turn displays live at its true ordinal (5: lu,la1,la2,q,a1)
+    // with its original 250 ms.
+    assert(sink.stamps.length == 4, "the new answer displays live once");
+    assert(sink.stamps[3].nr == 5, "the new answer's ordinal is its history position");
+    assert(sink.stamps[3].time.match!((Duration d) { return d == 250.dur!"msecs"; },
+            (NoProcessingTime) { return false; }), "the new answer keeps 250 ms");
+
+    // Committed file: the legacy messages stayed pre-feature and the new message
+    // is the ONLY one with processMs (no 0ms misrepresentation, no invented key).
+    auto fileText = readText(buildPath(tmpDir, "chat", meta.id.get ~ ".json"));
+    assert(fileText.canFind("processMs"), "the measured message persists processMs");
+    auto fileJson = parseJSON(fileText);
+    size_t nProcessMs = 0;
+    long theValue = 0;
+    foreach (m; fileJson["messages"].array) {
+        if (m.type != JSONType.object || !("save_data" in m))
+            continue;
+        auto sd = m["save_data"];
+        if (sd.type != JSONType.object || !("processMs" in sd))
+            continue;
+        nProcessMs++;
+        theValue = sd["processMs"].integer;
+    }
+    assert(nProcessMs == 1, "exactly one message carries processMs (the new one)");
+    assert(theValue == 250, "the new message's measured 250 ms round-trips; no 0ms");
+
+    // Mixed-file reload: switch away and back; the
+    // committed legacy+measured file must replay with contiguous NRs 1..5,
+    // legacy messages + query unmeasured, a1 keeping its 250 ms.
+    sink.chatMessages.length = 0;
+    sink.stamps.length = 0;
+    app.switchToSession(throwawayMeta.id);
+    assert(sink.stamps.length == 0, "empty throwaway session replays nothing");
+    app.switchToSession(meta.id); // reload the mixed committed file
+    assert(sink.stamps.length == 5, "all five displayable messages replayed");
+    assert(sink.stamps.map!(s => s.nr).array == [1, 2, 3, 4, 5],
+            "replayed [NR] contiguous over the mixed file");
+    assert(sink.stamps[0].time.match!((Duration d) { return false; }, (NoProcessingTime) {
+            return true;
+        }), "lu replays unmeasured");
+    assert(sink.stamps[1].time.match!((Duration d) { return false; }, (NoProcessingTime) {
+            return true;
+        }), "la1 replays unmeasured");
+    assert(sink.stamps[2].time.match!((Duration d) { return false; }, (NoProcessingTime) {
+            return true;
+        }), "la2 replays unmeasured");
+    assert(sink.stamps[3].time.match!((Duration d) { return false; }, (NoProcessingTime) {
+            return true;
+        }), "q replays unmeasured");
+    assert(sink.stamps[4].time.match!((Duration d) { return d == 250.dur!"msecs"; },
+            (NoProcessingTime) { return false; }), "a1 replays its original 250 ms");
+}
+// Branch coverage: a failed or interrupted turn produces no displayable
+// content, so it consumes no NR ordinal - and because NR is a pure derivation
+// (recomputed from the persisted history at send time), the NEXT batch
+// continues from the same offset: contiguous, no gap, no duplicate. There is
+// no counter to desynchronize.
+@("error turn: no stamps, next batch continues from the same offset")
+unittest {
+    import std.path : buildPath;
+    import std.datetime : Duration, dur;
+    import llm.agent : Agent;
+    import llm.chat;
+    import llm.session : SessionStore;
+    import llm.types : ProcessResult;
+    import my.filter : ReFilter;
+
+    auto tmpDir = testArea("app_agent_nr_error");
+    scope (exit)
+        tmpDir.cleanup;
+
+    auto cfg = testLlmConfig(tmpDir);
+    auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
+
+    auto app = AgentApp(UserConfig.AgentChatConfig.init);
+    app.llmConf = cfg;
+    app.sessionStore = store;
+    app.agent_ = new Agent("main", cfg, null, null, null, ReFilter.init);
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
+    app.activeSession = store.create();
+
+    app.agent_.chat.setSystemPrompt("sys");
+    app.agent_.chat.add(Message(Role.assistant, false, "a1", null));
+    app.agent_.chat.add(Message(Role.assistant, false, "a2", null));
+    // Direct chat.add is test-only: the production submit path sets the
+    // dirty flag itself, so set it explicitly for the pre-turn commit.
+    app.chatDirty = true;
+    app.commitActiveSession();
+
+    // A failed turn: nothing displayable arrives (user query persistence
+    // is runAgent's job, not modeled here). The empty batch must not display
+    // anything and must not advance any ordinal.
+    ProcessResult failure;
+    failure.status = ProcessResult.Status.unknownFailure;
+    failure.chat = [];
+    app.processResult(failure);
+    assert(sink.stamps.length == 0, "error turn must not display anything");
+
+    // The next batch continues from the SAME offset: a3 is the 4th
+    // displayable in [sys, a1, a2, q, a3]. Mirror the production flow: the
+    // agent appends the turn's messages before the step hook, so the batch
+    // is the contiguous tail of the history.
+    auto q = Message(Role.user, true, "hello", null);
+    auto a3 = Message(Role.assistant, false, "hello back", null);
+    a3.setProcessTime(MessageTime(432.dur!"msecs"));
+    app.agent_.chat.add(q);
+    app.agent_.chat.add(a3);
+    ProcessResult result;
+    result.chat = [Chat.MessageT(q), Chat.MessageT(a3)];
+    app.processResult(result);
+    assert(sink.stamps.length == 1);
+    assert(sink.stamps[0].nr == 4, "next batch continues contiguously");
+    assert(sink.stamps[0].time.match!((Duration d) { return d == 432.dur!"msecs"; },
+            (NoProcessingTime) { return false; }));
 }

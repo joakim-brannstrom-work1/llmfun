@@ -14,6 +14,7 @@ import llmfun_tui; // TuiChatMessageType (C binding)
 import my.path : Path;
 import my.actor.channel : Channel;
 import my.actor.mailbox : TypedAddress;
+import llm.chat : MessageTime, NoProcessingTime;
 
 /// One-way sink for agent->TUI messages. Abstracts where TUI traffic goes so
 /// the agent can target a live TUI actor (channel), the console (one-shot),
@@ -23,10 +24,11 @@ interface TuiSink {
     void ready();
     void busy();
     void terminate();
-    void chatMessage(string msg, TuiChatMessageType type);
-    void chatThinkMessage(string msg, string thinking, TuiChatMessageType type);
+    void chatMessage(string msg, TuiChatMessageType type, size_t nr, MessageTime time);
+    void chatThinkMessage(string msg, string thinking, TuiChatMessageType type,
+            size_t nr, MessageTime time);
     void statusText(string status);
-    void finalAnswer(string msg);
+    void finalAnswer(string msg, size_t nr, MessageTime time);
     void clearChat();
     void logFile(bool useFile);
     void streamStatusText(string status);
@@ -66,20 +68,21 @@ class TuiChannelSink : TuiSink {
         ch.uiTerminate();
     }
 
-    override void chatMessage(string msg, TuiChatMessageType type) {
-        ch.uiMsg(UiChatMessage(msg, type));
+    override void chatMessage(string msg, TuiChatMessageType type, size_t nr, MessageTime time) {
+        ch.uiMsg(UiChatMessage(msg: msg, type: type, nr: nr, time: time));
     }
 
-    override void chatThinkMessage(string msg, string thinking, TuiChatMessageType type) {
-        ch.uiMsg(UiChatThinkMessage(msg, thinking, type));
+    override void chatThinkMessage(string msg, string thinking,
+            TuiChatMessageType type, size_t nr, MessageTime time) {
+        ch.uiMsg(UiChatThinkMessage(msg: msg, thinking: thinking, type: type, nr: nr, time: time));
     }
 
     override void statusText(string status) {
         ch.uiMsg(UiStatusText(status));
     }
 
-    override void finalAnswer(string msg) {
-        ch.uiMsg(UiFinalAnswer(msg));
+    override void finalAnswer(string msg, size_t nr, MessageTime time) {
+        ch.uiMsg(UiFinalAnswer(msg: msg, nr: nr, time: time));
     }
 
     override void clearChat() {
@@ -124,8 +127,7 @@ class TuiChannelSink : TuiSink {
     }
 }
 
-/// Blocked (one-shot) sink: exact legacy writeln semantics. Streaming and
-/// status messages are dropped (one-shot mode only emits final output).
+/// Blocked (one-shot) sink. Streaming and status messages are dropped (one-shot mode only emits final output).
 class TuiBlockedSink : TuiSink {
     override bool isActive() {
         return false;
@@ -140,11 +142,12 @@ class TuiBlockedSink : TuiSink {
     override void terminate() {
     }
 
-    override void chatMessage(string msg, TuiChatMessageType type) {
+    override void chatMessage(string msg, TuiChatMessageType type, size_t nr, MessageTime time) {
         writeln(msg);
     }
 
-    override void chatThinkMessage(string msg, string thinking, TuiChatMessageType type) {
+    override void chatThinkMessage(string msg, string thinking,
+            TuiChatMessageType type, size_t nr, MessageTime time) {
         if (!thinking.empty)
             writeln("Thinking: ", thinking);
         writeln(msg);
@@ -153,7 +156,7 @@ class TuiBlockedSink : TuiSink {
     override void statusText(string status) {
     }
 
-    override void finalAnswer(string msg) {
+    override void finalAnswer(string msg, size_t nr, MessageTime time) {
         writeln(msg);
     }
 
@@ -193,19 +196,24 @@ class TuiBlockedSink : TuiSink {
 /// the TUI without a live UI thread.
 class TuiRecordingSink : TuiSink {
     struct Call {
-        string kind; // method name, e.g. "chatMessage"
+        string kind;
         string payload; // best-effort summary of the arguments
     }
 
     Call[] calls;
 
+    struct Stamp {
+        size_t nr;
+        MessageTime time;
+    }
+
     /// chatMessage payloads in call order (most recent last).
     string[] chatMessages;
-    /// sessionList snapshots in call order; items are copied at record time
-    /// so later store mutations cannot leak into the recording.
+    /// (nr, time) for every persistent send, in call order; includes chatThinkMessage/finalAnswer (chatMessages does not).
+    Stamp[] stamps;
+    /// sessionList snapshots in call order; items are copied at record time so later store mutations cannot leak into the recording.
     UiSessionItem[][] sessionLists;
 
-    /// Number of recorded calls of `kind` (0 if none).
     int countOf(string kind) const {
         int n;
         foreach (c; calls)
@@ -214,12 +222,10 @@ class TuiRecordingSink : TuiSink {
         return n;
     }
 
-    /// Most recently recorded chatMessage payload ("" if none).
     string lastChatMessage() {
         return chatMessages.length == 0 ? "" : chatMessages[chatMessages.length - 1];
     }
 
-    /// Most recently recorded sessionList snapshot (empty if none).
     UiSessionItem[] lastSessionList() {
         return sessionLists.length == 0 ? null : sessionLists[sessionLists.length - 1];
     }
@@ -244,12 +250,15 @@ class TuiRecordingSink : TuiSink {
         record("terminate");
     }
 
-    override void chatMessage(string msg, TuiChatMessageType type) {
+    override void chatMessage(string msg, TuiChatMessageType type, size_t nr, MessageTime time) {
         chatMessages ~= msg;
+        stamps ~= Stamp(nr, time);
         record("chatMessage", msg);
     }
 
-    override void chatThinkMessage(string msg, string thinking, TuiChatMessageType type) {
+    override void chatThinkMessage(string msg, string thinking,
+            TuiChatMessageType type, size_t nr, MessageTime time) {
+        stamps ~= Stamp(nr, time);
         record("chatThinkMessage", msg ~ "\n[thinking] " ~ thinking);
     }
 
@@ -257,7 +266,8 @@ class TuiRecordingSink : TuiSink {
         record("statusText", status);
     }
 
-    override void finalAnswer(string msg) {
+    override void finalAnswer(string msg, size_t nr, MessageTime time) {
+        stamps ~= Stamp(nr, time);
         record("finalAnswer", msg);
     }
 
@@ -307,15 +317,12 @@ class TuiRecordingSink : TuiSink {
     }
 }
 
-/// Message bridge between the agent and the TUI. A thin delegate over a
-/// TuiSink: the public API is unchanged, but the destination of the traffic is
-/// now chosen by the injected sink (channel for the actor, console for
-/// one-shot, recording for tests).
+/// Message bridge between the agent and the TUI: a thin wrapper over a
+/// TuiSink. The destination of the traffic is chosen by the injected sink
+/// (channel for the actor, console for one-shot, recording for tests).
 class UiMessenger {
     TuiSink sink;
 
-    /// Production/test: wrap an existing sink (e.g. TuiChannelSink,
-    /// TuiBlockedSink, TuiRecordingSink).
     this(TuiSink s) {
         sink = s;
     }
@@ -324,8 +331,7 @@ class UiMessenger {
         return sink.isActive();
     }
 
-    // No-op: a sink's mode is fixed at construction; kept for API parity
-    // with the legacy UiMessenger.
+    // No-op: a sink's mode is fixed at construction; kept for call-site compatibility.
     void setActive(bool onOff) {
     }
 
@@ -342,11 +348,20 @@ class UiMessenger {
     }
 
     void chatMessage(string msg, TuiChatMessageType type) {
-        sink.chatMessage(msg, type);
+        sink.chatMessage(msg, type, 0, MessageTime(NoProcessingTime()));
+    }
+
+    void chatMessage(string msg, TuiChatMessageType type, size_t nr, MessageTime time) {
+        sink.chatMessage(msg, type, nr, time);
     }
 
     void chatThinkMessage(string msg, string thinking, TuiChatMessageType type) {
-        sink.chatThinkMessage(msg, thinking, type);
+        sink.chatThinkMessage(msg, thinking, type, 0, MessageTime(NoProcessingTime()));
+    }
+
+    void chatThinkMessage(string msg, string thinking, TuiChatMessageType type,
+            size_t nr, MessageTime time) {
+        sink.chatThinkMessage(msg, thinking, type, nr, time);
     }
 
     void statusText(string status) {
@@ -354,7 +369,11 @@ class UiMessenger {
     }
 
     void finalAnswer(string msg) {
-        sink.finalAnswer(msg);
+        sink.finalAnswer(msg, 0, MessageTime(NoProcessingTime()));
+    }
+
+    void finalAnswer(string msg, size_t nr, MessageTime time) {
+        sink.finalAnswer(msg, nr, time);
     }
 
     void clearChat() {
@@ -399,7 +418,6 @@ class UiMessenger {
     }
 }
 
-/// Format the status bar text: context usage, tokens/s, active model, ready state.
 string formatStatusText(bool readyState, long contextSize, ServerStat stat, string model) {
     return i"Context $(stat.context)/$(contextSize) tokens | $(
             format!"%.1f"(stat.predictedPerSecond)) tok/s | Model: '$(model)' | $(

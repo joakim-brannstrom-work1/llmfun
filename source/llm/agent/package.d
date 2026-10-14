@@ -47,34 +47,20 @@ class Agent : IBasicAgent {
     Chat chat;
     MetricMonitor monitor;
 
-    /// The model-facing tools array: owned by the Agent, built once
-    /// per instance (pool + selectTools with empty activation, plus the
-    /// composed listToolTags description), reassigned from pure selectTools
-    /// output ONLY at change points - model switches (resetModel rebuilds
-    /// it from the new model's effective, hook-adjusted broker config,
-    /// task 6), activation/discovery (the
-    /// toolCtx.rebuildTools hook), compression, and MCP
-    /// connects (inert under a kill-switch model: rebuildTools
-    /// is null). The registry is immutable at runtime except the MCP
-    /// connect change point: onMcpServerConnected recomputes the
-    /// pool from the live registry and rebuilds this array through
-    /// toolCtx.rebuildTools.
+    // The model-facing tools array: pool + selectTools with empty activation,
+    // plus the composed listToolTags description. Reassigned from pure
+    // selectTools output ONLY at change points
     JSONValue[] tools;
 
     package {
-        NudgeConfig defaultNudges_; // llmConf.nudges at construction
-        NudgeConfig nudges_; // resolved for the current model
+        NudgeConfig defaultNudges_;
+        NudgeConfig nudges_;
         NudgeTexts nudgeTexts_;
-        Path[] promptDir_; // copied from llmConf at construction
-        // Per-kind strike counters (they map onto NudgeKind) -
-        // keepReasoningStrikes drives NudgeKind.keepReasoning, continueStrikes
-        // NudgeKind.recovery. Package-visible for the same reason as the fields
-        // above; the per-turn reset lifecycle (resetStrikes) is unchanged.
+        Path[] promptDir_;
+        // Per-kind strike counters (they map onto NudgeKind)
         int keepReasoningStrikes;
         int continueStrikes;
 
-        // Package (not private): llm.agent.tests (and the pool-wiring
-        // tests) construct an Agent and assert on the broker pool/state.
         AgentContext toolCtx;
 
         // Armed by syncContextFromChat after a session load/change: the context
@@ -100,32 +86,19 @@ class Agent : IBasicAgent {
 
         bool compressNudgeSent;
 
-        // Package: the feedback-gating regression tests rewind the sentinel
-        // start (SysTime.init) between handleToolCalls calls — same reason as
-        // the strike counters below.
         package SysTime lastToolCallWarning;
         int toolCallWarnCounter = -1;
-        // Nudge policy state, package-visible for the sibling regression tests
-        // (llm.agent.tests asserts resolution after construction / model switch,
-        // the escalation ladder, and the per-kind strike counters). `package`, not
-        // `private`: a package.d module's package symbols are visible only inside
-        // its own subtree — the same rule that lets llm.agent.tests see
-        // makeAgentTestConfig.
         ReFilter toolFilter;
 
-        // Mirror of llmConf.toolBroker.neverHideTools, captured at construction:
-        // the MCP connect change point refilters the live registry
-        // with it after startup.
         string[] neverHideTools_;
         bool waitingForVisionResponse;
         ServerStat prevStat;
 
-        // Broker adjust hook (D8, design section 4.6): set via
-        // setBrokerAdjustHook, invoked with the freshly resolved (global +
-        // per-model) config on every model switch (resetModel). Mutations of
-        // the passed config are the broker's own use - they never write back
-        // into LlmConfig and cannot leak into later resolutions (each switch
-        // re-resolves from llmConf) or other agents.
+        // Invoked with the freshly resolved (global + per-model) config on
+        // every model switch (resetModel). Mutations of the passed config are
+        // the broker's own use - they never write back into LlmConfig and
+        // cannot leak into later resolutions (each switch re-resolves from
+        // llmConf) or other agents.
         void delegate(ref ToolBrokerConfig) brokerAdjustHook;
     }
 
@@ -163,34 +136,15 @@ class Agent : IBasicAgent {
         toolCtx.broker = BrokerState.init;
         neverHideTools_ = llmConf.toolBroker.neverHideTools;
 
-        // Resolved broker config for the ACTIVE model: the membership helpers
-        // and the discovery tool read it from the context. resetModel
-        // re-resolves it on every model switch and runs the broker adjust hook
-        // on the fresh copy (task 6, D8); a direct resolve call here keeps the
-        // wiring compiling and gives the array build below its config.
+        // Resolved broker config for the ACTIVE model
         toolCtx.brokerConf = resolveToolBrokerConfig(llmConf, llmConf.activeCodeModel);
 
-        // Broker adjust hook (D8, design section 4.6): invoke-if-set for
-        // symmetry - every path that changes the effective model resolves +
-        // hooks here or in resetModel. The hook is always null at ctor time:
-        // setBrokerAdjustHook is an instance method, so a hook can only be
-        // installed after construction. Hook-mutated configs bypass
-        // validateToolBrokerConfig (warn-only), per design section 4.6
-        // (semantics 3); the pre-hook resolution was validated at construction.
         if (brokerAdjustHook !is null)
             brokerAdjustHook(toolCtx.brokerConf);
         toolCtx.brokerEnabled = toolCtx.brokerConf.enabled;
 
-        // Tools array: built once per instance here and re-built on every
-        // model switch (rebuildModelTools), owned by the Agent, passed per
-        // request; reassigned from pure selectTools output at change points
-        // only - model switches (rebuildModelTools), activation/discovery
-        // (the toolCtx.rebuildTools hook), compression, and MCP connects.
         rebuildModelTools();
 
-        // Nudge policy: the global default and prompt dir must be stored BEFORE
-        // resetModel resolves the active model's policy and eagerly loads its
-        // templates (missing files throw here).
         defaultNudges_ = llmConf.nudges;
         promptDir_ = llmConf.promptDir;
         resetModel(llmConf.activeCodeModel);
@@ -217,35 +171,14 @@ class Agent : IBasicAgent {
         return prevStat;
     }
 
-    /// Sets the broker adjust hook (D8, design section 4.6). The hook is
-    /// invoked on every model switch (resetModel) with the freshly resolved
-    /// (global + per-model) config by ref - the config is a private copy per
-    /// model (a fresh resolveToolBrokerConfig call per switch), so hook
-    /// mutations never leak into LlmConfig, later resolutions, or other
-    /// agents; the mutated config is used until the next model switch. Null
-    /// hook (the default) = the resolved config is used unchanged. No
-    /// constructor parameter and no YAML section (per non-goals): the hook
-    /// receives only the config ref; delegates capture any context they need.
+    /// Sets the broker adjust hook. The hook is invoked on every model
+    /// switch (resetModel) with the freshly resolved (global + per-model)
     void setBrokerAdjustHook(void delegate(ref ToolBrokerConfig) hook) @safe {
         brokerAdjustHook = hook;
     }
 
     /// Rebuilds the model-facing tools array from the current pool and the
-    /// effective (hook-adjusted, per-model) broker config: the ctor calls it
-    /// once and resetModel calls it on every model switch, so per-model broker
-    /// config and hook mutations take effect on the array. Branches on the
-    /// effective config's kill switch: enabled - the selectTools array
-    /// (alwaysOn head in registry order, activated tail) with the composed
-    /// listToolTags description; disabled - the pre-broker array (registry
-    /// intersect toolFilter, no neverHide union-back), the only possible
-    /// difference being a neverHide tool excluded by toolFilter (in the pool
-    /// only; warned at construction). Under the broker branch the
-    /// toolCtx.rebuildTools hook is (re)pointed at this method - the MCP
-    /// connect change point rebuilds through it; under the kill switch it is
-    /// cleared (the array never changes). @trusted, not @safe: the kill-switch
-    /// branch calls the @system filterToolDescriptions/.array pair - the same
-    /// unchecked pattern the pre-task-6 ctor body had (the ctor was never
-    /// @safe either); the broker branch is fully @safe.
+    /// effective (hook-adjusted, per-model) broker config
     private void rebuildModelTools() @trusted {
         import llm.tool_call : descAllFunctions, filterToolDescriptions;
         import llm.tool_call.broker : selectTools;
@@ -255,20 +188,14 @@ class Agent : IBasicAgent {
             tools = selectTools(toolCtx.pool, toolCtx.broker.activated,
                     toolCtx.brokerConf.neverHideTools,
                     alwaysOnTools(toolCtx.brokerConf, toolCtx.pool));
-            // Composed discovery description: swap the listToolTags
-            // entry's description for base text + the configured tag vocabulary.
             composeDiscoveryDescription(tools, toolCtx.brokerConf, toolCtx.broker);
-            // the array through this hook after activating a tag, and the
-            // recomposed listToolTags description must be re-applied:
-            // the raw selectTools output carries the bare UDA text.
             toolCtx.rebuildTools = &rebuildModelTools;
         } else {
             // Kill switch: the pre-broker tools array - registry intersect
             // toolFilter (no neverHide union-back), so tools are a subset of
             // the pool, the only possible difference being a neverHide tool
             // excluded by toolFilter (in the pool only; warned at
-            // construction). Gate inert regardless: brokerEnabled=false is
-            // its first conjunct.
+            // construction)
             tools = filterToolDescriptions(descAllFunctions(), toolFilter).array;
             toolCtx.rebuildTools = null;
         }
@@ -284,10 +211,6 @@ class Agent : IBasicAgent {
 
         auto oldModel = modelName_;
 
-        // The pool cannot change on a model switch: nothing here touches the
-        // registry, so the tools array stays valid — no rebuild.
-        // The registry does change at the MCP connect point; that
-        // path rebuilds the array through toolCtx.rebuildTools.
         this.rq = LlmRequester(modelConfig.toRequestConfig);
 
         this.contextSize_ = modelConfig.getContextSize;
@@ -296,25 +219,8 @@ class Agent : IBasicAgent {
 
         logger.tracef("Agent model reset: %s -> %s, context: %s", oldModel,
                 modelConfig.modelName, this.contextSize_);
-        // Resolve the model's whole-block nudge policy: wholesale swap of
-        // the global default; eagerly load its templates through the same
-        // FlatVfs path as the system prompt — a missing file fails the model
-        // switch here.
         nudges_ = modelConfig.nudges.get(defaultNudges_);
         nudgeTexts_ = loadNudgeTexts(promptDir_, nudges_);
-        // Broker adjust hook (D8, design section 4.6): a model switch
-        // re-resolves the broker config for the NEW model, hands the fresh
-        // private copy to the hook, and resets the activation state
-        // (BrokerState) - activation never carries across models (semantics
-        // 2) and a hook mutation cannot produce cross-model leakage. The pool
-        // is deliberately NOT rebuilt (see the comment above); the
-        // model-facing tools array IS rebuilt from the new effective config.
-        // The kill-switch mirror (toolCtx.brokerEnabled) follows the effective
-        // (post-hook) config so the request-time gates that read it (the
-        // listToolTags / toolSearch kill switch, the hidden-tool refusal path
-        // and broker seeding) agree with the array. Hook-mutated configs
-        // bypass validateToolBrokerConfig (warn-only), per design section 4.6
-        // (semantics 3); the pre-hook resolution was validated at construction.
         toolCtx.broker = BrokerState.init;
         toolCtx.brokerConf = resolveToolBrokerConfig(conf, modelConfig);
         if (brokerAdjustHook !is null)
@@ -323,14 +229,9 @@ class Agent : IBasicAgent {
         rebuildModelTools();
     }
 
-    /// MCP connect change point: an MCP server has just registered
-    /// its tools into the global registry (llm.mcp_server.registration), so
-    /// the pool is recomputed from the live registry — the registry is no
-    /// longer immutable at runtime — and the model-facing tools array +
-    /// listToolTags description are rebuilt through toolCtx.rebuildTools. An
-    /// allowed change point (activation/discovery boundary): call ONLY
-    /// between requests, never while a request is in flight.
-
+    /// MCP connect change point: an MCP server has just registered its tools
+    /// into the global registry (llm.mcp_server.registration), so the pool is
+    /// recomputed from the live registry.
     void onMcpServerConnected() {
         import llm.tool_call : descAllFunctions, filterToolDescriptions, getFunctions;
         import llm.tool_call.broker : filterRegFunctions;
@@ -363,15 +264,12 @@ class Agent : IBasicAgent {
         chat.addUserQuery(query);
     }
 
-    /// Adds a harness control message that continues the current turn: a user-role nudge with userQuery:false — never opens a turn and appears in neither the dialogue nor the trace projection. Used by the pipeline retry loop instead of addUserQuery, which would fragment one logical turn into N turns and leak harness text into the Facts projection.
+    // Adds a harness control message that continues the current turn
     void addContinueMessage(string msg) @safe nothrow {
         chat.add(Message(Role.user, userQuery: false, content: msg, thinking: null));
     }
-    /// Emits the strike-appropriate nudge for `kind`. Package-visible:
-    /// llm.agent.tests drive the ladder through this seam. Delegates the ladder
-    /// step to escalateNudge and reports whether the turn may continue — `false`
-    /// means this kind's ladder is exhausted and the caller must fail the turn
-    /// (Status.agentStuckInLoop).
+
+    /// Emits the strike-appropriate nudge for `kind`
     package bool addEscalatedNudge(NudgeKind kind) @safe {
         final switch (kind) with (NudgeKind) {
         case keepReasoning:
@@ -381,22 +279,6 @@ class Agent : IBasicAgent {
         }
     }
 
-    /// One ladder step: with `enabled: false` returns true immediately —
-    /// the counter is untouched (no hidden strike-N failure can occur). Otherwise
-    /// increments `strike` and emits the strike-appropriate template: soft while
-    /// `strike <= softStrikes` (nudgeFor clamps to the ladder end, repeat-last),
-    /// then hard with h = strike - softStrikes. `h > hardStrikes` exhausts the
-    /// ladder (hardStrikes: 0 = legacy unlimited behaviour, governed by the loop
-    /// backstops) and returns false — the caller must fail the turn.
-
-    /// Trace-log source file for one ladder step: the file the emitted
-    /// template came from — resolvedNudgeFiles in nudges.d supplies the file
-    /// list (the single source of the empty→default fallback, shared with
-    /// loadNudgeTexts), and the `min(stepNo, $) - 1` repeat-last selection of
-    /// nudgeFor picks the entry. Static + pure: no state access, so it stays a
-    /// leaf. Only reachable for enabled kinds (escalateNudge returns first for
-    /// a disabled one); the resolved list is non-empty there, while the
-    /// configured lists may be empty — that is what the fallback resolves.
     private static string nudgeSourceFile(in EscalationConfig esc, NudgeKind kind,
             bool hard, in long stepNo) @safe pure {
         const names = resolvedNudgeFiles(esc, kind, hard);
@@ -416,12 +298,8 @@ class Agent : IBasicAgent {
         }
 
         auto ladder = inSoftPhase ? nudgeTexts_.soft[kind] : nudgeTexts_.hard[kind];
-        // nudgeFor asserts on an empty ladder — a precondition loadNudgeTexts
-        // guarantees for every enabled kind, pinned with an assert here.
         assert(!ladder.empty, "escalateNudge: empty ladder for an enabled kind");
         immutable phaseNo = inSoftPhase ? strike : strike - esc.softStrikes;
-        // One trace line per escalation: kind, strike number, phase, and the
-        // source file. This function is not nothrow, so no try/catch is needed.
         logger.tracef("agent %s: nudge %s strike %s (soft=%s) from %s", modelName_, kind,
                 strike, inSoftPhase, nudgeSourceFile(esc, kind, !inSoftPhase, phaseNo));
         chat.add(Message(Role.user, userQuery: false, thinking: null, content: nudgeFor(ladder,
@@ -429,24 +307,16 @@ class Agent : IBasicAgent {
         return true;
     }
 
-    /// Emits the strike-appropriate keep-reasoning nudge. Thin legacy wrapper
-    /// delegates to addEscalatedNudge — the process loop owns
-    /// exhaustion handling (it fails the turn when this kind's ladder is
-    /// exhausted).
+    /// Emits the strike-appropriate keep-reasoning nudge
     void addKeepReasoning() @safe {
         addEscalatedNudge(NudgeKind.keepReasoning);
     }
 
-    /// Emits the strike-appropriate continue/recovery nudge. Thin legacy wrapper
-    /// delegates to addEscalatedNudge — the process loop owns
-    /// exhaustion handling.
+    /// Emits the strike-appropriate continue/recovery nudge
     void addContinue() @safe {
         addEscalatedNudge(NudgeKind.recovery);
     }
 
-    /// Canonical compression-nudge gate (enabled + one-shot + threshold all
-    /// checked here). Callers must not re-check the threshold — a duplicate
-    /// caller-side predicate existed once and could drift from this one.
     void addCompressionNudge() @safe nothrow {
         if (!nudges_.compression.enabled || compressNudgeSent)
             return;
@@ -481,6 +351,8 @@ class Agent : IBasicAgent {
             if (stat.startContext == prevStat.startContext) {
                 // no timing/usage message received, so the context size must be estimated
                 stat.startContext = chat.approxContextSize;
+            } else if (stat.context == 0) {
+                return prevStat;
             }
             return stat;
         }
@@ -520,7 +392,9 @@ class Agent : IBasicAgent {
                     "schemaTokens": JSONValue(schemaTokens),
                 ]);
             }
+            const t0 = Clock.currTime;
             auto res = rq.request(chat, tools);
+            auto llmCall = MessageTime(Clock.currTime - t0);
 
             bool hasHttpError;
             bool httpRetryOnError;
@@ -557,7 +431,7 @@ class Agent : IBasicAgent {
                 }
             } else {
                 rval.stat = useOrApproxStatistic(sp.stat);
-                rval.status = parseResponse(sp); // adds messages to chat
+                rval.status = parseResponse(sp, llmCall);
                 rval.chat = chat.lastResponses;
                 chat.resetResponseIndex;
 
@@ -700,9 +574,7 @@ Continue your work from where you left off.";
                     resetStrikes;
                 } else if (!result.hasToolCall) {
                     // No tool call: continue the turn via the configurable
-                    // recovery ladder; exhaustion fails the turn
-                    // deterministically — the config-driven primary failure
-                    // path for this kind.
+                    // recovery ladder
                     if (!addEscalatedNudge(NudgeKind.recovery)) {
                         result.status = ProcessResult.Status.agentStuckInLoop;
                         keepRunning = false;
@@ -710,8 +582,7 @@ Continue your work from where you left off.";
                     }
                     keepRunning = true;
                 } else {
-                    // ok WITH tool calls: a fresh round — strike counters
-                    // reset (per-turn lifecycle).
+                    // ok WITH tool calls
                     keepRunning = true;
                     resetStrikes;
                 }
@@ -775,9 +646,6 @@ Continue your work from where you left off.";
                 // compress at the end because it could be filled with junk
                 this.compress(callback: compressCallback);
             } else {
-                // No re-check here: addCompressionNudge is the canonical gate
-                // (enabled + one-shot + threshold); a caller-side copy of the
-                // threshold predicate existed once and could drift from it.
                 addCompressionNudge();
             }
         }
@@ -831,7 +699,6 @@ Continue your work from where you left off.";
         firstMessageAfterLoad = true;
     }
 
-    /// Save chat history to dir / name_history.json
     void saveHistory(Path dir) @trusted nothrow {
         import std.stdio : File;
 
@@ -846,7 +713,6 @@ Continue your work from where you left off.";
         }
     }
 
-    /// Load chat history from dir / name_history.json
     void loadHistory(Path dir) @trusted nothrow {
         try {
             auto historyPath = dir ~ (this.name ~ "_history.json");
@@ -910,15 +776,18 @@ private:
         this.taskDoneMessage_ = answer;
     }
 
-    ProcessResult.Status parseResponse(ref StreamResponse sp) @trusted nothrow {
+    package ProcessResult.Status parseResponse(ref StreamResponse sp,
+            MessageTime llmCall) @trusted nothrow {
         try {
             logger.trace(sp);
 
             if (!sp.toolCalls.empty) {
-                handleToolCalls(sp.message.reasoning, sp.toolCalls);
+                handleToolCalls(sp.message.reasoning, sp.toolCalls, llmCall);
             } else if (!sp.message.isEmpty) {
-                chat.add(Message(Role.assistant, userQuery: false, content: sp.message.content,
-                        thinking: sp.message.reasoning));
+                auto m = Message(Role.assistant, userQuery: false, content: sp.message.content,
+                        thinking: sp.message.reasoning);
+                m.setProcessTime(llmCall);
+                chat.add(m);
             }
             if (!sp.message.finishReason.empty) {
                 if (sp.message.finishReason == "length")
@@ -938,7 +807,8 @@ private:
         return ProcessResult.Status.unknownFailure;
     }
 
-    package void handleToolCalls(string thinking, ref StreamResponse.ToolCall[long] toolCalls) {
+    package void handleToolCalls(string thinking, ref StreamResponse.ToolCall[long] toolCalls,
+            MessageTime llmCall = NoProcessingTime.init) {
         import llm.tool_call : executeFunc;
         import llm.utility : sanitizeUtf8;
 
@@ -964,12 +834,6 @@ private:
             bool success;
             string result;
             try {
-                // A tool in the pool but hidden from this
-                // agent (tagged, never activated) refuses instructively — the
-                // model recovers with one listToolTags call. Config-excluded
-                // tools are not in the pool (tier-2, unchanged) and
-                // registry-absent tools are not in the pool either (tier-1,
-                // unchanged): both fall through to executeFunc's refusals.
                 if (toolCtx.brokerEnabled
                         && toolCtx.pool.canFind!(f => f.name == call.name)
                         && !tools.canFind!(t => t["function"]["name"].str == call.name)) {
@@ -977,10 +841,6 @@ private:
                         .sanitizeUtf8;
                     success = false;
 
-                    // Metrics: the instructive refusal —
-                    // a confusion proxy. Other refusals are not
-                    // instrumented (executeFunc lacks monitor access; the
-                    // accepted hole).
                     recordBrokerEvent(this, "tool_refusal",
                             [
                                 "tool": JSONValue(call.name),
@@ -1011,9 +871,13 @@ private:
             if (call.name == "taskDone" && taskDone_ && !taskDoneMessage_.empty) {
                 sd["taskDoneAnswer"] = JSONValue(taskDoneMessage_);
             }
-            chat.add(ToolMessage(thinking, JSONValue([call.toJson]), JSONValue.init, sd));
-            chat.add(ToolResponse(content: result, toolCallId: call.id,
-                    toolName: call.name, success: success));
+            auto tm = ToolMessage(thinking, JSONValue([call.toJson]), JSONValue.init, sd);
+            tm.setProcessTime(llmCall);
+            chat.add(tm);
+            auto tr = ToolResponse(content: result, toolCallId: call.id,
+                    toolName: call.name, success: success);
+            tr.setProcessTime(MessageTime(responseTimeMs.dur!"msecs"));
+            chat.add(tr);
             if (auto image = toolCtx.drainVisionImage) {
                 chat.add(VisionMessage(image.query, image.data));
                 waitingForVisionResponse = true;
@@ -1197,7 +1061,10 @@ struct StreamResponse {
 
     void parseStat(ref JSONValue json) @safe nothrow {
         void mergeTokenRatio(double newV) {
-            // smooth out "jitter" in the ratio. If the ratio is just set to the last value there will be a large "difference" that never "correct" itself when the LLM go between generating a lof of thinking and then go to generating code.
+            // smooth out "jitter" in the ratio. If the ratio is just set to
+            // the last value there will be a large "difference" that never
+            // "correct" itself when the LLM go between generating a lot of
+            // thinking and then go to generating code.
             if (stat.charTokenRatio < 1.0)
                 stat.charTokenRatio = newV;
             else
@@ -1331,8 +1198,8 @@ struct StreamResponse {
 /// for the composed one: the UDA base text plus the resolved config's
 /// described groups, ordered by activation frequency then name
 /// (composeDiscoveryDesc). A no-op when toolFilter excluded the discovery
-/// tool from the array. Undescribed groups are not advertised (D3) - by
-/// design, so there is no empty-description warning here.
+/// tool from the array. Undescribed groups are not advertised by design,
+/// so there is no empty-description warning here.
 private void composeDiscoveryDescription(ref JSONValue[] tools,
         ToolBrokerConfig resolved, BrokerState st) @safe {
     import std.algorithm : countUntil;
@@ -1361,7 +1228,10 @@ private void recordBrokerEvent(Agent agent, string kind, JSONValue[string] field
 }
 
 version (unittest) {
-    /// Builds a minimal LlmConfig for a real Agent with no network, no skills and no RAG. promptDir points at the temp dir holding the one prompt file getPrompt reads (SUMMARY.md); the empty server type resolves to EndpointType.unknown, so the requesters never dial out.
+    // Builds a minimal LlmConfig for a real Agent with no network, no skills
+    // and no RAG. promptDir points at the temp dir holding the one prompt file
+    // getPrompt reads (SUMMARY.md); the empty server type resolves to
+    // EndpointType.unknown, so the requesters never dial out.
     package LlmConfig makeAgentTestConfig(string promptDir) {
         LlmConfig llmConf;
         llmConf.disableSkills = true;

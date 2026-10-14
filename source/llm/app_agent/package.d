@@ -118,7 +118,7 @@ struct AgentApp {
 
     /// Phase 1 of the two-phase exit: enqueue the dialogue
     /// worker's drain and return true. Returns false when there is no
-    /// dialogue index — nothing was enqueued and the caller must NOT wait
+    /// dialogue index - nothing was enqueued and the caller must NOT wait
     /// for a DiDrained that will never come.
     package bool beginDispose(WeakAddress replyTo, CompletionGate gate) {
         if (dialogueIndex is null)
@@ -154,7 +154,7 @@ struct AgentApp {
             // setupSession leaves the store null while agent_ is already
             // set. The active session is exempted even when empty.
             // Single-writer: the sweep runs on the agent thread only; it
-            // never touches state.json (saved below, unchanged order).
+            // never touches state.json (saved below, in the same order).
             if (sessionStore) {
                 try {
                     auto swept = sessionStore.sweepEmptySessions(activeSession.id);
@@ -215,6 +215,26 @@ struct AgentApp {
         uiMsg.chatThinkMessage(msg, thinking, type);
     }
 
+    package void sendPersistedChatMessage(Args...)(string msg,
+            TuiChatMessageType type, size_t nr, MessageTime time, Args args) {
+        static if (args.length > 0) {
+            msg = format(msg, args);
+        }
+        uiMsg.chatMessage(msg, type, nr, time);
+    }
+
+    package void sendPersistedChatThinkMessage(Args...)(string msg, string thinking,
+            TuiChatMessageType type, size_t nr, MessageTime time, Args args) {
+        static if (args.length > 0) {
+            msg = format(msg, args);
+        }
+        uiMsg.chatThinkMessage(msg, thinking, type, nr, time);
+    }
+
+    package void sendPersistedFinalAnswer(string msg, size_t nr, MessageTime time) {
+        uiMsg.finalAnswer(msg, nr, time);
+    }
+
     private void progressCallback(size_t currentChunk, size_t totalChunks, string status) {
         uiMsg.chatMessage(i"assistant: Compressing... $(currentChunk)/$(totalChunks) : $(status)".text,
                 TuiChatMessageType_Assistant);
@@ -229,7 +249,7 @@ struct AgentApp {
         if (!agent_.needCompression && !force)
             return;
         // Stamp the owning session into any checkpoint event this compression
-        // fires. Pool callbacks set their own or leave "" — the dialogue
+        // fires. Pool callbacks set their own or leave "" - the dialogue
         // indexer refuses to index events with an empty sessionId.
         agent_.setCompressionCheckpointSessionId(activeSession.id.get);
         logger.tracef("compression checkpoint session id: %s", activeSession.id.get);
@@ -247,41 +267,58 @@ struct AgentApp {
         uiMsg.ready;
     }
 
-    private void processChatMessage(Chat.MessageT m, bool printUser) {
+    private void processChatMessage(Chat.MessageT m, size_t nr, bool printUser) {
         m.match!((Message a) {
-            const bool show = !a.role.among(Role.user, Role.system)
-                || (a.role == Role.user && printUser && a.isUserQuery);
+            const bool show = isDisplayable(m) && (a.role != Role.user || printUser);
             if (show) {
                 auto msgType = a.role == Role.user ? TuiChatMessageType_User
                     : TuiChatMessageType_Assistant;
-                this.sendChatThinkMessage("%s: %s", a.thinking, msgType, a.role, a.content);
+                this.sendPersistedChatThinkMessage("%s: %s", a.thinking,
+                    msgType, nr, a.processTime(), a.role, a.content);
             } else {
                 logger.tracef("%s: %s", a.role, a.content);
             }
         }, (ToolMessage a) {
             auto calls = summarizeToolCalls(a.toolCalls, 1000);
-            this.sendChatThinkMessage("tool call: %(%-s\n%)", a.thinking,
-                TuiChatMessageType_ToolCall, calls);
+            this.sendPersistedChatThinkMessage("tool call: %(%-s\n%)", a.thinking,
+                TuiChatMessageType_ToolCall, nr, a.processTime(), calls);
             if (a.isFinalAnswer()) {
-                uiMsg.finalAnswer(a.getFinalAnswer());
+                // Same (nr, time) as the tool-call line above: one number per
+                // persistent message.
+                this.sendPersistedFinalAnswer(a.getFinalAnswer(), nr, a.processTime());
             }
         }, (ToolResponse a) {
-            if (!isHiddenToolResponse(a.toolName)) {
-                this.sendChatMessage("tool result %s: %-s %s", TuiChatMessageType_ToolResponse,
+            if (isDisplayable(m)) {
+                this.sendPersistedChatMessage("tool result %s: %-s %s",
+                    TuiChatMessageType_ToolResponse, nr, a.processTime(),
                     a.success ? "✅" : "❌", a.toolName, summarizeToolResponse(a, 1000));
             }
         }, (VisionMessage a) {
             // the user never directly use an API function which produce a
             // vision message. It is the LLM that make the call.
-            this.sendChatMessage("user: %s (with image)", TuiChatMessageType_Assistant, a.content);
+            this.sendPersistedChatMessage("user: %s (with image)",
+                TuiChatMessageType_Assistant, nr, MessageTime(NoProcessingTime()), a.content);
         });
     }
 
     package void processResult(ProcessResult result) {
         logger.trace(result.status != ProcessResult.Status.ok, result);
         lastServerStat = result.stat;
+        // NR offset: result.chat (Chat.lastResponses) is the contiguous tail
+        // of the history, so the displayable count of the history before the
+        // batch is the ordinal offset. A user query in the batch was already
+        // echoed with exactly its ordinal (runAgent, after the turn-start
+        // doCompress); printUser: false keeps it out of the live display.
+        auto history = agent_.chat.getMessages();
+        const size_t offset = displayableCount(history[0 .. $ - result.chat.length]);
+        size_t pos = 0;
         foreach (m; result.chat) {
-            this.processChatMessage(m, printUser: false);
+            if (isDisplayable(m)) {
+                pos++;
+                this.processChatMessage(m, offset + pos, printUser: false);
+            } else {
+                this.processChatMessage(m, 0, printUser: false);
+            }
         }
         // Append-site audit: every Agent-layer append is reported through
         // result.chat - process() sets rval.chat = chat.lastResponses (agent)
@@ -344,7 +381,11 @@ struct AgentApp {
 
     /** Activate a session by id: load into memory, clear UI, replay history.
      *
-     * Loads the session FIRST — on failure: send error and abort, keeping the current in-memory chat and active id. On success: clear history, re-apply the cached startup system prompt, load doc, reset response index, sync context, clear UI, replay messages, resend UiInitHistory, update status and state.
+     * Loads the session FIRST - on failure: send error and abort, keeping the
+     * current in-memory chat and active id. On success: clear history,
+     * re-apply the cached startup system prompt, load doc, reset response
+     * index, sync context, clear UI, replay messages, resend UiInitHistory,
+     * update status and state.
      */
     private void activateSession(SessionId id) {
         // Commit current session was already done by caller (switchToSession)
@@ -383,8 +424,14 @@ struct AgentApp {
         uiMsg.clearChat();
         uiMsg.pipelineClear();
 
+        size_t pos = 0;
         foreach (m; agent_.chat.getMessages()) {
-            this.processChatMessage(m, printUser: true);
+            if (isDisplayable(m)) {
+                pos++;
+                this.processChatMessage(m, pos, printUser: true);
+            } else {
+                this.processChatMessage(m, 0, printUser: true);
+            }
         }
 
         if (uiMsg.isActive()) {
@@ -561,7 +608,7 @@ struct AgentApp {
             }
             activateSession(fallbackId); // never commits
             // Defensive: if the fallback failed to load, do not keep pointing
-            // at the deleted id — a later commit would resurrect the file.
+            // at the deleted id - a later commit would resurrect the file.
             // Single-send note: a FAILED activation returns before
             // sendSessionList() (see activateSession's load-failure path), so
             // this defensive second activation is the only successful one on
@@ -728,7 +775,7 @@ struct AgentApp {
         if (slashCommands_.isSlashCommand(query)) {
             // /delete-prefixed non-commands like `/deletefoo` skip the top
             // rule, and the registry's unknown path does not clear pending
-            // state. Clear before dispatch — a stale confirmation would
+            // state. Clear before dispatch - a stale confirmation would
             // otherwise make the next `/delete <n>` confirm-delete without
             // re-prompting.
             if (query.startsWith("/delete") && !slashCommands_.isRegistered(query))
@@ -750,6 +797,18 @@ struct AgentApp {
 
         if (runAgentLoop) {
             this.doCompress(false);
+            // User-query echo, sent AFTER the turn-start doCompress: the
+            // query (if any) is the last entry in the possibly-compressed
+            // history, so its ordinal is the displayable count of that
+            // history - no +1, and a compression that purged displayable
+            // prefix messages cannot misnumber it.
+            // isActive() keeps one-shot CLI output byte-stable: the
+            // startSetup one-shot branch runs with the default TuiBlockedSink
+            // and has no chat line for the prompt today.
+            if (!query.empty && uiMsg.isActive())
+                this.sendPersistedChatMessage(query, TuiChatMessageType_User,
+                        displayableCount(agent_.chat.getMessages()),
+                        MessageTime(NoProcessingTime()));
             auto result = agent_.runToCompletion(&this.processResult,
                     compressCallback: &this.progressCallback, interrupt: () {
                 return isStopAgentTriggered;
@@ -899,6 +958,23 @@ struct AgentDone {
     int code;
 }
 
+package bool isDisplayable(Chat.MessageT m) {
+    return m.match!((Message a) {
+        return !a.role.among(Role.user, Role.system) || a.isUserQuery;
+    }, (ToolMessage a) { return true; }, (ToolResponse a) {
+        return !isHiddenToolResponse(a.toolName);
+    }, (VisionMessage a) { return true; });
+}
+
+package size_t displayableCount(Chat.MessageT[] msgs) {
+    size_t n;
+    foreach (ref msg; msgs) {
+        if (isDisplayable(msg))
+            n++;
+    }
+    return n;
+}
+
 class AppAgentActor {
     import my.actor;
     import llm.tui;
@@ -938,14 +1014,6 @@ class AppAgentActor {
         try {
             startSetup();
         } catch (Exception e) {
-            // onException (mylib hook) only fires for Exception. A
-            // core.exception.Error escaping a handler violates
-            // ActorShell.process()'s nothrow contract: the scheduler
-            // worker dies inside the pool (TaskPool.doJob swallows the
-            // Throwable into task.exception, thread returns to idle) and
-            // this actor is orphaned — no AgentDone, supervisor hangs
-            // forever. Catching every Throwable here turns any start
-            // failure into a logged, clean exit.
             logger.errorf("AppAgentActor start failed (%s): %s",
                     cast(Exception) e !is null ? "Exception" : "Error", e.msg);
             startExit(1, ExitReason.unhandledException);
@@ -1002,23 +1070,12 @@ class AppAgentActor {
 
         app.updateRagMemory();
 
-        // When the TUI mailbox is full, sends from actor
-        // workers are dropped - never blocked - and counted in
-        // `tui_.addr.get.dropped` (blocking a pool worker is the deadlock
-        // the bound prevents); only non-actor threads, like this
-        // supervisor, may block on a full mailbox.
-        // Residual, accepted: stream messages may be dropped during a real
-        // stall — the TUI renders frames anyway, so a dropped frame message is
-        // safe; control messages are low-rate and the mailbox drains at frame
-        // rate, so their drop probability is negligible.
-        // Config.detached: the TUI actor must own one FIXED thread. Its
-        // GLFW window/GL context are thread-affine - created in onSpawn and
-        // driven by every frame. On the shared pool the frames hop across
-        // worker threads where the context is not current; the GL calls
-        // become no-ops and ImGui device-object creation fails at runtime
-        // ("failed to compile vertex shader"). The dedicated thread keeps
-        // onSpawn and all frames on the same thread (design: single UI
-        // thread drives the C API).
+        // When the TUI mailbox is full, sends from actor workers are dropped -
+        // never blocked - and counted in `tui_.addr.get.dropped` (blocking a
+        // pool worker is the deadlock the bound prevents); only non-actor
+        // threads, like this supervisor, may block on a full mailbox.
+        // Config.detached: the TUI actor must own one FIXED thread. Its GLFW
+        // window/GL context are thread-affine.
         tui_ = sys.spawnBounded!(Config.detached, TextUserInterfaceActor)(1000,
                 TypedAddress!TUIListener(self_.address().lock()), app.llmConf.uiInitFile,
                 app.llmConf.tui.maxWidth, resolveTuiBackendMode(app.conf_));
@@ -1027,8 +1084,16 @@ class AppAgentActor {
         app.uiMsg.initHistory(app.agent_.getUserQueries.map!(a => a.content).array.idup);
         app.agent_.setStreamUpdate(app.makeStreamCallback);
 
-        foreach (m; app.agent_.chat.getMessages())
-            app.processChatMessage(m, printUser: true);
+        // TODO: this same code is copy/pasted. Refactor it into a function
+        size_t pos = 0;
+        foreach (m; app.agent_.chat.getMessages()) {
+            if (isDisplayable(m)) {
+                pos++;
+                app.processChatMessage(m, pos, printUser: true);
+            } else {
+                app.processChatMessage(m, 0, printUser: true);
+            }
+        }
 
         app.sendSessionList();
         auto helpText = app.printHelp(app.conf_);
@@ -1046,7 +1111,6 @@ class AppAgentActor {
     void userQuery(string s) {
         auto query = s.strip;
         if (!query.empty) {
-            app.sendChatMessage(query, TuiChatMessageType_User);
             app.uiMsg.busy();
             clearStopAgent();
             app.setStatusText(false);
@@ -1060,9 +1124,8 @@ class AppAgentActor {
             app.uiMsg.ready();
             app.sendSessionList();
             // uiAgentReady only clears the busy flag (Thinking indicator,
-            // session-panel gating); without this rewrite the status bar
-            // keeps the last "Busy" text (legacy loop-top setStatusText(true)
-            // parity).
+            // session-panel gating); without this call the status bar keeps
+            // the last "Busy" text, so set the ready text explicitly.
             app.setStatusText(true);
         }
     }
@@ -1096,7 +1159,7 @@ class AppAgentActor {
         startExit(1, ExitReason.userShutdown);
     }
 
-    // The dialogue worker sends this directly to its owner (this actor —
+    // The dialogue worker sends this directly to its owner (this actor -
     // wired as `self_` in the DI ctor in startSetup): no supervisor
     // forward.
     void diDegraded(string reason) {
@@ -1126,7 +1189,7 @@ class AppAgentActor {
     // drain and arm the bounded deadline. Phase 2 (diDrained /
     // drainTimeout): finishExit. Idempotent: every exit path funnels into
     // this, and a second call is a no-op. An exit without a dialogue
-    // index finishes immediately — there is no drain to wait for.
+    // index finishes immediately - there is no drain to wait for.
     // Unannotated (inferred @system): the no-drain path calls finishExit,
     // which must catch Throwable below.
     void startExit(int code, ExitReason reason) {
@@ -1175,7 +1238,7 @@ class AppAgentActor {
     // Phase 2: cleanup, then die. finishDispose does file I/O
     // (commitActiveSession/saveState) and CAN throw; a second throw here
     // would escape the hook as a nothrow violation and silently kill the
-    // scheduler worker (TaskPool.doJob swallows the Throwable) — the
+    // scheduler worker (TaskPool.doJob swallows the Throwable) - the
     // exact hang class the start() guard protects against. sendExit runs
     // ONLY here, after the cleanup.
     private void finishExit() {
@@ -1204,18 +1267,18 @@ int appMain(UserConfig uconf, UserConfig.AgentChatConfig conf) {
 
     // The supervisor is a scoped actor pumped by this main thread (not a
     // pool worker). Declared before the scope guards so LIFO teardown
-    // destroys it LAST — after sys.shutdown + pool.finish — which keeps
+    // destroys it LAST - after sys.shutdown + pool.finish - which keeps
     // its mailbox alive for the agent's final AgentDone.
     auto sup = scopedActor;
 
-    // Explicit 3-worker pool — the sys actors (AppAgentActor,
+    // Explicit 3-worker pool - the sys actors (AppAgentActor,
     // TextUserInterfaceActor, and the dialogue worker spawned by the
     // DialogueIndex actor ctor) each occupy one pool worker for their
     // full duration; the agents and workers ARE actors, the pool serves
     // those workloads. Never default pool.
-    // Pool-size policy (a convention — the library does not check it —
+    // Pool-size policy (a convention - the library does not check it -
     // documented in the mylib actor README, "Bounded mailbox"):
-    // pool >= actor count + 1 — the three actors take the three pool
+    // pool >= actor count + 1 - the three actors take the three pool
     // workers and this main thread (the supervisor wait below) is the
     // +1: it holds no worker, so it is the only thread allowed to block
     // on a bounded mailbox; pool workers never block (they drop instead).

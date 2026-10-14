@@ -338,6 +338,14 @@ dub build --config=llmfun_util              # Build test utility (manual testing
 - D bindings in `tui/package.d` handle streaming and inter-thread message passing.
 - Exposed via pure C API (`tui_api.h` / `tui_api.cpp`) for D interop.
 - Session sidebar (`ChatTabSessionPanel`): session rows with active marker and ` [N]` count, rename toggle + input on the active row, two-step delete, busy gating (guard-and-skip: New/Rename/Delete are skipped while busy and a pending session switch is deferred in a single last-click-wins slot; the vendored ImGui is 1.92.9b — `BeginDisabled` exists at imgui.h:998, but the manual guard-and-pending-slot gating is what's implemented). A filter input in the panel header with fzf-style fuzzy subsequence matching + ranking against title + preview (`session_fuzzy.h`, pure), Esc/Enter/click selection with busy-defer, whole-word match highlighting, and the headless `test_session_filter_smoke` harness. Mutually exclusive with the pipeline panel (the pipeline wins the left slot whenever it has agents); `leftPanelWidth(state)` resolves the output offset. See `doc/tui_design.md` and `doc/sessions.md`.
+- Persistent chat messages render a decorated header `[NR] <summary> [TIME]`
+  (D side only, `tui/package.d`): NR is the message's 1-based ordinal among
+  the session's displayed persistent messages — derived, not stored, from
+  the persisted session file (replay-stable); TIME is the measured LLM-call
+  or tool-execution duration, rendered only when present
+  (`MessageTime` / `save_data.processMs`, formatted by mylib `my.time`);
+  display-only lines and the one-shot CLI are undecorated. No C/C++ change.
+  See `doc/tui_design.md` ("Message header decoration").
 - D can import `.c` as they are, no binding is required, no `extern(C)` is required. See the D specification for more details.
 - Max width (`TuiConfig` / YAML `tui.maxWidth`): caps the TUI's rendered
   width in terminal columns (0 = unlimited, default; valid 0 or [40, 10000],
