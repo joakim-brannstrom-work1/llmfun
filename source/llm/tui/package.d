@@ -254,7 +254,6 @@ struct TextUserInterface {
         tuiInitQueryHistory(tuiState, app[].ptr, app[].length);
     }
 
-    // Replaces the sidebar session snapshot.
     void setSessionList(const(UiSessionItem)[] items) {
         if (items.length == 0) {
             tuiSetSessionList(tuiState, null, 0);
@@ -353,10 +352,39 @@ private string backendKindName(int kind) {
     }
 }
 
+void playNotification() {
+    import llm.config : ProgramName;
+    import my.optional;
+    import my.resource;
+    import std.file : exists;
+    import std.process : spawnProcess, Config;
+    import std.stdio : File;
+    import std.sumtype : match;
+
+    static bool hasPlayer = true;
+
+    if (!hasPlayer)
+        return;
+
+    auto path = dataSearch(ProgramName).resolve(Path("notification.wav"));
+    path.match!((Some!ResourceFile p) {
+        try {
+            if (p.get.exists) {
+                auto f = File("/dev/null");
+                spawnProcess(["aplay", p.get.toString], f, f, f, null, Config.detached);
+            }
+        } catch (Exception e) {
+            logger.trace(e.msg);
+            hasPlayer = false;
+        }
+    }, (None _) {});
+
+}
+
 class TextUserInterfaceActor : TUICommands {
     import std.string : strip;
     import std.datetime : dur, Clock, Duration, SysTime;
-    import llm.utility : stopAgent, playNotification;
+    import llm.utility : stopAgent;
     import std.conv : to;
 
     private {
