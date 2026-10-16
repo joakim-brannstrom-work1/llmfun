@@ -1,19 +1,35 @@
 /// MCP server that bridges JSON-RPC 2.0 to llmfun's @Function tool infrastructure.
 ///
-/// The server runs as a std.concurrency actor: the main thread spawns `runMcpServer` and communicates with it exclusively via messages (McpServerConfig, McpShutdown, McpStarted, McpStopped, McpFailed). There is no shared state between the threads.
+/// The server runs on the my.actor framework: appMain spawns an McpServerActor
+/// on a System and communicates with it exclusively through the typed
+/// Channel!McpServerActor (message-method contracts: configure, stdin, eof,
+/// pollTick, shutdown). A StdioReaderActor forwards complete stdin frames to
+/// the server actor and self-reschedules a pollTick tick on the shared pool.
+/// There is no shared mutable state between the threads; cross-thread exit
+/// signaling goes through the ExitCell flag and sendExit.
 ///
-/// Shutdown: the main thread sends McpShutdown and waits up to 30 s for McpStopped. Since the transport uses non-blocking fd reads (see transport.d), readMessage() never blocks the actor and shutdown is always honoured promptly. The 30 s deadline is a safety net against unforeseen edge cases.
+/// Shutdown: the main thread calls server.shutdown() and waits up to 30 s for
+/// the exit cell (ExitCell, 0 running / 1 stopped ok / 2 stopped with error),
+/// which the server actor's stop path writes right before sendExit. Since the
+/// transport uses non-blocking fd reads (see transport.d), readMessage() never
+/// blocks a handler and shutdown is always honoured promptly. The 30 s deadline
+/// is a safety net against unforeseen edge cases.
 module llm.mcp_server;
 
 import logger = std.logger;
 import std.algorithm : map;
 import std.array : array;
-import std.concurrency : Tid, receive, receiveTimeout, send;
-import std.datetime : dur;
+import std.datetime : Clock, dur;
 import std.json : JSONType, JSONValue;
 
 import my.filter : ReFilter;
 import my.path : Path;
+import my.actor.behavior : ActorRef;
+import my.actor.channel : dynDelayedSend, dynSend;
+import my.actor.common : ExitReason;
+import my.actor.mailbox : WeakAddress;
+import my.actor.msg : sendExit;
+import my.gc.refc : RefCounted;
 
 import llm.agent.context : AgentContext;
 import llm.app_config : createRag;
@@ -25,7 +41,7 @@ import llm.rag.rag : RAG;
 import llm.skill : SkillManager, makeSkillManager;
 import llm.tool_call : Context, descAllFunctions, executeFunc, filterToolDescriptions;
 
-/// Carries only the scalar parameters needed to reconstruct LlmConfig inside the actor thread. Avoids passing complex structs with associative arrays that would violate std.concurrency aliasing requirements.
+/// Carries only the scalar parameters needed to reconstruct LlmConfig inside the actor (LlmConfig holds associative arrays and the my.actor Variant gives no unshared-aliasing guarantee, so the flattened payload is passed through messages instead).
 ///
 /// Note: userCliWorkArea is intentionally omitted because the MCP subcommand has no --workarea CLI flag. The work area is read from the config file. If MCP ever needs CLI work area override, extend this struct.
 ///
@@ -36,167 +52,7 @@ struct McpConfigData {
     bool trustedConfig;
 }
 
-/// Sent from the main thread to the MCP server actor with the tool filter configuration (include/exclude regex patterns) and LLM configuration data. Uses immutable arrays so the message satisfies std.concurrency's no-unshared-aliasing requirement.
-struct McpServerConfig {
-    ToolFilter filter;
-    McpConfigData configData;
-}
-
-/// Sent from the MCP server actor to the main thread when the server is ready.
-struct McpStarted {
-}
-
-/// Sent from the main thread to the MCP server actor to request shutdown.
-struct McpShutdown {
-}
-
-/// Sent from the MCP server actor to the main thread when the server has stopped.
-struct McpStopped {
-    bool hadError;
-}
-
-/// Sent from the MCP server actor to the main thread when startup fails.
-struct McpFailed {
-    string msg;
-}
-
-/// Actor entry point: runs the MCP server on a stdio transport in its own thread. All communication with the owner thread goes through messages: the owner sends McpServerConfig (initial configuration) and McpShutdown, and receives McpStarted/McpFailed/McpStopped back.
-void runMcpServer(Tid ownerTid) {
-    // Wait for the initial configuration from the owner thread.
-    McpServerConfig conf;
-    receive((immutable McpServerConfig c) { conf = cast() c; });
-
-    // Reconstruct LlmConfig from the config data passed from the main thread. This is fatal if it fails - we cannot operate without configuration.
-    LlmConfig llmConf;
-    try {
-        llmConf = readConfig(conf.configData.configPath.Path, silent: true, noCwdConfig: conf.configData.noCwdConfig,
-                trustedConfig: conf.configData.trustedConfig);
-        logger.trace(llmConf);
-    } catch (Exception e) {
-        logger.errorf("Failed to read configuration: %s", e.msg);
-        send(ownerTid, McpFailed("Failed to read configuration: " ~ e.msg));
-        return;
-    }
-
-    // Create RAG instance - non-fatal if it fails (graceful degradation).
-    RAG rag;
-    try {
-        rag = createRag(llmConf);
-        if (rag is null) {
-            logger.warningf("RAG creation returned null, MCP will operate without RAG");
-        }
-    } catch (Exception e) {
-        logger.warningf("Failed to create RAG: %s. MCP will operate without RAG.", e.msg);
-        rag = null;
-    }
-
-    // Create AgentContext - fatal if it fails.
-    AgentContext agentCtx;
-    try {
-        agentCtx = new AgentContext(llmConf, rag);
-    } catch (Exception e) {
-        logger.errorf("Failed to create AgentContext: %s", e.msg);
-        send(ownerTid, McpFailed("Failed to create AgentContext: " ~ e.msg));
-        if (rag !is null)
-            rag.destroy;
-        rag = null;
-        return;
-    }
-
-    // Create SkillManager - non-fatal if it fails (graceful degradation).
-    SkillManager skillMgr;
-    try {
-        skillMgr = makeSkillManager(llmConf);
-        agentCtx.setSkillManager(skillMgr);
-    } catch (Exception e) {
-        skillMgr = null;
-        logger.warningf("Failed to create SkillManager: %s. MCP will operate without skills.",
-                e.msg);
-    }
-
-    // Set taskDone handler - logs the answer rather than triggering framework behavior. Fatal if it fails - cannot operate without taskDone handler.
-    try {
-        agentCtx.setTaskDoneHandler((string answer) {
-            logger.infof("MCP taskDone called: %s", answer);
-        });
-    } catch (Exception e) {
-        logger.errorf("Failed to set taskDone handler: %s", e.msg);
-        send(ownerTid, McpFailed("Failed to set taskDone handler: " ~ e.msg));
-        if (rag !is null)
-            rag.destroy;
-        rag = null;
-        return;
-    }
-
-    // The actor owns the transport and the server instance. Wrap construction in try-catch - fatal if it fails.
-    Transport transport;
-    MCPServer server;
-    try {
-        transport = new StdioTransport();
-        server = new MCPServer(llmConf.toolFilter.to, agentCtx);
-    } catch (Exception e) {
-        logger.errorf("Failed to create MCP server: %s", e.msg);
-        send(ownerTid, McpFailed("Failed to create MCP server: " ~ e.msg));
-        if (rag !is null)
-            rag.destroy;
-        rag = null;
-        return;
-    }
-
-    bool running = true;
-    bool hadError = false;
-    bool started = false;
-    // Clean up RAG and transport on exit; send appropriate shutdown message.
-    scope (exit) {
-        transport.close();
-        if (rag !is null)
-            rag.destroy;
-        if (!started) {
-            send(ownerTid, McpFailed("Server failed to start"));
-        } else {
-            send(ownerTid, McpStopped(hadError));
-        }
-    }
-
-    send(ownerTid, McpStarted());
-    started = true;
-    logger.info("MCP server actor started");
-
-    // Poll interval between control-message checks; transport input is drained without blocking via hasData().
-    immutable PollInterval = 10.dur!"msecs";
-
-    while (running) {
-        // Handle control messages; the timeout lets us poll the transport.
-        receiveTimeout(PollInterval, (McpShutdown _) {
-            logger.info("Shutdown requested, stopping MCP server");
-            running = false;
-        });
-        if (!running)
-            break;
-
-        // Drain any pending transport input without blocking.
-        while (running && transport.hasData()) {
-            try {
-                auto message = transport.readMessage();
-                if (message.length == 0)
-                    continue;
-
-                auto response = server.handleMessage(message);
-                if (response !is null)
-                    transport.writeMessage(response);
-            } catch (EOFException e) {
-                logger.info("MCP client disconnected (EOF)");
-                running = false;
-                break;
-            } catch (Exception e) {
-                hadError = true;
-                logger.warning("Error in MCP loop: ", e.msg);
-            }
-        }
-    }
-}
-
-/// MCP server that exposes @Function-registered tools over JSON-RPC 2.0. Takes a ReFilter at construction to control which tools are visible to MCP clients. Uses descAllFunctions() and executeFunc() from llm.tool_call. This class is a pure request/response handler -- the event loop lives in the runMcpServer actor, which owns the transport.
+/// MCP server that exposes @Function-registered tools over JSON-RPC 2.0. Takes a ReFilter at construction to control which tools are visible to MCP clients. Uses descAllFunctions() and executeFunc() from llm.tool_call. This class is a pure request/response handler -- the event loop lives in the McpServerActor actor, which owns the transport.
 class MCPServer {
 private:
     ReFilter filter_;
@@ -388,7 +244,351 @@ private:
     }
 }
 
-/// Optional trace logging, enabled with version (TraceMcp).
+/// Reply sent from McpServerActor.configure back to the main-thread client
+/// kernel. A failed startup is reported as ok=false plus errMsg.
+struct ReadyReply {
+    bool ok;
+    string errMsg;
+}
+
+/// Shared exit cell (my.gc.refc RefCounted - the mylib-sanctioned cross-thread
+/// flag pattern): 0 running, 1 stopped ok, 2 stopped with error. Written by the
+/// server actor's stop path right before sendExit, polled by the main thread.
+alias ExitCell = RefCounted!int;
+
+/// Fully reactive MCP server actor. Constructed via
+/// `sys.spawn!McpServerActor(transport, exitState)` - spawn args go to the
+/// ctor, which only pins the dependencies; the heavy startup work runs in the
+/// configure message handler (the ctor runs synchronously inside
+/// spawn!). All input arrives as messages - the actor never polls.
+class McpServerActor {
+    private {
+        Transport transport_;
+        ExitCell exitState_;
+        ActorRef self_;
+        MCPServer server_;
+        RAG rag_;
+        bool stopping_;
+        bool hadError_;
+    }
+
+    /// The transport parameter is the Transport interface (not StdioTransport)
+    /// so unit tests can inject a scripted fake - the mylib no-thread test
+    /// pattern. StdioTransport is-a Transport, so production call sites are
+    /// unchanged.
+    this(Transport transport, ExitCell exitState) {
+        transport_ = transport;
+        exitState_ = exitState;
+    }
+
+    this(ExitCell exitState) {
+        exitState_ = exitState;
+    }
+
+    /// Framework launch hook - runs before the first message and provides the
+    /// self handle used by the stop path's sendExit.
+    void onSpawn(ActorRef self) @trusted {
+        self_ = self;
+        if (transport_ is null) {
+            try {
+                transport_ = new StdioTransport();
+            } catch (Exception e) {
+                logger.errorf("Failed to create stdio transport: %s", e.msg);
+                exitState_.get = 2;
+                sendExit(self_.address, ExitReason.userShutdown);
+            }
+        }
+    }
+
+    /// Startup: heavy construction moved OUT of the ctor. Performs the
+    /// exact construction sequence of the old polling loop and replies when
+    /// ready. A failed startup is NOT a stop path - the reply carries the
+    /// failure and the main thread's exit logic reacts to it. An exception
+    /// escaping the internal catches is still fatal - logged, the exit cell
+    /// set to 2 (stopped with error) and a self-exit sent so main converges
+    /// instead of waiting out the 30 s Channel timeout; the failure reply
+    /// additionally lets main exit immediately.
+    ReadyReply configure(ToolFilter filter, McpConfigData configData) {
+        try {
+            return configureWorld(filter, configData);
+        } catch (Exception e) {
+            trace("configure: handler exception, fatal stop");
+            logger.errorf("Failed to configure MCP server actor: %s", e.msg);
+            stop(true);
+            return ReadyReply(false, "Failed to configure MCP server actor: " ~ e.msg);
+        }
+    }
+
+    private ReadyReply configureWorld(ToolFilter filter, McpConfigData configData) {
+        trace("configure: rebuilding LlmConfig and constructing the world");
+
+        // Reconstruct LlmConfig from the config data passed from the main
+        // thread. This is fatal if it fails - we cannot operate without
+        // configuration.
+        LlmConfig llmConf;
+        try {
+            llmConf = readConfig(configData.configPath.Path, silent: true, noCwdConfig: configData.noCwdConfig,
+                    trustedConfig: configData.trustedConfig);
+            logger.trace(llmConf);
+        } catch (Exception e) {
+            logger.errorf("Failed to read configuration: %s", e.msg);
+            return ReadyReply(false, "Failed to read configuration: " ~ e.msg);
+        }
+
+        // Create RAG instance - non-fatal if it fails (graceful degradation).
+        try {
+            rag_ = createRag(llmConf);
+            if (rag_ is null) {
+                logger.warningf("RAG creation returned null, MCP will operate without RAG");
+            }
+        } catch (Exception e) {
+            rag_ = null;
+            logger.warningf("Failed to create RAG: %s. MCP will operate without RAG.", e.msg);
+        }
+
+        // Create AgentContext - fatal if it fails.
+        AgentContext agentCtx;
+        try {
+            agentCtx = new AgentContext(llmConf, rag_);
+        } catch (Exception e) {
+            logger.errorf("Failed to create AgentContext: %s", e.msg);
+            destroyRag;
+            return ReadyReply(false, "Failed to create AgentContext: " ~ e.msg);
+        }
+
+        // Create SkillManager - non-fatal if it fails (graceful degradation).
+        try {
+            auto skillMgr = makeSkillManager(llmConf);
+            agentCtx.setSkillManager(skillMgr);
+        } catch (Exception e) {
+            logger.warningf("Failed to create SkillManager: %s. MCP will operate without skills.",
+                    e.msg);
+        }
+
+        // Set taskDone handler - logs the answer rather than triggering
+        // framework behavior. Fatal if it fails - cannot operate without a
+        // taskDone handler.
+        try {
+            agentCtx.setTaskDoneHandler((string answer) {
+                logger.infof("MCP taskDone called: %s", answer);
+            });
+        } catch (Exception e) {
+            logger.errorf("Failed to set taskDone handler: %s", e.msg);
+            destroyRag;
+            return ReadyReply(false, "Failed to set taskDone handler: " ~ e.msg);
+        }
+
+        try {
+            server_ = new MCPServer(filter.to, agentCtx);
+        } catch (Exception e) {
+            logger.errorf("Failed to create MCP server: %s", e.msg);
+            destroyRag;
+            return ReadyReply(false, "Failed to create MCP server: " ~ e.msg);
+        }
+
+        logger.info("MCP server actor started");
+        trace("configure: ready");
+        return ReadyReply(true, "");
+    }
+
+    /// One complete JSON-RPC frame from the reader actor (reader -> server).
+    /// Null-guarded: a frame arriving before a successful configure is dropped
+    /// (the main thread reacts to the configure failure reply instead; a null
+    /// deref here would hit the default exception handler and force-kill the
+    /// actor without the exit-cell/transport cleanup the convergence logic
+    /// relies on).
+    void stdin(string message) {
+        if (server_ is null)
+            return;
+        trace("stdin: one frame dispatched");
+        try {
+            auto response = server_.handleMessage(message);
+            if (response !is null)
+                transport_.writeMessage(response);
+        } catch (Exception e) {
+            // A handler error is a stop path like eof()/shutdown(), not the
+            // old drain loop's catch-and-continue - the actor self-exits and
+            // main converges instead of serving on with a half-broken server.
+            logger.warning("Error in MCP loop: ", e.msg);
+            stop(true);
+        }
+    }
+
+    /// Client disconnected (reader -> server). Idempotent: state-guarded
+    /// no-op if already stopping.
+    void eof() {
+        if (!stopping_)
+            logger.info("MCP client disconnected (EOF)");
+        trace("eof: client disconnected, stopping");
+        stop;
+    }
+
+    /// Graceful shutdown request (main -> server). The old loop polled for
+    /// this as a control message; the actor now exposes it as a method.
+    /// Idempotent: state-guarded no-op if already stopping.
+    void shutdown() {
+        if (!stopping_)
+            logger.info("Shutdown requested, stopping MCP server");
+        trace("shutdown: graceful shutdown requested, stopping");
+        stop;
+    }
+
+    /// Last-resort exception net for the handlers that are not fatal-wrapped
+    /// internally: a throw from eof()/shutdown() is logged and skipped - the
+    /// actor survives, matching the old drain loop's catch-and-continue; the
+    /// error is reported via the exit cell at stop time (hadError -> cell 2).
+    /// Declaring this hook replaces the default exception handler (which would
+    /// force-shutdown the actor instead). The stdin/configure dispatches are
+    /// fatal-wrapped inside their own handlers, so their exceptions
+    /// never reach this hook.
+    void onException(Exception e) {
+        hadError_ = true;
+        logger.warning("Error in MCP loop: ", e.msg);
+    }
+
+private:
+    /// Stop path shared by eof() and shutdown(): close the transport and
+    /// destroy RAG, set the exit cell (1 stopped ok / 2 stopped with error)
+    /// right before sendExit so main's pump loop observes a fully cleaned-up
+    /// stop, then self-exit. NO onExit
+    /// hook: declaring one would REPLACE the default exit handler, which is
+    /// the only forceShutdown death path - with a user onExit hook the actor
+    /// survives sendExit(userShutdown) (the TrappedExit semantics verified in
+    /// my/actor/registration.d:476-503). With no onExit hook the default exit
+    /// handler force-shuts the actor down: a real death (the mylib-sanctioned
+    /// self-exit pattern, README "one-shot task actors").
+    void stop(bool hadError = false) {
+        if (stopping_)
+            return;
+        stopping_ = true;
+
+        transport_.close();
+        destroyRag;
+
+        hadError_ = hadError_ || hadError;
+        exitState_.get = hadError_ ? 2 : 1;
+        trace("stop: transport closed, exit cell set, self-exit sent");
+        sendExit(self_.address, ExitReason.userShutdown);
+    }
+
+    void destroyRag() {
+        if (rag_ !is null)
+            rag_.destroy;
+        rag_ = null;
+    }
+}
+
+/// Reader tick cadence: the pollTick self-rescheduling delay. The practical
+/// cadence is ~10-20 ms, not exactly 10 ms (the worker inactiveLimit sleep),
+/// which the pump loops tolerate.
+private enum TickInterval = 10.dur!"msecs";
+
+/// Reader-side actor: forwards complete JSON-RPC frames from the transport to
+/// the server actor, one per pollTick (a self-rescheduling tick on the
+/// shared pool - between ticks neither actor occupies a pool worker). Spawned
+/// via `sys.spawn!StdioReaderActor(serverAddr.weakRef)` - the spawn arg goes to
+/// the ctor, which only pins the server's weak address (the ctor runs on
+/// the spawning thread inside spawn!). The reader makes its own StdioTransport
+/// in the onSpawn launch hook, on the actor thread - the same per-actor
+/// transport ownership as the server actor (no main-thread shared transport).
+///
+/// The tick uses ONLY the existing transport API: hasData() for the
+/// zero-timeout availability check, closed() to detect end of stream
+/// (eof-equivalent) and readMessage() for the frame. No waitData and no new
+/// Transport methods.
+class StdioReaderActor {
+    private {
+        /// Weak address of the server actor: a dynSend/dynDelayedSend to a
+        /// dead server is a structural no-op (WeakAddress.lock.get == null).
+        WeakAddress server_;
+        ActorRef self_;
+        Transport transport_;
+    }
+
+    /// Optional transport override: tests inject a fake here; production
+    /// (null) makes the real StdioTransport in onSpawn, on the actor thread.
+    this(WeakAddress server, Transport transport = null) {
+        server_ = server;
+        transport_ = transport;
+    }
+
+    /// Framework launch hook - saves the self handle for the delayed re-arms
+    /// and arms the first pollTick: nothing else sends it, so without this the
+    /// tick loop would never start.
+    void onSpawn(ActorRef self) @trusted {
+        self_ = self;
+        try {
+            transport_ = transport_ !is null ? transport_ : new StdioTransport();
+        } catch (Exception e) {
+            logger.errorf("Failed to create stdio reader transport: %s", e.msg);
+            // Tell the server the reader is gone (eof is idempotent server-side
+            // and a dynSend to a dead server is a structural no-op): without
+            // this, a reader-side transport failure would leave the server (and
+            // main) waiting for stdin that never arrives.
+            dynSend(server_, "eof");
+            sendExit(self_.address, ExitReason.userShutdown);
+            return;
+        }
+        dynDelayedSend(self_.address, Clock.currTime() + TickInterval, "pollTick");
+    }
+
+    /// One non-blocking iteration. Never blocks a worker thread between ticks:
+    /// no polling sleeps inside the tick handler; the actor is unscheduled
+    /// between ticks (the delayed self-send re-arms it).
+    void pollTick() {
+        if (transport_ is null)
+            return; // spawn-failed guard: the actor is dead, do not re-arm
+
+        if (transport_.closed()) {
+            // End of stream (eof-equivalent): notify the server and self-exit.
+            trace("reader: transport closed, notifying the server and exiting");
+            dynSend(server_, "eof");
+            sendExit(self_.address, ExitReason.userShutdown);
+            return; // no re-arm
+        }
+        if (transport_.hasData()) {
+            try {
+                auto message = transport_.readMessage(); // skips blanks; throws EOFException on EOF
+                trace("reader: one frame forwarded");
+                dynSend(server_, "stdin", message);
+            } catch (EOFException e) {
+                // The EOF path is treated exactly like the closed() case (eof +
+                // self-exit, no re-arm).
+                trace("reader: EOF from readMessage, notifying the server and exiting");
+                dynSend(server_, "eof");
+                sendExit(self_.address, ExitReason.userShutdown);
+                return; // no re-arm
+            }
+        }
+        // Re-arm (self-sent delayed message); 10 ms keeps the current latency
+        // envelope. The practical tick cadence is ~10-20 ms, not exactly 10 ms
+        // (the worker inactiveLimit sleep), which the pump
+        // loops already tolerate.
+        dynDelayedSend(self_.address, Clock.currTime() + TickInterval, "pollTick");
+    }
+
+    /// A throwing tick handler is logged and skipped - the actor survives and
+    /// keeps ticking, matching the old drain loop's catch-and-continue. A
+    /// stopped tick would silently stop forwarding stdin (the server would hang
+    /// until a signal). Declaring this hook replaces the default exception
+    /// handler (which would force-shutdown the actor instead).
+    ///
+    /// The hook re-arms the tick: an exception that escaped pollTick skipped
+    /// that method's trailing re-arm (it is pollTick's last statement), so
+    /// without this the actor would survive but never tick again - stdin
+    /// forwarding would stop silently. The guard makes double-arming
+    /// impossible (the in-handler re-arm only lands when the handler ran to
+    /// completion) and the spawn-failed case (transport_ null, no self-tick
+    /// wanted) stays dead.
+    void onException(Exception e) {
+        logger.warning("Error in MCP reader loop: ", e.msg);
+        if (transport_ !is null)
+            dynDelayedSend(self_.address, Clock.currTime() + TickInterval, "pollTick");
+    }
+}
+
+/// Optional trace logging for this module, enabled with a NEW version
+/// identifier (TraceMcp) defined here - not a pre-existing convention.
 private void trace(string msg) {
     version (TraceMcp) {
         logger.info("[MCP] " ~ msg);
