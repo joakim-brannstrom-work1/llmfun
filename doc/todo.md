@@ -36,6 +36,9 @@
 - add a menu item to open a separate window to show more detailed statistic about LLM such as latency, token use in total etc
 - add a menu item to navigate the RAG database
 - taskDone is displayed incorrectly when reading the database. Should be FinalAnswer
+- the title in the GUI should contain the session name
+- the session sometimes have a system prompt as its description
+- the DPI/font size need to be adjustable
 
 # pipeline
 - must support resuming where a pipeline was last interrupted
