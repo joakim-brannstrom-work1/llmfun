@@ -17,6 +17,11 @@ import llm.tool_call.io.search : CodeBlockRange, findMarkerLine, findNthMarkerLi
     countMultiLineMarkerOccurrences, findCodeBlock,
     findNthCodeBlock, countCodeBlockOccurrences, resolveScope, maxMarkerLines;
 
+version (unittest) {
+    // Test-only: the placement unittests' assert messages use `to!string`.
+    import std.conv : to;
+}
+
 /// byLine targeting: validate startLine/count and apply the edit to the
 /// resolved 1-based line range.
 package EditFileOutcome executeByLine(string[] fileLines, EditMode mode, string content,
@@ -342,4 +347,85 @@ package EditFileOutcome editFileUnifiedMemory(string[] fileLines, EditMode mode,
     // resolution above), so no empty-check is needed.
     return executeByContent(fileLines, mode, content, contentLines, searchContent, count, replaceAll,
             matchIndex, scopeWindow.begin, scopeWindow.endExclusive, scopeStart, scopeEnd);
+}
+
+@("byContent + append anchors at the FIRST occurrence when identical section footers repeat (incident repro)")
+unittest {
+    // Real incident: a file with several sections each ending in an IDENTICAL
+    // footer line; append with searchContent=<footer> must insert right after
+    // the FIRST section's footer, never a later one. findCodeBlock scans
+    // forward and returns the first full-block match, so the anchor is the
+    // first occurrence.
+    string[] fileLines = [
+        "## Section 1", "body one", "footer", "",
+        "## Section 2", "body two", "footer", "",
+        "## Section 3", "body three", "footer",
+    ];
+    auto res = editFileUnifiedMemory(fileLines, EditMode.append, "NEW", searchContent: "footer");
+    assert(res.lines == [
+        "## Section 1", "body one", "footer", "NEW", "",
+        "## Section 2", "body two", "footer", "",
+        "## Section 3", "body three", "footer",
+    ], res.lines.to!string);
+    // matched.matchedAt is the 1-based anchor line: the FIRST "footer".
+    assert(res.matched.matchedAt == 3, res.matched.to!string);
+}
+
+@("byContent + insert_after/insert_before anchor on the matched block (single occurrence)")
+unittest {
+    string[] fileLines = ["a", "foo", "bar", "b"];
+    auto res = editFileUnifiedMemory(fileLines, EditMode.insert_after, "X", searchContent: "foo\nbar");
+    assert(res.lines == ["a", "foo", "bar", "X", "b"], res.lines.to!string);
+    // byContent matchedAt is the 1-based START of the matched block (the
+    // block's first line here); for byMarker it is the 1-based anchor line.
+    assert(res.matched.matchedAt == 2, res.matched.to!string);
+
+    string[] fileLines2 = ["a", "foo", "bar", "b"];
+    auto res2 = editFileUnifiedMemory(fileLines2, EditMode.insert_before, "X", searchContent: "foo\nbar");
+    assert(res2.lines == ["a", "X", "foo", "bar", "b"], res2.lines.to!string);
+    // insert_before anchors on the block's FIRST line (0-based 1 -> 1-based 2).
+    assert(res2.matched.matchedAt == 2, res2.matched.to!string);
+}
+
+@("byMarker + append anchors at the FIRST occurrence when the marker repeats")
+unittest {
+    string[] fileLines = ["## A", "end", "## B", "end", "## C"];
+    auto res = editFileUnifiedMemory(fileLines, EditMode.append, "X", marker: "end");
+    assert(res.lines == ["## A", "end", "X", "## B", "end", "## C"], res.lines.to!string);
+    // matched.matchedAt is the 1-based anchor line: the FIRST "end".
+    assert(res.matched.matchedAt == 2, res.matched.to!string);
+}
+
+@("byMarker + insert_after/insert_before anchor on the marker line (single occurrence)")
+unittest {
+    string[] fileLines = ["a", "m", "b"];
+    auto res = editFileUnifiedMemory(fileLines, EditMode.insert_after, "X", marker: "m");
+    assert(res.lines == ["a", "m", "X", "b"], res.lines.to!string);
+    // insert_after anchors on the marker line (0-based 1 -> 1-based 2).
+    assert(res.matched.matchedAt == 2, res.matched.to!string);
+
+    string[] fileLines2 = ["a", "m", "b"];
+    auto res2 = editFileUnifiedMemory(fileLines2, EditMode.insert_before, "X", marker: "m");
+    assert(res2.lines == ["a", "X", "m", "b"], res2.lines.to!string);
+    // insert_before anchors on the marker line (0-based 1 -> 1-based 2).
+    assert(res2.matched.matchedAt == 2, res2.matched.to!string);
+}
+
+@("insert modes with matchIndex=2 anchor at the SECOND occurrence")
+unittest {
+    string[] fileLines = ["## A", "end", "## B", "end", "## C"];
+    auto res = editFileUnifiedMemory(fileLines, EditMode.append, "X", marker: "end", matchIndex: 2);
+    assert(res.lines == ["## A", "end", "## B", "end", "X", "## C"], res.lines.to!string);
+    assert(res.matched.matchedAt == 4, res.matched.to!string);
+
+    string[] fileLines2 = [
+        "## Section 1", "body", "footer", "",
+        "## Section 2", "body", "footer",
+    ];
+    auto res2 = editFileUnifiedMemory(fileLines2, EditMode.append, "NEW", searchContent: "footer", matchIndex: 2);
+    assert(res2.lines == [
+        "## Section 1", "body", "footer", "",
+        "## Section 2", "body", "footer", "NEW",
+    ], res2.lines.to!string);
+    assert(res2.matched.matchedAt == 7, res2.matched.to!string);
 }
