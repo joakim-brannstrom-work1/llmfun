@@ -112,7 +112,6 @@ long computeContentHash(string content) @safe {
     return toLong(digest!(MurmurHash3!32)(content));
 }
 
-/// Display compression result
 string compressionResultToString(bool compressed, size_t originalLength,
         size_t newLength, size_t keptXCount, long keptXTokens, long ctxUsed, long newContextSize) {
     if (compressed) {
@@ -148,7 +147,6 @@ string[] summarizeToolCalls(JSONValue calls, size_t maxLength) @trusted {
 
             formattedWrite(buf, "%-s(", call["name"].str);
 
-            // Extract only key arguments
             auto args = parseJSON(call["arguments"].str);
 
             buf.put(summarizeToolCallArguments(args, maxLength));
@@ -173,7 +171,6 @@ string summarizeToolCallArguments(JSONValue args, size_t maxLength) @trusted {
     try {
         auto buf = appender!string();
 
-        // Extract only key arguments
         string[] params;
         foreach (key, value; args.object) {
             auto valueStr = value.toString;
@@ -203,35 +200,6 @@ void configCatchCtrlC() {
     import core.stdc.signal;
 
     signal(SIGINT, &handleSIGINT);
-}
-
-void playNotification() {
-    import llm.config : ProgramName;
-    import my.optional;
-    import my.resource;
-    import std.file : exists;
-    import std.process : spawnProcess, Config;
-    import std.stdio : File;
-    import std.sumtype : match;
-
-    static bool hasPlayer = true;
-
-    if (!hasPlayer)
-        return;
-
-    auto path = dataSearch(ProgramName).resolve(Path("notification.wav"));
-    path.match!((Some!ResourceFile p) {
-        try {
-            if (p.get.exists) {
-                auto f = File("/dev/null");
-                spawnProcess(["aplay", p.get.toString], f, f, f, null, Config.detached);
-            }
-        } catch (Exception e) {
-            logger.trace(e.msg);
-            hasPlayer = false;
-        }
-    }, (None _) {});
-
 }
 
 private shared bool signalStopAgent;

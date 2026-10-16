@@ -4,7 +4,7 @@ import logger = std.logger;
 import std.algorithm : filter, map, among;
 import std.array : appender, join, Appender, empty;
 import std.conv : to, text;
-import std.file : exists, isDir, dirEntries, SpanMode, getSize, readText, rename;
+import std.file : exists, isDir, dirEntries, SpanMode, getSize, readText, rmdirRecurse;
 import std.format : format;
 import std.path : baseName, buildPath;
 import std.range : array;
@@ -17,6 +17,7 @@ import my.path : AbsolutePath, Path;
 import dyaml;
 
 import llm.config : LlmConfig;
+import llm.utility : computeContentHash;
 
 SkillManager makeSkillManager(ref LlmConfig llmConf) {
     SkillManager rval;
@@ -154,17 +155,14 @@ SemVer parseSemVer(string verStr) @safe {
 ///   - Source unparseable → 0 (skip)
 ///   - Dest unparseable → +1 (copy)
 int compareVersions(string sourceVersion, string destVersion) @safe {
-    // Both empty → equal
     if (sourceVersion.empty && destVersion.empty) {
         return 0;
     }
 
-    // Source empty, dest not → source is "older"
     if (sourceVersion.empty) {
         return -1;
     }
 
-    // Source not empty, dest empty → source is "newer"
     if (destVersion.empty) {
         return +1;
     }
@@ -172,17 +170,14 @@ int compareVersions(string sourceVersion, string destVersion) @safe {
     auto src = parseSemVer(sourceVersion);
     auto dst = parseSemVer(destVersion);
 
-    // Source unparseable → skip (return 0)
     if (!src.valid) {
         return 0;
     }
 
-    // Dest unparseable → treat as newer source (return +1)
     if (!dst.valid) {
         return +1;
     }
 
-    // Three-way numeric comparison
     if (src.major != dst.major)
         return src.major > dst.major ? 1 : -1;
     if (src.minor != dst.minor)
@@ -563,90 +558,168 @@ class SkillManager {
         return skills[name].loadBody();
     }
 
+    /// Frontmatter version of a discovered skill. Throws
+    /// SkillNotFoundException when no skill with that name is loaded.
+    string skillVersion(string name) {
+        if (name !in skills) {
+            throw new SkillNotFoundException(i"Skill not found: $(name)".text);
+        }
+        return skills[name].version_;
+    }
+
+    /// Verify that destDir contains an exact copy of sourceDir after a
+    /// copyRecurse call. Walks both trees recursively (files only, relative
+    /// paths reported in sorted order) and throws Exception listing missing,
+    /// extra, and content-mismatched files on any mismatch. Every file's
+    /// content is hashed (computeContentHash) and the hashes compared, so a
+    /// same-size partial copy is caught like any other. Files must be UTF-8
+    /// text; anything else fails verification loudly. An unreadable entry
+    /// during the walk counts as a mismatch (fail loudly, not silently).
+    /// Returns the number of files verified (the source tree's file
+    /// count) on success.
+    private size_t verifyCopiedTree(Path sourceDir, Path destDir) {
+        long[string] srcHashes; // relative path -> content hash, source tree
+        long[string] dstHashes; // relative path -> content hash, destination tree
+
+        void collectHashes(string root, ref long[string] hashes) {
+            foreach (entry; dirEntries(root, SpanMode.depth).filter!(a => !a.isDir)) {
+                hashes[entry.name[root.length + 1 .. $]] = computeContentHash(readText(entry.name));
+            }
+        }
+
+        try {
+            collectHashes(sourceDir, srcHashes);
+            collectHashes(destDir, dstHashes);
+        } catch (Exception e) {
+            throw new Exception(text("Skill copy verification could not read the source or copied tree: ",
+                    e.msg, ". Fix the filesystem access and re-run the loadSkill call."));
+        }
+
+        string[] missing;
+        string[] extra;
+        string[] contentMismatched;
+
+        foreach (rel, hash; srcHashes) {
+            if (rel !in dstHashes) {
+                missing ~= rel;
+            } else if (dstHashes[rel] != hash) {
+                contentMismatched ~= rel;
+            }
+        }
+        foreach (rel; dstHashes.keys.filter!(a => a !in srcHashes)) {
+            extra ~= rel;
+        }
+
+        import std.algorithm : sort;
+
+        missing.sort();
+        extra.sort();
+        contentMismatched.sort();
+
+        if (missing.empty && extra.empty && contentMismatched.empty) {
+            return srcHashes.length;
+        }
+
+        auto ap = appender!string();
+        ap.put(text("Skill copy verification failed: destination tree '",
+                destDir, "' does not match source tree '", sourceDir, "'."));
+        if (!missing.empty) {
+            ap.put(" Missing: ");
+            ap.put(missing.join(", "));
+        }
+        if (!extra.empty) {
+            ap.put(" Unexpected extra: ");
+            ap.put(extra.join(", "));
+        }
+        if (!contentMismatched.empty) {
+            ap.put(" Content mismatch: ");
+            ap.put(contentMismatched.join(", "));
+        }
+        ap.put(text(" The destination was left partially updated (overwrite) or removed (fresh destination); remove any leftover destination tree and re-run the loadSkill call to retry."));
+
+        throw new Exception(ap[]);
+    }
+
     /// Copy skill dir to destDir (idempotent). Returns skill body.
-    /// Throws: SkillNotFoundException, Exception (empty destDir, wrong skill, malformed SKILL.md).
+    /// The skill's frontmatter version is available to the caller via
+    /// skillVersion().
+    /// Throws: SkillNotFoundException, Exception (empty destDir, wrong skill,
+    /// malformed SKILL.md, copy verification mismatch).
+    /// Error taxonomy: copy/verification failures here surface to the agent as
+    /// errorType "copy_verification_mismatch" (loadSkill does NOT route
+    /// through classifyEditError).
     string loadSkill(string name, Path destDir, bool overwrite) {
         if (name !in skills) {
             throw new SkillNotFoundException(i"Skill not found: $(name)".text);
         }
-        auto skill = skills[name];
-
         if (destDir.empty || destDir.strip.empty) {
             throw new Exception("destDir must not be empty");
         }
 
+        auto skill = skills[name];
+
+        bool freshlyCopied;
         if (!exists(destDir)) {
-            copyRecurse(skill.dir, destDir);
-            logger.tracef("Copied skill '%s' to %s", name, destDir);
-            return skill.loadBody();
-        }
-
-        const existingSkillMd = buildPath(destDir, "SKILL.md");
-        if (!exists(existingSkillMd)) {
-            throw new Exception(i"Destination '$(destDir)' exists but does not contain a valid SKILL.md. The parameter destDir should be $(
-                    destDir)/$(name)".text);
-        }
-
-        const existingContent = readText(existingSkillMd);
-        const existingFm = parseFrontmatter(existingContent);
-        if (!existingFm.parseErrors.empty) {
-            throw new Exception(i"Cannot verify existing skill at '$(destDir)': SKILL.md parse error: $(
-                    existingFm.parseErrors.join(", "))".text);
-        }
-        if (!existingFm.name.empty && existingFm.name != name) {
-            throw new Exception(i"Destination '$(destDir)' contains skill '$(existingFm.name)', not '$(
-                    name)'".text);
-        }
-
-        // Same skill at destination - compare versions
-        const cmp = compareVersions(skill.version_, existingFm.version_);
-        if (cmp > 0 || overwrite) {
-            // Source is newer or overwrite requested - backup and copy
-            const isUpgrade = cmp > 0;
-            string backupDir = destDir.toString ~ ".llmfun_backup";
-            if (isUpgrade) {
-                logger.infof("Skill '%s' version %s is newer than %s at %s - upgrading",
-                        name, skill.version_, existingFm.version_, destDir);
-            } else {
-                logger.infof("Skill '%s' overwrite requested at %s - backing up and copying",
-                        name, destDir);
-            }
-
-            rename(destDir, backupDir);
-
-            logger.tracef("Backed up existing skill '%s' to %s", name, backupDir);
             scope (failure) {
-                if (exists(backupDir)) {
+                if (exists(destDir)) {
                     try {
-                        rename(backupDir, destDir);
-                        logger.warningf("Restored backup of skill '%s' from %s after copy failure",
-                                name, backupDir);
+                        rmdirRecurse(destDir);
+                        logger.warningf("Removed partial skill copy at %s after copy/verification failure",
+                                destDir);
                     } catch (Exception e) {
-                        logger.errorf("Failed to restore backup of skill '%s' from %s: %s",
-                                name, backupDir, e.msg);
+                        logger.warningf("Failed to remove partial skill copy at %s: %s",
+                                destDir, e.msg);
                     }
                 }
             }
-
             copyRecurse(skill.dir, destDir);
+            verifyCopiedTree(skill.dir, destDir);
+            logger.tracef("Copied skill '%s' to %s", name, destDir);
+            freshlyCopied = true;
+        }
 
-            // Verify copy produced a valid SKILL.md
-            const copiedSkillMd = buildPath(destDir, "SKILL.md");
-            if (!exists(copiedSkillMd)) {
-                throw new Exception(i"Copy completed but SKILL.md missing at '$(destDir)' - copy may be incomplete"
-                        .text);
+        const existingSkillMd = buildPath(destDir, "SKILL.md");
+
+        void verifySkill() {
+            if (!exists(existingSkillMd)) {
+                throw new Exception(i"Destination '$(destDir)' exists but does not contain a valid SKILL.md. The parameter destDir should be $(
+                        destDir)/$(name)".text);
             }
 
-            if (isUpgrade) {
-                logger.infof("Upgraded skill '%s' to version %s at %s", name,
-                        skill.version_, destDir);
+            const existingContent = readText(existingSkillMd);
+            const existingFm = parseFrontmatter(existingContent);
+            if (!existingFm.parseErrors.empty) {
+                throw new Exception(i"Cannot verify existing skill at '$(destDir)': SKILL.md parse error: $(
+                        existingFm.parseErrors.join(", "))".text);
+            }
+            if (!existingFm.name.empty && existingFm.name != name) {
+                throw new Exception(i"Destination '$(destDir)' contains skill '$(existingFm.name)', not '$(
+                        name)'".text);
+            }
+        }
+
+        // Same skill at destination - compare versions
+        const existingFm = parseFrontmatter(readText(existingSkillMd));
+        const cmp = compareVersions(skill.version_, existingFm.version_);
+        if (cmp > 0 || overwrite) {
+            if (freshlyCopied) {
+                // The fresh-destination branch above already produced a
+                // verified tree; re-copying it would be pure waste.
+                logger.tracef("Skill '%s' was already copied fresh to %s, skipping redundant copy",
+                        name, destDir);
             } else {
+                copyRecurse(skill.dir, destDir);
+                const copiedFiles = verifyCopiedTree(skill.dir, destDir);
+                logger.tracef("Overwrite copied %d files from '%s' to %s",
+                        copiedFiles, skill.dir, destDir);
                 logger.infof("Overwrote skill '%s' at %s", name, destDir);
             }
         } else {
             logger.tracef("Skill '%s' already present at %s with version %s (source version %s), skipping copy",
                     name, destDir, existingFm.version_, skill.version_);
         }
+
+        verifySkill();
 
         return skill.loadBody();
     }
@@ -730,4 +803,207 @@ string buildAlwaysApplyBlock(Skill[] alwaysApply, long maxTokens) {
     }
 
     return ap[];
+}
+
+@("skillVersion returns the frontmatter version and throws for unknown names")
+unittest {
+    auto mgr = new SkillManager();
+    auto skill = Skill();
+    skill.name = "code-task";
+    skill.description = "test skill";
+    skill.version_ = "1.2.3";
+    mgr.skills[skill.name] = skill;
+
+    assert(mgr.skillVersion("code-task") == "1.2.3");
+
+    skill.version_ = "";
+    mgr.skills[skill.name] = skill;
+    assert(mgr.skillVersion("code-task").empty);
+
+    bool threw;
+    try {
+        mgr.skillVersion("no-such-skill");
+    } catch (SkillNotFoundException e) {
+        threw = true;
+    }
+    assert(threw);
+}
+
+version (unittest) {
+
+    /// Write `content` to `path`, creating parent directories. Test helper.
+    private void writeSkillFile(string path, string content) {
+        import std.file : mkdirRecurse, write;
+        import std.path : dirName;
+
+        mkdirRecurse(dirName(path));
+        write(path, content);
+    }
+
+    /// Relative paths (sorted) of all files under `root`. Test helper. Assumes
+    /// `root` has no trailing separator (true for all call sites), so the slice
+    /// strips exactly the root prefix plus one separator.
+    private string[] listFilesRelative(string root) {
+        import std.algorithm : filter, map, sort;
+        import std.array : array;
+        import std.file : dirEntries, isDir, SpanMode;
+
+        return dirEntries(root, SpanMode.depth).filter!(a => !a.isDir)
+            .map!(a => a.name[root.length + 1 .. $])
+            .array
+            .sort().array;
+    }
+
+}
+
+@("loadSkill overwrite=true replaces the whole tree: references/ and scripts/ land, no stale v1 content, no leftover backup dir")
+unittest {
+    import std.algorithm : canFind;
+    import llm.test_util : testArea;
+
+    auto area = testArea("t3_overwrite");
+    scope (exit)
+        area.cleanup();
+
+    // Source skill v1: SKILL.md + notes.md only.
+    auto srcDir = buildPath(area.toString, "src");
+    writeSkillFile(buildPath(srcDir, "SKILL.md"),
+            "---\nname: regress-skill-a\nversion: 1.0.0\ndescription: regression\n---\n\nv1 body\n");
+    writeSkillFile(buildPath(srcDir, "notes.md"), "v1 notes\n");
+
+    auto mgr = new SkillManager();
+    mgr.discover([AbsolutePath(area.toString)]);
+
+    auto destDir = Path(buildPath(area.toString, "skills", "regress-skill-a"));
+    const v1Body = mgr.loadSkill("regress-skill-a", destDir, false);
+    assert(v1Body.canFind("v1 body"));
+    assert(!exists(buildPath(destDir.toString, "references")));
+
+    // v2: same relative-path set plus references/ and scripts/, every file's
+    // content changed.
+    writeSkillFile(buildPath(srcDir, "SKILL.md"),
+            "---\nname: regress-skill-a\nversion: 2.0.0\ndescription: regression\n---\n\nv2 body\n");
+    writeSkillFile(buildPath(srcDir, "notes.md"), "v2 notes\n");
+    writeSkillFile(buildPath(srcDir, "references", "rules.md"), "v2 rules\n");
+    writeSkillFile(buildPath(srcDir, "scripts", "run.sh"), "v2 script\n");
+
+    const v2Body = mgr.loadSkill("regress-skill-a", destDir, true);
+
+    // The v2 body is returned, not the stale v1 body.
+    assert(v2Body.canFind("v2 body"));
+    assert(!v2Body.canFind("v1 body"));
+    // references/ and scripts/ are present at the destination.
+    assert(readText(buildPath(destDir.toString, "references", "rules.md")) == "v2 rules\n");
+    assert(readText(buildPath(destDir.toString, "scripts", "run.sh")) == "v2 script\n");
+    // No stale old-version content survives at the destination.
+    assert(readText(buildPath(destDir.toString, "notes.md")) == "v2 notes\n");
+    assert(!readText(buildPath(destDir.toString, "SKILL.md")).canFind("v1 body"));
+    assert(listFilesRelative(destDir.toString) == [
+        "SKILL.md", "notes.md", "references/rules.md", "scripts/run.sh"
+    ]);
+    // The pre-rework implementation renamed destDir onto a leftover backup
+    // dir; assert none exists now.
+    assert(!exists(destDir.toString ~ ".llmfun_backup"));
+
+    // A second overwrite must also succeed: the old code renamed the
+    // destination onto the leftover backup dir, which fails once that dir
+    // exists.
+    const v2Body2 = mgr.loadSkill("regress-skill-a", destDir, true);
+    assert(v2Body2.canFind("v2 body"));
+    assert(listFilesRelative(destDir.toString) == [
+        "SKILL.md", "notes.md", "references/rules.md", "scripts/run.sh"
+    ]);
+}
+
+@("verifyCopiedTree throws on an overwrite-path mismatch: names the extra file and the retry step; destDir is kept for retry")
+unittest {
+    import std.algorithm : canFind;
+    import llm.test_util : testArea;
+
+    auto area = testArea("t3_extra");
+    scope (exit)
+        area.cleanup();
+
+    // Source skill v1.
+    auto srcDir = buildPath(area.toString, "src-a");
+    writeSkillFile(buildPath(srcDir, "SKILL.md"),
+            "---\nname: regress-skill-a\nversion: 1.0.0\ndescription: regression\n---\n\nv1 body\n");
+    writeSkillFile(buildPath(srcDir, "notes.md"), "v1 notes\n");
+
+    auto mgr = new SkillManager();
+    mgr.discover([AbsolutePath(area.toString)]);
+
+    auto destDir = Path(buildPath(area.toString, "skills", "regress-skill-a"));
+    mgr.loadSkill("regress-skill-a", destDir, false);
+
+    // Inject a mismatch at the destination: an extra file the source does not
+    // have. copyRecurse never touches it, so only the post-copy verification
+    // can catch it (a post-copy destination injection is the only reachable
+    // window between copyRecurse and verifyCopiedTree on the overwrite path;
+    // deleting or corrupting a copied file is not an injection - copyRecurse
+    // re-copies/re-writes every source file before verification runs, and the
+    // Missing/Content-mismatch branches are unreachable through loadSkill).
+    writeSkillFile(buildPath(destDir.toString, "extra.txt"), "injected\n");
+
+    // The verification failure is loud, names the mismatched file, and says
+    // what to do next.
+    bool threw;
+    string msg;
+    try {
+        mgr.loadSkill("regress-skill-a", destDir, true);
+    } catch (Exception e) {
+        threw = true;
+        msg = e.msg;
+    }
+    assert(threw);
+    assert(msg.canFind("Unexpected extra"));
+    assert(msg.canFind("extra.txt"));
+    assert(msg.canFind("re-run the loadSkill call"));
+    // The overwrite path does NOT remove the destination tree (in contrast to
+    // the fresh-destination failure path): the leftover tree is exactly what
+    // the error message tells the agent to remove before re-running.
+    assert(exists(destDir));
+    assert(exists(buildPath(destDir.toString, "SKILL.md")));
+}
+
+@("failed fresh-destination loadSkill (unreadable source entry) throws and leaves no destDir")
+unittest {
+    import core.sys.posix.sys.stat : chmod;
+    import std.algorithm : canFind;
+    import std.string : toStringz;
+    import llm.test_util : testArea;
+
+    auto area = testArea("t3_unreadable");
+    scope (exit)
+        area.cleanup();
+
+    // Source skill v1.
+    auto srcDir = buildPath(area.toString, "src-b");
+    writeSkillFile(buildPath(srcDir, "SKILL.md"),
+            "---\nname: regress-skill-b\nversion: 1.0.0\ndescription: regression\n---\n\nv1 body\n");
+    writeSkillFile(buildPath(srcDir, "notes.md"), "v1 notes\n");
+    writeSkillFile(buildPath(srcDir, "scripts", "run.sh"), "v1 script\n");
+
+    auto mgr = new SkillManager();
+    mgr.discover([AbsolutePath(area.toString)]);
+
+    // Make the source script unreadable. This only blocks a non-root runner
+    // (uid 1000 in this env); if the suite ever runs as root the copy silently
+    // succeeds and the message assert below names that instead of failing
+    // cryptically. A destination injection is unreachable on the fresh path:
+    // destDir does not exist before the call, so there is no post-copy window.
+    chmod(buildPath(srcDir, "scripts", "run.sh").toStringz, 0u);
+
+    auto destDir = Path(buildPath(area.toString, "skills", "regress-skill-b"));
+    bool threw;
+    string msg;
+    try {
+        mgr.loadSkill("regress-skill-b", destDir, false);
+    } catch (Exception e) {
+        threw = true;
+        msg = e.msg;
+    }
+    assert(threw, "copy of the chmod-000 file unexpectedly succeeded - running as root?");
+    assert(msg.canFind("Permission denied"));
+    assert(!exists(destDir), "failed fresh-destination loadSkill must leave no destDir");
 }
