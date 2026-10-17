@@ -21,6 +21,10 @@ version (unittest) {
     import std.conv : to;
 }
 
+private string[] normalizeSearchLines(const(string) block) @safe {
+    return block.chomp.splitLines;
+}
+
 /// byLine targeting: validate startLine/count and apply the edit to the
 /// resolved 1-based line range.
 package EditFileOutcome executeByLine(string[] fileLines, EditMode mode, string content,
@@ -70,7 +74,7 @@ package EditFileOutcome executeByMarker(string[] fileLines, EditMode mode, strin
     const isMultiLine = marker.canFind("\n");
     string[] markerLines;
     if (isMultiLine) {
-        markerLines = marker.splitLines;
+        markerLines = normalizeSearchLines(marker);
         enforce(markerLines.length <= maxMarkerLines, i"marker must not exceed $(maxMarkerLines) lines (got $(
                 markerLines.length))".text);
     }
@@ -184,7 +188,7 @@ package EditFileOutcome executeByContent(string[] fileLines, EditMode mode, stri
         size_t scopeBegin, size_t scopeEndExclusive, long scopeStart, long scopeEnd) @safe {
     // Reaching here means searchContent was non-empty (required by targeting
     // resolution above), so no empty-check is needed.
-    auto searchLines = searchContent.chomp.splitLines;
+    auto searchLines = normalizeSearchLines(searchContent);
     enforce(searchLines.any!(l => l.strip.length > 0),
             "searchContent must contain at least one non-empty line (all lines are empty or whitespace)");
 
@@ -442,4 +446,76 @@ unittest {
         "NEW",
     ], res2.lines.to!string);
     assert(res2.matched.matchedAt == 7, res2.matched.to!string);
+}
+
+@("byContent remove/replace results are independent of a trailing newline in searchContent")
+unittest {
+    string[] fileLines = ["a", "foo", "bar", "b"];
+
+    // Multi-line search block, WITH a trailing newline: removes the block.
+    auto resWith = editFileUnifiedMemory(fileLines.dup, EditMode.remove, "",
+            searchContent: "foo\nbar\n");
+    assert(resWith.lines == ["a", "b"], resWith.lines.to!string);
+    assert(resWith.matched.matchedAt == 2, resWith.matched.to!string);
+
+    // The same block WITHOUT the trailing newline: identical result.
+    auto resWithout = editFileUnifiedMemory(fileLines.dup, EditMode.remove, "",
+            searchContent: "foo\nbar");
+    assert(resWithout.lines == resWith.lines, resWithout.lines.to!string);
+    assert(resWithout.matched.matchedAt == resWith.matched.matchedAt, resWithout.matched.to!string);
+
+    // replace mode likewise, multi-line block.
+    auto repWith = editFileUnifiedMemory(fileLines.dup, EditMode.replace, "X",
+            searchContent: "foo\nbar\n");
+    auto repWithout = editFileUnifiedMemory(fileLines.dup, EditMode.replace,
+            "X", searchContent: "foo\nbar");
+    assert(repWith.lines == ["a", "X", "b"], repWith.lines.to!string);
+    assert(repWithout.lines == repWith.lines, repWithout.lines.to!string);
+}
+
+@("byContent single-line search block with/without trailing newline match identically")
+unittest {
+    string[] fileLines = ["a", "foo", "b"];
+
+    auto repWith = editFileUnifiedMemory(fileLines.dup, EditMode.replace, "X",
+            searchContent: "foo\n");
+    auto repWithout = editFileUnifiedMemory(fileLines.dup, EditMode.replace,
+            "X", searchContent: "foo");
+    assert(repWith.lines == ["a", "X", "b"], repWith.lines.to!string);
+    assert(repWithout.lines == repWith.lines, repWithout.lines.to!string);
+    assert(repWith.matched.matchedAt == 2, repWith.matched.to!string);
+    assert(repWithout.matched.matchedAt == 2, repWithout.matched.to!string);
+
+    auto remWith = editFileUnifiedMemory(fileLines.dup, EditMode.remove, "",
+            searchContent: "foo\n");
+    auto remWithout = editFileUnifiedMemory(fileLines.dup, EditMode.remove, "",
+            searchContent: "foo");
+    assert(remWith.lines == ["a", "b"], remWith.lines.to!string);
+    assert(remWithout.lines == remWith.lines, remWithout.lines.to!string);
+    assert(remWith.matched.matchedAt == 2, remWith.matched.to!string);
+    assert(remWithout.matched.matchedAt == 2, remWithout.matched.to!string);
+}
+
+@("byMarker multi-line marker with/without trailing newline match identically")
+unittest {
+    string[] fileLines = ["a", "foo", "bar", "b"];
+
+    auto resWith = editFileUnifiedMemory(fileLines.dup, EditMode.remove, "", marker: "foo\nbar\n");
+    auto resWithout = editFileUnifiedMemory(fileLines.dup, EditMode.remove,
+            "", marker: "foo\nbar");
+    assert(resWith.lines == ["a", "b"], resWith.lines.to!string);
+    assert(resWithout.lines == resWith.lines, resWithout.lines.to!string);
+    assert(resWithout.matched.matchedAt == 2, resWithout.matched.to!string);
+
+    // replace mode with auto-count: pins the 2-vs-3 targetCount delta the old
+    // un-chomped marker behavior produced (it consumed one extra file line).
+    auto repWith = editFileUnifiedMemory(fileLines.dup, EditMode.replace,
+            "X", marker: "foo\nbar\n");
+    assert(repWith.autoCountUsed, repWith.note);
+    assert(repWith.matched.matchedAt == 2, repWith.matched.to!string);
+    auto repWithout = editFileUnifiedMemory(fileLines.dup, EditMode.replace,
+            "X", marker: "foo\nbar");
+    assert(repWithout.autoCountUsed, repWithout.note);
+    assert(repWithout.lines == repWith.lines, repWithout.lines.to!string);
+    assert(repWithout.matched.matchedAt == repWith.matched.matchedAt, repWithout.matched.to!string);
 }
