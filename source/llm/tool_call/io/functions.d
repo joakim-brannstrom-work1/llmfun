@@ -289,10 +289,23 @@ private:
 
 string validateLineRange(long startLine, long count, long maxLines) {
     if (startLine < 1)
-        return i"error: parameter startLine $(startLine) must be > 0".text;
+        return i"error: parameter 'startLine' is $(startLine) but must be > 0 (1-based first line to read)"
+            .text;
     if (count < 1)
-        return i"error: parameter count $(count) must be > 0".text;
+        return i"error: parameter 'count' is $(count) but must be > 0 (number of lines to read)"
+            .text;
     if (count > maxLines)
-        return i"error: tried to access $(count) lines but $(maxLines) is max".text;
+        return i"error: tried to access $(count) lines but the per-call cap is $(maxLines) (parameter 'count'). Read in chunks with startLine, e.g. startLine=1 count=$(
+                maxLines), then startLine=$(maxLines + 1), and so on.".text;
     return null;
+}
+
+@("validateLineRange error messages")
+unittest {
+    assert(validateLineRange(1, 25, 20) == "error: tried to access 25 lines but the per-call cap is 20 (parameter 'count'). Read in chunks with startLine, e.g. startLine=1 count=20, then startLine=21, and so on.");
+    assert(validateLineRange(0, 1,
+            20) == "error: parameter 'startLine' is 0 but must be > 0 (1-based first line to read)");
+    assert(validateLineRange(1, 0,
+            20) == "error: parameter 'count' is 0 but must be > 0 (number of lines to read)");
+    assert(validateLineRange(1, 20, 20) is null);
 }

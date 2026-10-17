@@ -2724,11 +2724,48 @@ unittest {
     assert(json["matchedAt"].integer == 3, result.msg);
     assert(json["matchedLines"].integer == 1, result.msg);
     assert(json["linesChanged"].integer == 1, result.msg);
-    assert(json["linesChanged"].integer == 1, result.msg);
     assert(json["operations"].integer == 1, result.msg);
 
     auto content = readTestFile(ctx, "test.txt");
     assert(content == "a\nb\nX\n", content);
+}
+
+@("editFile linesChanged field")
+unittest {
+    // Integration test: linesChanged is the signed net line-count change (new
+    // total minus old total) in the success JSON for grow (positive), shrink
+    // (negative), and no-op (0) edits; the value comes from the actual line
+    // counts, not the engine's own accounting.
+    auto ctx = makeTestContext("edit_lineschanged");
+    scope (exit)
+        ctx.teardown;
+
+    // Grow: 2 lines added -> linesChanged = +2.
+    createTestFile(ctx, "grow.txt", "a\nb\n");
+    auto result = editFile(ctx, UnifiedEditFileParams(path: "grow.txt",
+            content: "x\ny", mode: "append"));
+    assert(result.success, result.msg);
+    auto json = parseJSON(result.msg);
+    assert(json["linesChanged"].integer == 2, result.msg);
+    assert(json["matchedAt"].integer == 3, result.msg);
+    assert(json["matchedLines"].integer == 1, result.msg);
+    assert(json["operations"].integer == 1, result.msg);
+
+    // Shrink: 3 lines removed -> linesChanged = -3.
+    createTestFile(ctx, "shrink.txt", "a\nb\nc\nd\ne\nf\n");
+    result = editFile(ctx, UnifiedEditFileParams(path: "shrink.txt", content: "",
+            mode: "remove", startLine: 2, count: 3));
+    assert(result.success, result.msg);
+    json = parseJSON(result.msg);
+    assert(json["linesChanged"].integer == -3, result.msg);
+
+    // No-op: replace with identical content -> linesChanged = 0.
+    createTestFile(ctx, "noop.txt", "a\nb\nc\n");
+    result = editFile(ctx, UnifiedEditFileParams(path: "noop.txt", content: "b",
+            mode: "replace", startLine: 2, count: 1));
+    assert(result.success, result.msg);
+    json = parseJSON(result.msg);
+    assert(json["linesChanged"].integer == 0, result.msg);
 }
 
 unittest {
@@ -3097,7 +3134,7 @@ unittest {
     assert(threw);
 }
 
-// === lineShift in success response via editFileUnifiedMemory ===
+@("linesChanged in editFileUnifiedMemory outcome")
 unittest {
     // Replace: contentLineCount=3, matchedLines=2 -> linesChanged=1
     auto outcome = editFileUnifiedMemory(["a", "b", "c", "d"],

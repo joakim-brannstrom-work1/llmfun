@@ -77,8 +77,8 @@ package string targetingMethodOf(UnifiedEditFileParams params) @safe {
         if (provided == 0) {
             try {
                 if (parseEditMode(params.mode) == EditMode.append) {
-                    // TODO: returning these magic strings that is then cought
-                    // and matched is bad design.
+                    // TODO: returning magic strings that callers catch and
+                    // match is bad design.
                     return "append_eof";
                 }
             } catch (Exception) {
@@ -117,7 +117,7 @@ package string staleBylineTargetError(string path) @safe {
         .text;
 }
 
-@Function("Edit a file by applying a change to a target. " ~ "Target the file with exactly one method: startLine+count (byLine, 1-based), " ~ "marker (byMarker, substring to find), or searchContent (byContent, code block matched by trimmed equality). " ~ "The file's trailing-newline state is preserved, and the dryRun preview matches the exact bytes that would be written. " ~ "Returns a JSON object with fields: ok (bool), matchedAt (1-based line; for a mode=append call with no targeting, the line where the new content starts, which is one past the last line for a non-empty file), matchedLines (int), linesChanged (int), operations (int), lineShift (int, net line count change). " ~ "When auto-count is used, also includes: autoCountUsed (true) and note (string). " ~ "When dryRun is true, also includes: preview (string). " ~ "On failure returns JSON with ok=false, an error string, and a diagnostic field with closest-match details. " ~ "byLine edits on a path modified by a successful edit earlier in the same session are rejected until the file is re-read with readFile; files modified by other processes between turns are caught only by a best-effort content-hash cross-check.") ExecuteFuncResult editFile(
+@Function("Edit a file by applying a change to a target. " ~ "Target the file with exactly one method: startLine+count (byLine, 1-based), " ~ "marker (byMarker, substring to find), or searchContent (byContent, code block matched by trimmed equality). " ~ "The file's trailing-newline state is preserved, and the dryRun preview matches the exact bytes that would be written. " ~ "Returns a JSON object with fields: ok (bool), matchedAt (1-based line; for a mode=append call with no targeting, the line where the new content starts, which is one past the last line for a non-empty file), matchedLines (int), linesChanged (int, signed: new total line count minus old total line count), operations (int). " ~ "When auto-count is used, also includes: autoCountUsed (true) and note (string). " ~ "When dryRun is true, also includes: preview (string). " ~ "On failure returns JSON with ok=false, an error string, and a diagnostic field with closest-match details. " ~ "byLine edits on a path modified by a successful edit earlier in this session are rejected until the file is re-read with readFile; files modified by other processes between turns are caught only by a best-effort content-hash cross-check.") ExecuteFuncResult editFile(
         Context baseCtx, UnifiedEditFileParams params) {
     mixin(baseContextToSpecific!FileContext);
 
@@ -142,7 +142,7 @@ package string staleBylineTargetError(string path) @safe {
                 success: false);
     }
 
-    // byLine targeting on a path modified since its last readFile. line
+    // byLine targeting on a path modified since its last readFile: line
     // numbers may be stale - fail loudly, forcing a re-read first.
     if (params.startLine != -1) {
         string staleError;
@@ -183,19 +183,17 @@ package string staleBylineTargetError(string path) @safe {
 
         auto json = JSONValue.emptyObject;
         json["ok"] = true;
-        json["lineShift"] = outcome.linesChanged;
+        const netLineCountChange = cast(long) outcome.lines.length - cast(long) fileLines.length;
         json["matchedAt"] = outcome.matched.matchedAt;
         json["matchedLines"] = outcome.matched.matchedLines;
-        json["linesChanged"] = outcome.linesChanged;
+        json["linesChanged"] = netLineCountChange;
         json["operations"] = outcome.operations;
         if (outcome.autoCountUsed) {
             json["autoCountUsed"] = true;
             json["note"] = outcome.note;
         }
 
-        // Preserve the original file's trailing-newline state so an edit
-        // never changes it, and the dryRun preview matches the exact bytes
-        // that would be written.
+        // Preserve the original file's trailing-newline state
         const trailingNewline = fileEndsWithNewline(path_.toString);
         if (params.dryRun) {
             auto preview = outcome.lines.join("\n");
@@ -207,7 +205,7 @@ package string staleBylineTargetError(string path) @safe {
             ctx.markDirty(path_);
         }
         logger.tracef("tool=editFile event=success mode=%s targeting=%s path=%s linesChanged=%d autoCountUsed=%s dryRun=%s scope=%s",
-                mode_.to!string, targeting, logPath, outcome.linesChanged, outcome.autoCountUsed
+                mode_.to!string, targeting, logPath, netLineCountChange, outcome.autoCountUsed
                 ? "true" : "false", dryRun, scopeLogValue(params.scopeStart, params.scopeEnd));
         return ExecuteFuncResult(json.toString(JSONOptions.doNotEscapeSlashes), success: true);
     } catch (Exception e) {
