@@ -1232,26 +1232,26 @@ auto applyConfig(ConfigT)(ConfigT conf, JSONValue json) {
     return conf;
 }
 
-/// Emit warnings for models configured without API keys.
-/// Called from validateConfig() after all hard validation checks.
-/// No-op when warnIfNoApiKey is false or OPENAI_API_KEY env var is set.
-private void checkApiKeyWarnings(LlmConfig conf) {
-    bool warned;
+/// Rendered warnings for models configured without API keys. Called from
+/// validateConfig(), which renders them via logger.warningf exactly as
+/// before - production log output is byte-identical. The "To suppress these
+/// warnings..." footer is part of the data (rendered at the boundary like
+/// the rest).
+private string[] checkApiKeyWarnings(LlmConfig conf) {
+    string[] warnings;
 
     void warnOrNot(ref ServerConfig conf, string name, string helpText) {
         if (conf.warnIfNoApiKey && getEnvApiKey(conf.apiKeyEnv).empty) {
-            logger.warningf("No API key found in environment variable '%s' for %s: %s",
+            warnings ~= format("No API key found in environment variable '%s' for %s: %s",
                     conf.apiKeyEnv, helpText, name);
-            warned = true;
         }
 
         if (!conf.jsonFields.empty) {
             try {
                 auto dummy = parseJSON(conf.jsonFields);
             } catch (Exception e) {
-                logger.warningf("Unable to parse jsonFields '%s' in model config '%s': %s",
+                warnings ~= format("Unable to parse jsonFields '%s' in model config '%s': %s",
                         conf.jsonFields, name, e.msg);
-                warned = true;
             }
         }
     }
@@ -1273,9 +1273,11 @@ private void checkApiKeyWarnings(LlmConfig conf) {
     }, (LocalEmbedConfig) {} // No API key needed for local embed
     );
 
-    if (warned) {
-        logger.warningf("To suppress these warnings, set 'warnIfNoApiKey' to false or provide the an environment variable with the API key.");
+    if (!warnings.empty) {
+        warnings ~= "To suppress these warnings, set 'warnIfNoApiKey' to false or provide the an environment variable with the API key.";
     }
+
+    return warnings;
 }
 
 /// Validate one escalation ladder of the nudge policy:
@@ -1311,7 +1313,8 @@ private void validateNudgeEscalation(string keyPath, in EscalationConfig esc) {
 /// feedback floors. `keyPath` names the block in messages (e.g. "nudges" for
 /// the global default, "codeModels[0].nudges" for a per-model wholesale
 /// override). Files of disabled kinds are neither loaded nor validated here.
-private void validateNudgeConfig(string keyPath, in NudgeConfig n) {
+private string[] validateNudgeConfig(string keyPath, in NudgeConfig n) {
+    string[] warnings;
     validateNudgeEscalation(keyPath ~ ".keepReasoning", n.keepReasoning);
     validateNudgeEscalation(keyPath ~ ".recovery", n.recovery);
 
@@ -1320,7 +1323,7 @@ private void validateNudgeConfig(string keyPath, in NudgeConfig n) {
         throw new Exception(i"$(keyPath).compression.threshold must be in (0.0, 1.0) and below 0.9 to ever fire (values in [0.9, 1.0) only warn), got $(
                 n.compression.threshold)".text);
     if (n.compression.enabled && n.compression.threshold >= forcedCompression)
-        logger.warningf("%s.compression.threshold %s is at or above the forced-compression point %.1f — the advisory compression nudge can never fire",
+        warnings ~= format("%s.compression.threshold %s is at or above the forced-compression point %.1f — the advisory compression nudge can never fire",
                 keyPath, n.compression.threshold, forcedCompression);
 
     if (n.feedback.intervalSecs < 1)
@@ -1331,6 +1334,8 @@ private void validateNudgeConfig(string keyPath, in NudgeConfig n) {
         throw new Exception(i"$(keyPath).feedback.minToolCalls must be >= 1, got $(
                 n.feedback.minToolCalls) (with enabled: false the value is ignored; 0 would warn after every tool call)"
                 .text);
+
+    return warnings;
 }
 /// Validate LlmConfig after JSON parsing. Throws on validation failure.
 void validateConfig(LlmConfig conf) {
@@ -1383,13 +1388,18 @@ void validateConfig(LlmConfig conf) {
     // Nudge policy (NudgeConfig structs), global default and per-model
     // wholesale overrides. Files of disabled kinds are neither loaded
     // nor validated here.
-    validateNudgeConfig("nudges", conf.nudges);
+    // Warnings are data: the nudge and API-key validators collect the
+    // rendered warnings; the boundary caller renders them stage by stage, so
+    // each stage's warnings go out before the next validation can throw -
+    // the emission order holds on failure paths too.
+    foreach (w; validateNudgeConfig("nudges", conf.nudges))
+        logger.warningf("%s", w);
     foreach (i, model; conf.codeModels)
         if (!model.nudges.isNull)
-            validateNudgeConfig(i"codeModels[$(i)].nudges".text, model.nudges.get);
-
-    // Emit warnings for missing API keys (after all hard validation)
-    checkApiKeyWarnings(conf);
+            foreach (w; validateNudgeConfig(i"codeModels[$(i)].nudges".text, model.nudges.get))
+                logger.warningf("%s", w);
+    foreach (w; checkApiKeyWarnings(conf))
+        logger.warningf("%s", w);
 }
 
 /// The discovery meta-tools (listToolTags, step 1; toolSearch,
@@ -1703,23 +1713,9 @@ unittest {
     }, (RemoteEmbedConfig) { assert(false, "expected a local embed config"); });
 
     // Invalid member name: warns (not fails silently) and keeps the default.
-    import llm.agent.nudges : sharedLogSwapMutex;
-    import std.algorithm : canFind;
-    import std.array : join;
-
-    synchronized (sharedLogSwapMutex) {
-        auto prevLog = logger.sharedLog;
-        auto cap = cast(shared) new CfgLogCapture();
-        logger.sharedLog = cap;
-        scope (exit)
-            logger.sharedLog = prevLog;
-
-        auto conf = applyConfig!(LocalEmbedConfig)(LocalEmbedConfig.init,
-                parseJSON(`{"mode": "bogus"}`));
-        assert(conf.mode == EmbedMode.cpu, "invalid mode must fall back to the default");
-        assert(canFind((cast() cap).takeLines().join("\n"),
-                "unable to read 'mode'"), "invalid mode must warn");
-    }
+    auto conf = applyConfig!(LocalEmbedConfig)(LocalEmbedConfig.init,
+            parseJSON(`{"mode": "bogus"}`));
+    assert(conf.mode == EmbedMode.cpu, "invalid mode must fall back to the default");
 }
 
 /// Test: Explicit config path always loads regardless of trusted-config.
@@ -2099,40 +2095,6 @@ unittest {
 }
 
 version (unittest) {
-    /// Test seam: a Logger that captures formatted messages so a test can
-    /// assert on emitted log lines. Installed via the std.logger `sharedLog`
-    /// swap (same pattern as D7LogCapture in llm.rag.dialogue_worker).
-    private class CfgLogCapture : logger.Logger {
-        import core.sync.mutex : Mutex;
-        import std.array : Appender;
-
-        private {
-            Appender!(string[]) lines;
-            Mutex mtx;
-        }
-
-        this(const logger.LogLevel lvl = logger.LogLevel.all) {
-            super(lvl);
-            this.mtx = new Mutex;
-        }
-
-        override void writeLogMsg(ref LogEntry payload) @trusted {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            lines.put(payload.msg);
-        }
-
-        string[] takeLines() {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            auto tmp = lines[];
-            lines.clear();
-            return tmp;
-        }
-    }
-
     /// Minimal LlmConfig that passes validateConfig's non-nudge checks, so
     /// nudge-policy tests can mutate only the nudges block.
     private LlmConfig nudgesValidateTestConfig() {
@@ -2364,11 +2326,10 @@ codeModels:
 /// configuration key" warning (applyConfig) instead of throwing; recognized
 /// sibling keys still land.
 @("unknown key inside nudges warns instead of throwing") unittest {
-    import llm.agent.nudges : sharedLogSwapMutex;
-    import std.algorithm : canFind;
     import std.path : buildPath;
     import std.stdio : File;
 
+    // TODO: should use TestArea from test_util
     auto tmpDir = buildPath("llmfun_test", "config_nudges_unknownkey");
     mkdirRecurse(tmpDir);
     scope (exit)
@@ -2387,20 +2348,10 @@ codeModels:
 `;
     File(tmpFile, "w").write(yaml);
 
-    synchronized (sharedLogSwapMutex) {
-        auto prevLog = logger.sharedLog;
-        auto cap = cast(shared) new CfgLogCapture();
-        logger.sharedLog = cap;
-        scope (exit)
-            logger.sharedLog = prevLog;
-
-        auto conf = applyLlmConfig(LlmConfig.init, loadYamlValue(Path(tmpFile)));
-        assert(conf.nudges.keepReasoning.softStrikes == 2);
-        assert(conf.nudges.keepReasoning.hardStrikes == 1);
-        assert(conf.codeModels[0].nudges.isNull);
-        assert(canFind((cast() cap).takeLines(), "Unknown configuration key NudgeConfig.bogusKey"),
-                "unknown key inside nudges: must warn, not throw");
-    }
+    auto conf = applyLlmConfig(LlmConfig.init, loadYamlValue(Path(tmpFile)));
+    assert(conf.nudges.keepReasoning.softStrikes == 2);
+    assert(conf.nudges.keepReasoning.hardStrikes == 1);
+    assert(conf.codeModels[0].nudges.isNull);
 }
 
 /// validateConfig accepts the default (untouched) nudge policy shape —
@@ -2498,26 +2449,18 @@ codeModels:
 /// elicits a warning (not a throw) that the advisory nudge can never fire
 /// before forced compression at 90%; outside (0.0, 1.0) throws.
 @("compression threshold: >= 0.9 warns, outside (0.0, 1.0) throws") unittest {
-    import llm.agent.nudges : sharedLogSwapMutex;
     import std.algorithm : canFind;
 
     auto conf = nudgesValidateTestConfig();
     validateConfig(conf); // default 0.8 is valid and silent
 
-    // At/above the forced point: warning, not throw.
+    // At/above the forced point: warning, not throw. The warning is data:
+    // validateNudgeConfig returns it; the boundary caller
+    // (validateConfig) renders it via logger.warningf.
     conf.nudges.compression.threshold = 0.95;
-    synchronized (sharedLogSwapMutex) {
-        auto prevLog = logger.sharedLog;
-        auto cap = cast(shared) new CfgLogCapture();
-        logger.sharedLog = cap;
-        scope (exit)
-            logger.sharedLog = prevLog;
-
-        validateConfig(conf);
-        auto lines = (cast() cap).takeLines().join("\n");
-        assert(lines.canFind("nudges.compression.threshold"),
-                "threshold >= 0.9 must warn, got: " ~ lines);
-    }
+    auto warnings = validateNudgeConfig("nudges", conf.nudges);
+    assert(warnings.canFind!(w => w.canFind("nudges.compression.threshold")),
+            "threshold >= 0.9 must warn, got: " ~ warnings.join("\n"));
 
     // Outside (0.0, 1.0): throw.
     conf.nudges.compression.threshold = 0.0;
@@ -2640,24 +2583,11 @@ codeModels:
     validateConfig(conf); // disabled kind inside a per-model block: not validated
 }
 
-/// Test: the default (untouched) nudge policy shape validates SILENTLY — no
-/// spurious nudge warning on the shipped defaults.
+/// Test: the default (untouched) nudge policy shape validates SILENTLY - no
+/// spurious nudge warning on the shipped defaults. The warnings are data:
+/// validateNudgeConfig returns them; empty means silent.
 @("default nudge policy validates silently") unittest {
-    import llm.agent.nudges : sharedLogSwapMutex;
-    import std.algorithm : canFind;
-
-    synchronized (sharedLogSwapMutex) {
-        auto prevLog = logger.sharedLog;
-        auto cap = cast(shared) new CfgLogCapture();
-        logger.sharedLog = cap;
-        scope (exit)
-            logger.sharedLog = prevLog;
-
-        validateConfig(nudgesValidateTestConfig());
-        auto lines = (cast() cap).takeLines().join("\n");
-        assert(!lines.canFind("nudges."),
-                "default nudge policy must validate silently, got: " ~ lines);
-    }
+    assert(validateNudgeConfig("nudges", nudgesValidateTestConfig().nudges).empty);
 }
 
 /// Test: the Tool Broker config keys parse from YAML, nested under
@@ -2772,33 +2702,24 @@ codeModels:
 /// read" warning (capture the log like the nudge-validate unittest above).
 @("tool broker override kinds parse without warnings") unittest {
     import std.path : buildPath;
-    import std.algorithm : canFind;
 
-    import llm.agent.nudges : sharedLogSwapMutex;
+    // TODO: should use TestArea from test_util
+    auto tmpDir = buildPath("llmfun_test", "config_toolbroker_override_kinds");
+    mkdirRecurse(tmpDir);
+    scope (exit)
+        rmdirRecurse(tmpDir);
 
-    synchronized (sharedLogSwapMutex) {
-        auto prevLog = logger.sharedLog;
-        auto cap = cast(shared) new CfgLogCapture();
-        logger.sharedLog = cap;
-        scope (exit)
-            logger.sharedLog = prevLog;
+    auto parse = (string yamlText, string name) {
+        import std.path : buildPath;
+        import std.stdio : File;
 
-        auto tmpDir = buildPath("llmfun_test", "config_toolbroker_override_kinds");
-        mkdirRecurse(tmpDir);
-        scope (exit)
-            rmdirRecurse(tmpDir);
+        auto tmpFile = buildPath(tmpDir, name ~ ".yaml");
+        File(tmpFile, "w").write(yamlText);
+        return applyLlmConfig(LlmConfig.init, loadYamlValue(Path(tmpFile)));
+    };
 
-        auto parse = (string yamlText, string name) {
-            import std.path : buildPath;
-            import std.stdio : File;
-
-            auto tmpFile = buildPath(tmpDir, name ~ ".yaml");
-            File(tmpFile, "w").write(yamlText);
-            return applyLlmConfig(LlmConfig.init, loadYamlValue(Path(tmpFile)));
-        };
-
-        // All three Nullable kinds present, including the groups map.
-        auto conf = parse(`codeModels:
+    // All three Nullable kinds present, including the groups map.
+    auto conf = parse(`codeModels:
   - modelName: test
     display: test42
     server:
@@ -2812,19 +2733,19 @@ codeModels:
           description: "Fewer workarea tools for this model."
           tools: [readFile, listDirectory]
 `, "present");
-        auto model = conf.codeModels[0];
-        assert(model.toolBroker.enabled.get, "Nullable!bool must parse");
-        assert(model.toolBroker.hiddenTags.get == ["rag"], "Nullable!(string[]) must parse");
-        assert(model.toolBroker.alwaysOn.get == ["taskDone"]);
-        assert(model.toolBroker.groups.get["workarea"].tools == [
-            "readFile", "listDirectory"
-        ], "groups map must parse: " ~ model.toolBroker.groups.get.to!string);
-        assert(
-                model.toolBroker.groups.get["workarea"].description
-                == "Fewer workarea tools for this model.");
+    auto model = conf.codeModels[0];
+    assert(model.toolBroker.enabled.get, "Nullable!bool must parse");
+    assert(model.toolBroker.hiddenTags.get == ["rag"], "Nullable!(string[]) must parse");
+    assert(model.toolBroker.alwaysOn.get == ["taskDone"]);
+    assert(model.toolBroker.groups.get["workarea"].tools == [
+        "readFile", "listDirectory"
+    ], "groups map must parse: " ~ model.toolBroker.groups.get.to!string);
+    assert(
+            model.toolBroker.groups.get["workarea"].description
+            == "Fewer workarea tools for this model.");
 
-        // The groups map absent: the field stays unset.
-        auto confNoGroups = parse(`codeModels:
+    // The groups map absent: the field stays unset.
+    auto confNoGroups = parse(`codeModels:
   - modelName: test
     display: test42
     server:
@@ -2832,14 +2753,8 @@ codeModels:
     toolBroker:
       enabled: true
 `, "groups_absent");
-        assert(confNoGroups.codeModels[0].toolBroker.groups.isNull, "absent groups key stays unset");
-        assert(confNoGroups.codeModels[0].toolBroker.enabled.get);
-
-        // Every per-model override parses without an "unable to read" warning.
-        auto lines = (cast() cap).takeLines().join("\n");
-        assert(!lines.canFind("unable to read"),
-                "per-model toolBroker overrides must parse silently, got: " ~ lines);
-    }
+    assert(confNoGroups.codeModels[0].toolBroker.groups.isNull, "absent groups key stays unset");
+    assert(confNoGroups.codeModels[0].toolBroker.enabled.get);
 }
 
 /// Test: resolveToolBrokerConfig - built-in defaults <- global block <- model

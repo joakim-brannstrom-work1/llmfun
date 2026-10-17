@@ -61,8 +61,12 @@ struct DiDrain {
     }
 }
 
-/// Sent back to DiDrain.replyTo once the mailbox has drained.
+/// Sent back to DiDrain.replyTo once the mailbox has drained. `deadlineHit`
+/// is the drain-deadline decision as data: true when the drain finalized
+/// because the deadline expired (in-flight reasoning records were lost,
+/// advisory), false on a normal drain.
 struct DiDrained {
+    bool deadlineHit;
 }
 
 /// Sent to the owner when the worker cannot create its embedder. Indexing is then disabled for the process lifetime (known hole, no recovery); the worker still answers DiDrain so disposal never hangs.
@@ -266,6 +270,7 @@ final class DialogueWorkerActor : DialogueWorkerAPI {
         DrainWaiter[] drainWaiters_;
         bool drainArmed_;
         long drainSeq_; // deadline ticket; a stale ticket no-ops
+        bool deadlineHit_; // the drain-deadline decision as data, copied into every DiDrained
     }
 
     this(System* sys, WeakAddress owner, AbsolutePath dialogueDir, EmbedConfig embedConfig,
@@ -468,6 +473,7 @@ final class DialogueWorkerActor : DialogueWorkerAPI {
             return;
         if (seq != drainSeq_ || !drainPending_)
             return; // stale ticket (early finalize or a newer drain): no-op
+        deadlineHit_ = true;
         logger.warningf(
                 "dialogue worker: drain deadline; %s reasoning thread(s) still in flight; record(s) lost (advisory)",
                 outstandingThreads_);
@@ -645,12 +651,13 @@ final class DialogueWorkerActor : DialogueWorkerAPI {
             if (w.gate is null || !w.gate.lockedOpen())
                 continue; // closed: skip, never touch replyTo
             try {
-                dynSend(w.replyTo, "diDrained", DiDrained());
+                dynSend(w.replyTo, "diDrained", DiDrained(deadlineHit_));
             } finally {
                 w.gate.unlock();
             }
         }
         drainWaiters_ = null;
+        deadlineHit_ = false;
     }
 
     // A core.exception.Error escaping a handler would be swallowed by the pool
@@ -669,7 +676,7 @@ version (unittest) {
     import core.atomic : atomicLoad, atomicStore, atomicOp;
     import std.datetime : DateTime, UTC;
     import std.file : mkdirRecurse;
-    import llm.test_util : TestArea, testArea, sharedLogSwapMutex;
+    import llm.test_util : TestArea, testArea;
 
     // Test embedder factories. Defined at module scope (not nested in a
     // unittest) as plain `Embedder f(EmbedConfig)` functions: each test passes
@@ -886,43 +893,6 @@ version (unittest) {
         return new PoisonedEmbedder();
     }
 
-    /// Test seam: a Logger that captures formatted messages so a test can assert on emitted log lines. Installed via the std.logger `sharedLog` swap (same pattern as TuiLogger in llm.tui); thread-safe because the worker (actor mailbox + detached summarizer) logs from pool threads concurrently with the test thread.
-    private class D7LogCapture : logger.Logger {
-        import core.sync.mutex;
-        import std.array : Appender;
-
-        private {
-            Appender!(string[]) lines;
-            Mutex mtx;
-        }
-
-        this(const logger.LogLevel lvl = logger.LogLevel.all) {
-            super(lvl);
-            this.mtx = new Mutex;
-        }
-
-        override void writeLogMsg(ref LogEntry payload) @trusted {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            lines.put(payload.msg);
-        }
-
-        string[] takeLines() {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            auto tmp = lines[];
-            lines.clear();
-            return tmp;
-        }
-    }
-
-    /// Serializes this module's swap+drain critical sections with the other
-    /// capture tests (llm.config, llm.rag.reasoning_index) through test_util's
-    /// sharedLogSwapMutex: silly runs unittests in parallel (TaskPool), so
-    /// overlapping swap windows would send log lines into the WRONG capture.
-    alias d7SharedLogMutex = sharedLogSwapMutex;
     // Per-worker result of the isolation test. Carried back to the test's
     // scoped receiver; the float[] result is checked inside the worker and
     // only a bool verdict crosses the boundary.
@@ -1921,93 +1891,68 @@ unittest {
             "poisoned episode was indexed despite the embedder throwing");
 }
 
-/// One completed DiJob must produce exactly ONE worker trace line carrying all observability fields (session id, episode/chunk/failure counts, turn range min turnStart - max turnEnd), with no per-chunk spam. Captures the line via the std.logger sharedLog seam (restored on exit, with the global log level raised to trace for the duration only). The capture is process-global and parallel worker tests emit their own trace lines, so this test uses a unique per-process session id and anchors the capture filter on its quoted form.
+/// One completed DiJob with two single-turn episodes (turns 3 and 7) indexes
+/// its chunks into the session DB, the drain answers once the job is done -
+/// and no per-chunk spam (row-count check below).
 unittest {
-    import std.algorithm : canFind;
-    import std.string : startsWith;
     import std.conv : to;
     import std.format : format;
 
     auto tmpDir = testArea("dialogue_d7");
     scope (exit)
         tmpDir.cleanup();
-    synchronized (d7SharedLogMutex) {
 
-        // Capture all log output (the worker actor's included) and enable trace level for the trace line; both are restored on exit.
-        auto prevLog = logger.sharedLog;
-        auto prevLevel = logger.globalLogLevel;
-        auto cap = cast(shared) new D7LogCapture();
-        logger.sharedLog = cap;
-        logger.globalLogLevel = logger.LogLevel.trace;
-        scope (exit) {
-            logger.globalLogLevel = prevLevel;
-            logger.sharedLog = prevLog;
-        }
+    auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
+            modelName: "wk", dimensions: 8));
+    auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
-        auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
-                modelName: "wk", dimensions: 8));
-        auto ragCfg = RagConfig(windowOverlapPercent: 10);
+    auto sys = makeSystem;
+    scope (exit)
+        sys.shutdown();
+    auto sup = scopedActor;
+    auto gate = new CompletionGate;
 
-        auto sys = makeSystem;
-        scope (exit)
-            sys.shutdown();
-        auto sup = scopedActor;
-        auto gate = new CompletionGate;
+    auto ch = Channel!DialogueWorkerAPI(sys.spawn!DialogueWorkerActor(&sys, WeakAddress.init, tmpDir.workArea,
+            cfg, ragCfg, &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null)), null);
 
-        auto ch = Channel!DialogueWorkerAPI(sys.spawn!DialogueWorkerActor(&sys,
-                WeakAddress.init, tmpDir.workArea, cfg,
-                ragCfg, &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null)), null);
+    // One job with two single-turn episodes (turns 3 and 7). Unique
+    // per-process session id (valid IdPattern form: YYYYMMDD-HHMMSS-4hex): a
+    // module-scope counter plus the wall clock make collisions with the fixed
+    // sids other tests use (~"abcd") negligible.
+    static uint d7Seq;
+    long nowMillis = Clock.currTime.toUnixTime * 1000;
+    uint salt = cast(uint)(nowMillis) * 2654435761u + ++d7Seq;
+    string sid = format("20240101-120000-%04x", salt & 0xFFFFu);
+    string hex = sid[16 .. $];
+    string ep3;
+    foreach (i; 0 .. 12)
+        ep3 ~= "episode three turn " ~ i.to!string ~ " line\n";
+    string ep7;
+    foreach (i; 0 .. 12)
+        ep7 ~= "episode seven turn " ~ i.to!string ~ " line\n";
+    ch.diJob(DiJob(sid, [
+        DiEpisode("d_20240101_120000_" ~ hex ~ "__t3_3__1000", ep3.idup, 3),
+        DiEpisode("d_20240101_120000_" ~ hex ~ "__t7_7__1000", ep7.idup, 7),
+    ]));
+    ch.diDrain(DiDrain(sup.address(), gate, Duration.zero));
+    assert(sup.receiveTimeout(30.dur!"seconds", (DiDrained _) {}),
+            "worker did not drain its mailbox");
+    gate.close();
 
-        // One job with two single-turn episodes (turns 3 and 7): the trace line must report the range 3-7 (min turnStart - max turnEnd over the job). Unique per-process session id (valid IdPattern form: YYYYMMDD-HHMMSS-4hex): the capture filter anchors on its quoted form, which no parallel test's line can match. A module-scope counter plus the wall clock make collisions with the fixed sids other tests use (~"abcd") negligible.
-        static uint d7Seq;
-        long nowMillis = Clock.currTime.toUnixTime * 1000;
-        uint salt = cast(uint)(nowMillis) * 2654435761u + ++d7Seq;
-        string sid = format("20240101-120000-%04x", salt & 0xFFFFu);
-        string hex = sid[16 .. $];
-        string ep3;
-        foreach (i; 0 .. 12)
-            ep3 ~= "episode three turn " ~ i.to!string ~ " line\n";
-        string ep7;
-        foreach (i; 0 .. 12)
-            ep7 ~= "episode seven turn " ~ i.to!string ~ " line\n";
-        ch.diJob(DiJob(sid, [
-            DiEpisode("d_20240101_120000_" ~ hex ~ "__t3_3__1000", ep3.idup, 3),
-            DiEpisode("d_20240101_120000_" ~ hex ~ "__t7_7__1000", ep7.idup, 7),
-        ]));
-        ch.diDrain(DiDrain(sup.address(), gate, Duration.zero));
-        assert(sup.receiveTimeout(30.dur!"seconds", (DiDrained _) {}),
-                "worker did not drain its mailbox");
-        gate.close();
-
-        // The drain proves the job completed, so the trace line is already captured. Anchor on this test's quoted session id: parallel worker tests share this global capture and log their own trace lines (their own sids).
-        string[] d7;
-        foreach (l; (cast() cap).takeLines())
-            if (l.startsWith("dialogue worker: session '" ~ sid ~ "'"))
-                d7 ~= l;
-        assert(d7.length == 1,
-                "expected exactly one trace line per completed job, got %s: %s".format(d7.length,
-                    d7));
-        string line = d7[0];
-        assert(line.canFind(sid), "trace line missing session id: " ~ line);
-        assert(line.canFind("2 episodes"), "trace line missing episode count: " ~ line);
-        assert(line.canFind("chunks,"), "trace line missing chunk count: " ~ line);
-        assert(line.canFind("0 failures"), "trace line missing failure count: " ~ line);
-        assert(line.canFind("turns 3-7"), "trace line missing the 3-7 turn range: " ~ line);
-
-        // No per-chunk spam: several chunks were indexed (verified below) yet exactly one trace line was emitted.
-        auto dbOpt = openDatabase((tmpDir ~ (sid ~ ".db")).AbsolutePath, "wk", 8, readOnly: true);
-        assert(dbOpt.hasValue, "session DB missing");
-        auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
-        scope (exit)
-            db.destroy;
-        long rowCount = -1;
-        {
-            auto stmt = db.prepare("SELECT count(*) FROM TextChunkTbl;");
-            foreach (ref r; stmt.get.execute)
-                rowCount = r.peek!long(0);
-        }
-        assert(rowCount >= 2, "expected >= 2 indexed chunks, got %s".format(rowCount));
+    // The drain proves the job completed; the row count below proves the
+    // episodes were indexed.
+    auto dbOpt = openDatabase((tmpDir ~ (sid ~ ".db")).AbsolutePath, "wk", 8, readOnly: true);
+    assert(dbOpt.hasValue, "session DB missing");
+    auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
+    scope (exit)
+        db.destroy;
+    long rowCount = -1;
+    {
+        auto stmt = db.prepare("SELECT count(*) FROM TextChunkTbl;");
+        foreach (ref r; stmt.get.execute)
+            rowCount = r.peek!long(0);
     }
+    assert(rowCount >= 2, "expected >= 2 indexed chunks, got %s".format(rowCount));
 }
 
 /// Fixed-text fake summarizer: an RiJob must produce a retrievable r_
@@ -2325,60 +2270,39 @@ unittest {
     scope (exit)
         tmpDir.cleanup();
     Duration lateWait;
-    synchronized (d7SharedLogMutex) {
 
-        // Capture the worker actor's log output; restored on exit.
-        auto prevLog = logger.sharedLog;
-        auto prevLevel = logger.globalLogLevel;
-        auto cap = cast(shared) new D7LogCapture();
-        logger.sharedLog = cap;
-        logger.globalLogLevel = logger.LogLevel.trace;
-        scope (exit) {
-            logger.globalLogLevel = prevLevel;
-            logger.sharedLog = prevLog;
-        }
+    auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
+            modelName: "wk", dimensions: 8));
+    auto ragCfg = RagConfig(windowOverlapPercent: 10);
 
-        auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
-                modelName: "wk", dimensions: 8));
-        auto ragCfg = RagConfig(windowOverlapPercent: 10);
+    auto sys = makeSystem;
+    scope (exit)
+        sys.shutdown();
+    auto sup = scopedActor;
+    auto gate = new CompletionGate;
 
-        auto sys = makeSystem;
-        scope (exit)
-            sys.shutdown();
-        auto sup = scopedActor;
-        auto gate = new CompletionGate;
+    auto ch = Channel!DialogueWorkerAPI(sys.spawn!DialogueWorkerActor(&sys, WeakAddress.init, tmpDir.workArea,
+            cfg, ragCfg, &wkEmbedderFactory, SummaryModelConfig.init,
+            "fake prompt", &riSlowFake), null);
+    string sid = "20240101-120000-ab06";
 
-        auto ch = Channel!DialogueWorkerAPI(sys.spawn!DialogueWorkerActor(&sys,
-                WeakAddress.init, tmpDir.workArea, cfg,
-                ragCfg, &wkEmbedderFactory, SummaryModelConfig.init, "fake prompt", &riSlowFake),
-                null);
-        string sid = "20240101-120000-ab06";
+    ch.riJob(RiJob(sid, "trace text for the deadline fake".idup, 7, 7));
+    auto t0 = Clock.currTime;
+    ch.diDrain(DiDrain(sup.address(), gate, 1500.dur!"msecs"));
 
-        ch.riJob(RiJob(sid, "trace text for the deadline fake".idup, 7, 7));
-        auto t0 = Clock.currTime;
-        ch.diDrain(DiDrain(sup.address(), gate, 1500.dur!"msecs"));
-        assert(sup.receiveTimeout(30.dur!"seconds", (DiDrained _) {}),
-                "worker must answer diDrain even when the join hits its deadline");
-        gate.close();
-        auto elapsed = Clock.currTime - t0;
-        assert(elapsed < 4000.dur!"msecs",
-                "drain blocked on the in-flight fake instead of the deadline: %s".format(elapsed));
+    // The deadline finalize must answer with deadlineHit set (the
+    // drain-deadline decision as data): the drain gives up (in-flight
+    // records lost, advisory) and still answers DiDrained.
+    DiDrained reply;
+    assert(sup.receiveTimeout(30.dur!"seconds", (DiDrained r) { reply = r; }),
+            "worker must answer diDrain even when the join hits its deadline");
+    assert(reply.deadlineHit, "the deadline finalize must answer with deadlineHit set");
+    gate.close();
+    auto elapsed = Clock.currTime - t0;
+    assert(elapsed < 4000.dur!"msecs",
+            "drain blocked on the in-flight fake instead of the deadline: %s".format(elapsed));
 
-        // bounded deadline: with the job count still > 0 at the deadline the
-        // worker warns and finalizes anyway (the reply is not dropped; the
-        // late record just misses this drain). The warning must have been
-        // emitted by the worker.
-        string capturedAll;
-        bool warned = false;
-        foreach (l; (cast() cap).takeLines()) {
-            capturedAll ~= l ~ "\n";
-            if (l.startsWith("dialogue worker: drain deadline"))
-                warned = true;
-        }
-        assert(warned,
-                "expected a 'drain deadline' warning from the worker; captured:\n" ~ capturedAll);
-        lateWait = 3500.dur!"msecs" - (Clock.currTime - t0);
-    }
+    lateWait = 3500.dur!"msecs" - (Clock.currTime - t0);
     // Let the late RiRecord (fake sleeps 3000 ms) be consumed by the still-running worker BEFORE the test area is cleaned up (documented unittest backoff sleep: the late recordJob may reopen the session DB; accepted shutdown record-loss window -- its state is deliberately not asserted).
     if (lateWait > Duration.zero)
         Thread.sleep(lateWait);
@@ -2954,78 +2878,60 @@ unittest {
 @("DialogueWorkerActor: channel surface carries the worker protocol")
 unittest {
     import core.thread : Thread;
-    import std.datetime : Clock;
-    import std.string : startsWith;
+    import std.datetime.stopwatch : MonoTime;
 
     auto tmpDir = testArea("dialogue_channelsurface");
     scope (exit)
         tmpDir.cleanup();
-    synchronized (d7SharedLogMutex) {
 
-        // Capture the worker's trace output (the riDone skip line); restored on exit.
-        auto prevLog = logger.sharedLog;
-        auto prevLevel = logger.globalLogLevel;
-        auto cap = cast(shared) new D7LogCapture();
-        logger.sharedLog = cap;
-        logger.globalLogLevel = logger.LogLevel.trace;
-        scope (exit) {
-            logger.globalLogLevel = prevLevel;
-            logger.sharedLog = prevLog;
+    auto sys = makeSystem;
+    scope (exit)
+        sys.shutdown();
+    auto sup = scopedActor;
+    auto gate = new CompletionGate;
+
+    auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
+            modelName: "wk", dimensions: 8));
+    auto ragCfg = RagConfig(windowOverlapPercent: 10);
+
+    auto ch = Channel!DialogueWorkerAPI(sys.spawn!DialogueWorkerActor(&sys, WeakAddress.init, tmpDir.workArea,
+            cfg, ragCfg, &wkEmbedderFactory, SummaryModelConfig.init,
+            "fake prompt", &riChanFake), null);
+    string sid = "20240101-120000-ab22";
+
+    // Every channel method with the current payload shapes (compile check).
+    ch.diJob(DiJob(sid, [
+        DiEpisode("d_20240101_120000_ab22__t1_1__1000".idup, "CHANEPI episode body".idup, 1)
+    ]));
+    ch.riJob(RiJob(sid, "channel-surface trace".idup, 2, 3));
+    ch.diDrain(DiDrain(sup.address(), gate, Duration.zero));
+    assert(sup.receiveTimeout(30.dur!"seconds", (DiDrained _) {}),
+            "the drain must answer after the surface round trip");
+    gate.close();
+
+    // Post-drain completions: the store reopens (legacy parity) and the riRecord
+    // is indexed asynchronously by the worker (a separate mailbox) - bounded
+    // wait: poll the store for the record. riDone round-trips the channel
+    // method.
+    ch.riRecord(RiRecord("r_20240101_120000_ab22__t4_4__1000", "CHANDIRECT record body"));
+    ch.riDone(RiDone("r_20240101_120000_ab22__t5_5__1000", "CHANFAIL"));
+
+    // diJob + riJob + riRecord evidence in the committed store.
+    auto dbOpt = openDatabase((tmpDir ~ (sid ~ ".db")).AbsolutePath, "wk", 8, readOnly: true);
+    assert(dbOpt.hasValue, "session DB missing after the channel surface round trip");
+    auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
+    scope (exit)
+        db.destroy;
+    assert(db.queryTextSearch("CHANEPI", 10).length >= 1, "diJob episode not indexed");
+    assert(db.queryTextSearch("CHANREC", 10).length >= 1, "riJob record not indexed");
+    auto indexed = false;
+    auto t0 = MonoTime.currTime;
+    while (!indexed && MonoTime.currTime - t0 < 5.dur!"seconds") {
+        if (db.queryTextSearch("CHANDIRECT", 10).length >= 1) {
+            indexed = true;
+        } else {
+            Thread.sleep(5.dur!"msecs"); // allowlisted unittest backoff: bounded poll
         }
-
-        auto sys = makeSystem;
-        scope (exit)
-            sys.shutdown();
-        auto sup = scopedActor;
-        auto gate = new CompletionGate;
-
-        auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
-                modelName: "wk", dimensions: 8));
-        auto ragCfg = RagConfig(windowOverlapPercent: 10);
-
-        auto ch = Channel!DialogueWorkerAPI(sys.spawn!DialogueWorkerActor(&sys,
-                WeakAddress.init, tmpDir.workArea, cfg,
-                ragCfg, &wkEmbedderFactory, SummaryModelConfig.init, "fake prompt", &riChanFake),
-                null);
-        string sid = "20240101-120000-ab22";
-
-        // Every channel method with the current payload shapes (compile check).
-        ch.diJob(DiJob(sid, [
-            DiEpisode("d_20240101_120000_ab22__t1_1__1000".idup, "CHANEPI episode body".idup, 1)
-        ]));
-        ch.riJob(RiJob(sid, "channel-surface trace".idup, 2, 3));
-        ch.diDrain(DiDrain(sup.address(), gate, Duration.zero));
-        assert(sup.receiveTimeout(30.dur!"seconds", (DiDrained _) {}),
-                "the drain must answer after the surface round trip");
-        gate.close();
-
-        // Post-drain completions: the store reopens (legacy parity), riRecord is indexed, and
-        // riDone is logged with its reason. Bounded wait: the worker is a separate mailbox.
-        ch.riRecord(RiRecord("r_20240101_120000_ab22__t4_4__1000", "CHANDIRECT record body"));
-        ch.riDone(RiDone("r_20240101_120000_ab22__t5_5__1000", "CHANFAIL"));
-        string capturedAll;
-        bool skipped = false;
-        auto t0 = Clock.currTime;
-        while (!skipped && Clock.currTime - t0 < 5.dur!"seconds") {
-            foreach (l; (cast() cap).takeLines()) {
-                capturedAll ~= l ~ "\n";
-                if (l.startsWith(
-                        "dialogue worker: reasoning record 'r_20240101_120000_ab22__t5_5__1000' skipped: CHANFAIL"))
-                    skipped = true;
-            }
-            if (!skipped)
-                Thread.sleep(5.dur!"msecs"); // allowlisted unittest backoff: bounded log wait
-        }
-        assert(skipped, "riDone must log the skip with the reason; captured:\n" ~ capturedAll);
-
-        // diJob + riJob + riRecord evidence in the committed store.
-        auto dbOpt = openDatabase((tmpDir ~ (sid ~ ".db")).AbsolutePath, "wk", 8, readOnly: true);
-        assert(dbOpt.hasValue, "session DB missing after the channel surface round trip");
-        auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
-        scope (exit)
-            db.destroy;
-        assert(db.queryTextSearch("CHANEPI", 10).length >= 1, "diJob episode not indexed");
-        assert(db.queryTextSearch("CHANREC", 10).length >= 1, "riJob record not indexed");
-        assert(db.queryTextSearch("CHANDIRECT", 10).length >= 1, "post-drain riRecord not indexed");
     }
+    assert(indexed, "post-drain riRecord not indexed");
 }

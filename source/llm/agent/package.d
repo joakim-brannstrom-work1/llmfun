@@ -1380,15 +1380,9 @@ version (unittest) {
     }
 
     /// Agent construction eagerly loads every enabled nudge template, so a
-    /// test prompt dir needs them alongside SUMMARY.md — each fixture writes
+    /// test prompt dir needs them alongside SUMMARY.md - each fixture writes
     /// that file the same way. Byte-identical copies: emission is rewired to
     /// the loaded texts, and the guards pin the shipped files.
-    ///
-    /// `public`, not `package`: llm.agent's package symbols are visible only
-    /// inside the llm.agent subtree (a package.d module's package IS itself),
-    /// and llm.app_agent's fixtures call this from a sibling subtree — the same
-    /// reason sharedLogSwapMutex (nudges.d) is public. version(unittest) keeps
-    /// it out of production builds.
     public void writeDefaultNudgeFiles(string promptDir) {
         import std.file : write;
         import std.path : buildPath;

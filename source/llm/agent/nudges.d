@@ -268,22 +268,3 @@ unittest {
     // An override restates only what it changes; the other kind keeps defaults.
     assert(custom.soft[NudgeKind.keepReasoning] == ["KEEP_SOFT"]);
 }
-
-version (unittest) {
-    /// One shared serialization object for every test that swaps the
-    /// process-wide `logger.sharedLog` (capture tests in llm.config,
-    /// llm.rag.dialogue_worker and llm.rag.reasoning_index): silly runs
-    /// unittests in parallel (TaskPool), so overlapping swap windows would
-    /// send log lines into the WRONG capture. Each test holds this mutex from
-    /// install through takeLines() to make its swap+drain critical section
-    /// atomic.
-    ///
-    /// This lives here (a module llm.config already imports at file scope and
-    /// the other capture tests reach through llm.test_util's re-export)
-    /// because a module constructor inside the module-import cycle around
-    /// llm.chat/llm.utility/llm.rag makes module init order ambiguous -- the
-    /// runtime then aborts with "Cyclic dependency between module
-    /// constructors/destructors" depending on link order. nudges imports
-    /// nothing from that cycle, so its constructor always initializes first.
-    __gshared Object sharedLogSwapMutex = new Object;
-}

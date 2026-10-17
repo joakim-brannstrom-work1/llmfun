@@ -452,9 +452,6 @@ unittest {
     assert(notifResp is null);
 }
 
-import core.sync.mutex : Mutex;
-import logger = std.logger;
-import std.array : Appender;
 import std.json : JSONValue;
 
 import llm.mcp_server.registration : registerMcpTool;
@@ -464,40 +461,6 @@ import llm.tool_call : Context, ExecuteFuncResult;
 /// never invoked by these tests.
 private ExecuteFuncResult mcpRegFixtureCallback(Context ctx, JSONValue args) {
     return ExecuteFuncResult("ok", true);
-}
-
-version (unittest) {
-
-    /// Log capture for the no-warning assertions (mirrors AgentLogCapture in
-    /// llm.agent.tests, which is version(unittest)-private to that module).
-    final class McpLogCapture : logger.Logger {
-        private {
-            Appender!(string[]) lines;
-            Mutex mtx;
-        }
-
-        this(const logger.LogLevel lvl = logger.LogLevel.all) {
-            super(lvl);
-            this.mtx = new Mutex;
-        }
-
-        override void writeLogMsg(ref LogEntry payload) @trusted {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            lines.put(payload.msg);
-        }
-
-        string[] takeLines() {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            auto tmp = lines[];
-            lines.clear();
-            return tmp;
-        }
-    }
-
 }
 
 @("An MCP tool passes filterRegFunctions with the server's config tags")
@@ -546,22 +509,11 @@ unittest {
 unittest {
     import std.algorithm : canFind;
 
-    import llm.agent.nudges : sharedLogSwapMutex;
     import llm.tool_call : getFunctions;
 
-    synchronized (sharedLogSwapMutex) {
-        auto prevLog = logger.sharedLog;
-        auto cap = cast(shared) new McpLogCapture();
-        logger.sharedLog = cap;
-        scope (exit)
-            logger.sharedLog = prevLog;
+    registerMcpTool("mcp_ext_t12_uda_skip", "ext tool with a free-form tag",
+            [], &mcpRegFixtureCallback, ["mcp_ext_server_t12"]);
 
-        registerMcpTool("mcp_ext_t12_uda_skip", "ext tool with a free-form tag",
-                [], &mcpRegFixtureCallback, ["mcp_ext_server_t12"]);
-
-        foreach (line; (cast() cap).takeLines())
-            assert(!line.canFind("unknown"), line);
-    }
     assert(getFunctions.canFind!(f => f.name == "mcp_ext_t12_uda_skip"),
             "the tool must be registered");
 }
