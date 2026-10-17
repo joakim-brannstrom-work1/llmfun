@@ -332,9 +332,8 @@ class DialogueIndex {
                 return;
 
             // Send to worker (fire-and-forget, non-blocking).
-            immutable(DiEpisode[]) immEps = cast(immutable(DiEpisode[])) episodes;
             try {
-                actorChannel_.diJob(DiJob(sid, immEps));
+                actorChannel_.diJob(DiJob(sid, episodes));
             } catch (Throwable t) {
                 logger.tracef("DialogueIndex: actor diJob send failed: %s", t.msg).collectException;
             }

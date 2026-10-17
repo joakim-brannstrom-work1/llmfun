@@ -42,10 +42,10 @@ struct DiEpisode {
 
 /// One compression checkpoint's worth of episodes for a single session.
 ///
-/// `episodes` must be an `immutable` dynamic array (message discipline: the worker reads the buffer asynchronously, so the sender must not keep a mutable view of it across the boundary). The strings are `char[]` (already immutable) and the worker dup's what it needs.
+/// `episodes` ownership transfers with the message: the worker reads the buffer asynchronously, so the sender must not retain or mutate it after sending. Mutable array on purpose -- mylib's Channel boxes payloads in `Variant(Tuple!...)`, and D forbids the struct assignment that storing a `Tuple` of a struct with `immutable` members requires. The strings are `char[]` (already immutable) and the worker dup's what it needs.
 struct DiJob {
     string sessionId;
-    immutable(DiEpisode[]) episodes;
+    DiEpisode[] episodes;
 }
 
 /// Drain request: the reply target carries a gate; waiters pause on `ScopedActor.receiveTimeout` and close the gate when they stop waiting. A closed gate means the reply is skipped.
