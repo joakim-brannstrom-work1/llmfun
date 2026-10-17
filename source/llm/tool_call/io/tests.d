@@ -653,6 +653,7 @@ unittest {
             "ambiguous targeting: multiple targeting parameters provided (startLine, marker)") == "ambiguous_targeting");
     assert(classifyEditError(
             "no targeting method specified. Provide exactly one of: startLine, marker, searchContent") == "missing_targeting");
+    assert(classifyEditError("no targeting method specified. Provide exactly one of: startLine (byLine), marker (byMarker), or searchContent (byContent), or use mode=append with no targeting to append at the end of the file") == "missing_targeting");
     assert(classifyEditError(
             "Hunk 1: Context mismatch at line 3: expected 'x' but found 'y'") == "context_mismatch");
     assert(classifyEditError("marker at line 3 with count 5 exceeds file length") == "range_oob");
@@ -691,6 +692,9 @@ unittest {
     assert(targetingMethodOf(UnifiedEditFileParams("p.txt", "x", "replace",
             searchContent: "s")) == "byContent");
     assert(targetingMethodOf(UnifiedEditFileParams("p.txt", "x", "replace")) == "none");
+    assert(targetingMethodOf(UnifiedEditFileParams("p.txt", "x", "replace")) == "none");
+    assert(targetingMethodOf(UnifiedEditFileParams("p.txt", "x", "append")) == "append_eof");
+    assert(targetingMethodOf(UnifiedEditFileParams("p.txt", "x", "insert_after")) == "none");
     assert(targetingMethodOf(UnifiedEditFileParams("p.txt", "x", "replace",
             startLine: 1, marker: "m")) == "none");
 
@@ -877,6 +881,59 @@ unittest {
         assert(e.msg.canFind("no targeting method"), e.msg);
     }
     assert(threw);
+}
+
+unittest {
+    // === append with NO targeting: appends at the end of the file ===
+    // Zero targeting + mode=append is a pure insertion one past the last
+    // line. matchedAt is the 1-based line where the new content starts
+    // (fileLines.length + 1) - deliberately DIVERGENT from byLine, which at
+    // EOF (startLine == file length) reports the ANCHOR line (length); the
+    // difference is documented in editFile's @Function description.
+    string[] fileLines = ["a", "b", "c"];
+    auto res = editFileUnifiedMemory(fileLines, EditMode.append, "X");
+    assert(res.lines == ["a", "b", "c", "X"], res.lines.to!string);
+    assert(res.matched.matchedAt == 4, res.matched.to!string);
+    assert(res.matched.matchedLines == 1, res.matched.to!string);
+    assert(res.linesChanged == 1, res.linesChanged.to!string);
+    assert(!res.autoCountUsed);
+}
+
+unittest {
+    // === byLine append at EOF (startLine == file length): matchedAt is the
+    // === anchor line (length), pinning the documented divergence from the
+    // === zero-targeting path above ===
+    string[] fileLines = ["a", "b", "c"];
+    auto res = editFileUnifiedMemory(fileLines, EditMode.append, "X", startLine: 3);
+    assert(res.lines == ["a", "b", "c", "X"], res.lines.to!string);
+    assert(res.matched.matchedAt == 3, res.matched.to!string);
+}
+
+unittest {
+    // === append with NO targeting on an empty file: inserts at line 1 ===
+    auto res = editFileUnifiedMemory([], EditMode.append, "X");
+    assert(res.lines == ["X"], res.lines.to!string);
+    assert(res.matched.matchedAt == 1, res.matched.to!string);
+    assert(res.linesChanged == 1, res.linesChanged.to!string);
+}
+
+unittest {
+    // === error: no targeting with a non-append mode still fails, with the
+    // === extended "use mode=append" hint ===
+    foreach (mode; [
+        EditMode.replace, EditMode.insert_after, EditMode.insert_before,
+        EditMode.remove
+    ]) {
+        bool threw = false;
+        try {
+            editFileUnifiedMemory(["a"], mode, mode == EditMode.remove ? "" : "x");
+        } catch (Exception e) {
+            threw = true;
+            assert(e.msg.canFind("no targeting method"), e.msg);
+            assert(e.msg.canFind("mode=append with no targeting"), e.msg);
+        }
+        assert(threw);
+    }
 }
 
 unittest {
@@ -2645,6 +2702,31 @@ unittest {
 
     auto content = readTestFile(ctx, "test.txt");
     assert(content == "a\nfoo\nbar\nX\nb\n", content);
+}
+
+unittest {
+    // Integration test: append with no targeting appends at the end of the
+    // file and preserves the file's trailing newline.
+    auto ctx = makeTestContext("edit_append_no_targeting");
+    scope (exit)
+        ctx.teardown;
+
+    createTestFile(ctx, "test.txt", "a\nb\n");
+
+    auto result = editFile(ctx, UnifiedEditFileParams(path: "test.txt",
+            content: "X", mode: "append"));
+    assert(result.success, result.msg);
+
+    auto json = parseJSON(result.msg);
+    assert(json["ok"].type == JSONType.true_, result.msg);
+    assert(json["matchedAt"].integer == 3, result.msg);
+    assert(json["matchedLines"].integer == 1, result.msg);
+    assert(json["linesChanged"].integer == 1, result.msg);
+    assert(json["linesChanged"].integer == 1, result.msg);
+    assert(json["operations"].integer == 1, result.msg);
+
+    auto content = readTestFile(ctx, "test.txt");
+    assert(content == "a\nb\nX\n", content);
 }
 
 unittest {

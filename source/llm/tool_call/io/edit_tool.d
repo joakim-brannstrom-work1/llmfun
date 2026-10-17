@@ -21,7 +21,8 @@ mixin RegisterLlmFunctions!();
 /// Parameters for the unified editFile tool.
 ///
 /// Exactly one targeting method must be provided: startLine (byLine),
-/// marker (byMarker), or searchContent (byContent).
+/// marker (byMarker), or searchContent (byContent). The exception:
+/// mode=append with no targeting appends at the end of the file.
 struct UnifiedEditFileParams {
     @ParamDescription("Path to the file (relative to workarea)")
     string path;
@@ -29,26 +30,22 @@ struct UnifiedEditFileParams {
     @ParamDescription("Content to insert or replace with; must be empty string for remove mode")
     string content;
 
-    @ParamDescription(
-            `Edit mode: "replace", "remove", "append", "insert_before", or "insert_after" (alias for append)`)
+    @ParamDescription(`Edit mode: "replace", "remove", "append", "insert_before", or "insert_after" (alias for append). Insert modes anchor at the FIRST occurrence of the targeted block/marker; when the search repeats (e.g. identical per-section footers) placement is ambiguous: use a unique end marker per section, or append without targeting (no targeting appends at end of file)`)
     string mode;
 
-    // Targeting — exactly one of the following must be provided:
     @ParamDescription(
             "byLine targeting: first line of the range (1-based, must be >= 1; omitted by default)")
     @ParamOptional long startLine = -1;
 
-    @ParamDescription("Number of lines to replace/remove from the target. byLine: required for replace/remove. byMarker: default 1, auto-derived from content line count when replacing with multi-line content; for multi-line markers, count auto-derives from the marker line count. byContent: auto-derived from matched block size (explicit count overrides for single edits; not supported with replaceAll). Ignored for insert modes.")
+    @ParamDescription("Number of lines to replace/remove from the target. byLine: required for replace/remove. byMarker: default 1, auto-derived from content line count when replacing with multi-line content; for multi-line markers, count auto-derives from the marker line count; set count=1 to replace only the marker line; empty content replaces exactly the marker line. byContent: auto-derived from matched block size (explicit count overrides for single edits; not supported with replaceAll). Ignored for insert modes.")
     @ParamOptional long count;
 
-    @ParamDescription("byMarker targeting: case-sensitive substring to find; multi-line markers (up to 20 lines) are also supported — the first line is used as an anchor and subsequent lines are verified as substrings of consecutive file lines")
+    @ParamDescription("byMarker targeting: case-sensitive substring to find; multi-line markers (up to 20 lines) are also supported — the first line is used as an anchor and subsequent lines are verified as substrings of consecutive file lines. Insert modes anchor at the FIRST occurrence when the marker repeats (see mode)")
     @ParamOptional string marker;
 
-    @ParamDescription(
-            "byContent targeting: code block to find using trimmed equality matching (multi-line allowed)")
+    @ParamDescription("byContent targeting: code block to find using trimmed equality matching (multi-line allowed). byContent append/insert_after inserts content after the matched block; insert_before inserts before it. Insert modes anchor at the FIRST occurrence when the block repeats (see mode)")
     @ParamOptional string searchContent;
 
-    // Options:
     @ParamDescription(
             "Replace all non-overlapping occurrences (byContent and byMarker only; not supported with byLine)")
     @ParamOptional bool replaceAll;
@@ -56,14 +53,13 @@ struct UnifiedEditFileParams {
     @ParamDescription("Preview the result without writing to disk")
     @ParamOptional bool dryRun;
 
-    @ParamDescription("Which occurrence to target (1-based, default 1; values < 1 are invalid). matchIndex > 1 targets the Nth occurrence (byMarker/byContent only) and cannot be combined with replaceAll; ignored by byLine targeting.")
+    @ParamDescription("Which occurrence to target (1-based, default 1; values < 1 are invalid). Only byMarker/byContent; ignored by byLine; cannot be combined with replaceAll.")
     @ParamOptional long matchIndex = 1;
 
     @ParamDescription("Scope limiting: restrict the byMarker/byContent search to the 1-based inclusive line range [scopeStart, scopeEnd]. Either or both may be provided: scopeStart alone searches from that line to the end of file; scopeEnd alone searches from line 1 to that line. The first line of a match (anchor) must be inside the range; the match may extend past scopeEnd. Ignored by byLine targeting (byLine does not search). scopeStart must be >= 1; if both are provided, scopeStart must be <= scopeEnd.")
     @ParamOptional long scopeStart = -1;
 
-    @ParamDescription(
-            "Scope limiting: end of the search range (1-based, inclusive). See scopeStart.")
+    @ParamDescription("Scope limiting: end of the search range. See scopeStart.")
     @ParamOptional long scopeEnd = -1;
 
     @ParamDescription("byLine guard: verify that the target lines match this content before editing. When non-empty, the lines at [startLine, startLine+count) are compared (trimmed equality) against verifyContent. Mismatch throws an error with the actual content found, preventing silent corruption from stale line numbers after successive edits. Only valid with byLine targeting.")
@@ -71,12 +67,26 @@ struct UnifiedEditFileParams {
 }
 
 /// Resolve the targeting method of the unified editFile params for logging.
-/// Returns "byLine", "byMarker", "byContent", or "none" (absent/ambiguous).
+/// Returns "byLine", "byMarker", "byContent", "none" (absent/ambiguous), or
+/// "append_eof" (mode=append with no targeting - a valid call shape).
 package string targetingMethodOf(UnifiedEditFileParams params) @safe {
     const provided = (params.startLine != -1 ? 1 : 0) + (params.marker.length > 0
             ? 1 : 0) + (params.searchContent.length > 0 ? 1 : 0);
-    if (provided != 1)
+    if (provided != 1) {
+        if (provided == 0) {
+            try {
+                if (parseEditMode(params.mode) == EditMode.append) {
+                    // TODO: returning these magic strings that is then cought
+                    // and matched is bad design.
+                    return "append_eof";
+                }
+            } catch (Exception) {
+                // Invalid mode: reported as "none" here; parseEditMode's own
+                // error surfaces later in editFile.
+            }
+        }
         return "none";
+    }
     if (params.startLine != -1)
         return "byLine";
     if (params.marker.length > 0)
@@ -98,7 +108,7 @@ package string scopeLogValue(long scopeStart, long scopeEnd) @safe {
     return "none";
 }
 
-@Function("Edit a file by applying a change to a target. " ~ "Target the file with exactly one method: startLine+count (byLine, 1-based; startLine must be >= 1), " ~ "marker (byMarker, substring to find; multi-line markers up to 20 lines are also supported — first line is an anchor, subsequent lines verified against consecutive file lines), or " ~ "searchContent (byContent, code block matched by trimmed equality). " ~ "Modes: replace (replace targeted lines with content), remove (delete targeted lines, content must be empty), " ~ "append (keep target line, add content after it), insert_after (same as append), " ~ "insert_before (add content before target line, keep target line). " ~ "byMarker replace auto-derives count from the number of content lines when content is multi-line and count is omitted; for multi-line markers, count auto-derives from the marker line count; set count=1 to replace only the marker line; empty content replaces exactly the marker line. " ~ "byContent auto-derives count from the matched block size; an explicit count overrides for single edits but is not supported with replaceAll. " ~ "byContent append/insert_after inserts content after the matched block; insert_before inserts before it. " ~ "replaceAll replaces every non-overlapping occurrence (byContent and byMarker only, replace/remove modes). " ~ "matchIndex selects the Nth occurrence (1-based, must be >= 1; matchIndex > 1 targets a single occurrence, cannot be combined with replaceAll, and is ignored by byLine targeting). " ~ "scopeStart/scopeEnd (1-based, inclusive) limit the byMarker/byContent search to a line range for large files; either or both may be given (scopeStart alone searches from that line to EOF, scopeEnd alone searches from line 1 to that line); the first line of a match must be inside the range; the match may extend past scopeEnd; ignored by byLine. " ~ "byLine targeting can optionally verify target content with verifyContent to prevent silent corruption from stale line numbers. " ~ "The file's trailing-newline state is preserved, and the dryRun preview matches the exact bytes that would be written. " ~ "Returns a JSON object with fields: ok (bool), matchedAt (1-based line), matchedLines (int), linesChanged (int), operations (int), lineShift (int, net line count change). " ~ "When auto-count is used, also includes: autoCountUsed (true) and note (string). " ~ "When dryRun is true, also includes: preview (string). " ~ "On failure returns JSON with ok=false, an error string, and a diagnostic field with closest-match details.") ExecuteFuncResult editFile(
+@Function("Edit a file by applying a change to a target. " ~ "Target the file with exactly one method: startLine+count (byLine, 1-based), " ~ "marker (byMarker, substring to find), or searchContent (byContent, code block matched by trimmed equality). " ~ "The file's trailing-newline state is preserved, and the dryRun preview matches the exact bytes that would be written. " ~ "Returns a JSON object with fields: ok (bool), matchedAt (1-based line; for a mode=append call with no targeting, the line where the new content starts, which is one past the last line for a non-empty file), matchedLines (int), linesChanged (int), operations (int), lineShift (int, net line count change). " ~ "When auto-count is used, also includes: autoCountUsed (true) and note (string). " ~ "When dryRun is true, also includes: preview (string). " ~ "On failure returns JSON with ok=false, an error string, and a diagnostic field with closest-match details.") ExecuteFuncResult editFile(
         Context baseCtx, UnifiedEditFileParams params) {
     mixin(baseContextToSpecific!FileContext);
 
