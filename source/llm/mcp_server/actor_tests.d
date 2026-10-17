@@ -7,7 +7,7 @@ module llm.mcp_server.actor_tests;
 
 import logger = std.logger;
 
-import llm.config : ToolFilter;
+import llm.config : LlmConfig, ToolFilter;
 import llm.mcp_server;
 import llm.mcp_server.transport : EOFException, Transport;
 import my.actor.msg : capture;
@@ -48,7 +48,7 @@ private class FakeTransport : Transport {
 /// Drives one configure request/reply through a typed Channel against an
 /// ActorShell-wrapped McpServerActor - the mylib no-thread test pattern (bare
 /// shells + manual process(Clock.currTime) pumps, no threads).
-private ReadyReply pumpConfigure(Transport transport, ToolFilter filter, McpConfigData configData) {
+private ReadyReply pumpConfigure(Transport transport, ToolFilter filter, LlmConfig llmConf) {
     import my.actor.channel : Channel;
     import my.actor.registration : implActor;
     import my.actor.system : ActorShell, makeAddress;
@@ -67,7 +67,7 @@ private ReadyReply pumpConfigure(Transport transport, ToolFilter filter, McpConf
     }
 
     auto chan = Channel!McpServerActor(serverShell.address, &clientShell);
-    chan.configure(filter, configData).capture(&got).then(&onReady);
+    chan.configure(filter, llmConf).capture(&got).then(&onReady);
 
     foreach (_; 0 .. 8) {
         serverShell.process(Clock.currTime);
@@ -78,26 +78,15 @@ private ReadyReply pumpConfigure(Transport transport, ToolFilter filter, McpConf
 
 @("McpServerActor.configure builds the world and replies ReadyReply(true)")
 unittest {
-    import std.conv : to;
     import std.datetime : Clock;
-    import std.file : mkdirRecurse, rmdirRecurse;
-    import std.path : buildPath;
-    import std.stdio : File;
     import std.typecons : Tuple;
 
     import my.actor.channel : Channel;
     import my.actor.registration : implActor;
     import my.actor.system : ActorShell, makeAddress;
 
-    // Minimal valid config file (the same yaml shape the readConfig tests use).
-    auto tmpDir = buildPath("llmfun_test", "mcp_actor_configure_" ~ __LINE__.to!string);
-    mkdirRecurse(tmpDir);
-    scope (exit)
-        rmdirRecurse(tmpDir);
-    auto configFile = buildPath(tmpDir, "config.yaml");
-    File(configFile, "w").write("codeModels:\n  - modelName: test\n"
-            ~ "    display: test42\n    server:\n      url: http://localhost:8080\n");
-
+    // Minimal config the test world needs (LlmConfig.init, no readConfig
+    // call - the tests never read the real machine config, F2/F3).
     auto transport = new FakeTransport;
     auto exitState = refCounted(0);
     auto serverShell = ActorShell(makeAddress);
@@ -112,8 +101,7 @@ unittest {
     }
 
     auto chan = Channel!McpServerActor(serverShell.address, &clientShell);
-    chan.configure(ToolFilter(), McpConfigData(configFile, false, true))
-        .capture(&got).then(&onReady);
+    chan.configure(ToolFilter(), LlmConfig.init).capture(&got).then(&onReady);
 
     foreach (_; 0 .. 8) {
         serverShell.process(Clock.currTime);
@@ -131,31 +119,21 @@ unittest {
     assert(transport.written.length == 1, "one response written for stdin");
 }
 
-@("McpServerActor.configure with an invalid config replies ReadyReply(false) and logs")
+@("McpServerActor.configure with an invalid tool filter replies ReadyReply(false) and logs")
 unittest {
     import std.array : empty;
-    import std.file : mkdirRecurse, rmdirRecurse;
-    import std.path : buildPath;
-    import std.stdio : File;
 
     auto transport = new FakeTransport;
 
-    // A config file that parses but fails validateConfig (missing display and
-    // server.url) makes readConfig throw; the handler converts it into a
-    // ReadyReply(false, msg) - no throw escapes the handler. A MISSING file
-    // would not work: readConfig only warns ("No project configuration
-    // found") and proceeds with defaults when the explicit path is absent.
-    auto tmpDir = buildPath("llmfun_test", "mcp_actor_invalid_config");
-    mkdirRecurse(tmpDir);
-    scope (exit)
-        rmdirRecurse(tmpDir);
-    auto configFile = buildPath(tmpDir, "config.yaml");
-    File(configFile, "w").write("codeModels:\n  - modelName: test\n");
-
-    auto got = pumpConfigure(transport, ToolFilter(), McpConfigData(configFile, false, true));
+    // configure() receives a pre-built LlmConfig (F2/F3: the actor reads no
+    // config file), so the remaining failure input is the filter: an invalid
+    // include regex makes `filter.to` throw while the MCPServer is
+    // constructed - the handler converts it into a ReadyReply(false, msg); no
+    // throw escapes the handler.
+    auto got = pumpConfigure(transport, ToolFilter(["("], []), LlmConfig.init);
 
     assert(!got.ok);
-    assert(!got.errMsg.empty, "the readConfig failure is reported: " ~ got.errMsg);
+    assert(!got.errMsg.empty, "the configure failure is reported: " ~ got.errMsg);
 }
 
 @("McpServerActor.eof and shutdown are idempotent stop paths that set the exit cell")
@@ -463,11 +441,7 @@ private final class LogCapture : logger.Logger {
 }
 
 unittest {
-    import std.conv : to;
     import std.datetime : Clock;
-    import std.file : mkdirRecurse, rmdirRecurse;
-    import std.path : buildPath;
-    import std.stdio : File;
     import std.typecons : Tuple;
 
     import my.actor.channel : Channel;
@@ -487,13 +461,7 @@ unittest {
 
     // A successful configure opens the null server guard: without it the
     // fatal path is unreachable (frames before configure are dropped).
-    auto tmpDir = buildPath("llmfun_test", "mcp_actor_fatal_stdin_" ~ __LINE__.to!string);
-    mkdirRecurse(tmpDir);
-    scope (exit)
-        rmdirRecurse(tmpDir);
-    auto configFile = buildPath(tmpDir, "config.yaml");
-    File(configFile, "w").write("codeModels:\n  - modelName: test\n"
-            ~ "    display: test42\n    server:\n      url: http://localhost:8080\n");
+    LlmConfig llmConf;
 
     ReadyReply got;
     static void onReady(ref Tuple!(ReadyReply*) ctx, ReadyReply r) {
@@ -502,8 +470,7 @@ unittest {
 
     auto clientShell = ActorShell(makeAddress);
     auto chan = Channel!McpServerActor(serverShell.address, &clientShell);
-    chan.configure(ToolFilter(), McpConfigData(configFile, false, true))
-        .capture(&got).then(&onReady);
+    chan.configure(ToolFilter(), llmConf).capture(&got).then(&onReady);
     foreach (_; 0 .. 8) {
         serverShell.process(Clock.currTime);
         clientShell.process(Clock.currTime);

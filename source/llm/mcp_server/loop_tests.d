@@ -17,7 +17,7 @@ import logger = std.logger;
 
 import std.datetime : Clock, SysTime, dur;
 
-import llm.config : ToolFilter;
+import llm.config : LlmConfig, ToolFilter;
 import llm.mcp_server;
 import llm.mcp_server.transport : EOFException, Transport;
 import my.actor.channel : Channel;
@@ -93,33 +93,13 @@ private void pumpLoop(ref ActorShell serverShell, ref ActorShell clientShell,
     readerShell.process(t);
 }
 
-/// Writes the minimal valid config file (the same yaml shape the actor_tests
-/// configure tests use) and returns the tmp dir path. The cleanup is owned by
-/// configureAndWait below (scope (exit) rmdirRecurse there) - the file only
-/// needs to exist through the configure call it feeds.
-private string writeValidConfig(size_t line_) {
-    import std.conv : to;
-    import std.file : mkdirRecurse;
-    import std.path : buildPath;
-    import std.stdio : File;
-
-    auto tmpDir = buildPath("llmfun_test", "mcp_loop_full_" ~ line_.to!string);
-    mkdirRecurse(tmpDir);
-    auto configFile = buildPath(tmpDir, "config.yaml");
-    File(configFile, "w").write("codeModels:\n  - modelName: test\n"
-            ~ "    display: test42\n    server:\n      url: http://localhost:8080\n");
-    return tmpDir;
-}
-
-/// Shared setup for the two loop tests below (the writeValidConfig /
-/// buildPath2Config helper style): runs the onSpawn launch hooks, drives one
-/// configure request/reply through the typed Channel against a real minimal
-/// config file, and pumps until the ready reply lands. The shells, the chan
-/// and the actors come in from the caller (bare shells are passed by ref - no
-/// copies); the tmp dir is cleaned up here, after the configure pumps read it.
-private ReadyReply configureAndWait(ref ActorShell serverShell, ref ActorShell clientShell,
-        ref ActorShell readerShell, ref Channel!McpServerActor chan, size_t line_) {
-    import std.file : rmdirRecurse;
+/// Shared setup for the two loop tests below (the wireLoop /
+/// pumpLoop helper style): runs the onSpawn launch hooks, drives one
+/// configure request/reply through the typed Channel, and pumps until the
+/// ready reply lands. The shells, the chan and the actors come in from the
+/// caller (bare shells are passed by ref - no copies).
+private ReadyReply configureAndWait(ref ActorShell serverShell,
+        ref ActorShell clientShell, ref ActorShell readerShell, ref Channel!McpServerActor chan) {
     import std.typecons : Tuple;
 
     auto t0 = Clock.currTime();
@@ -131,11 +111,9 @@ private ReadyReply configureAndWait(ref ActorShell serverShell, ref ActorShell c
         *ctx[0] = r;
     }
 
-    auto tmpDir = writeValidConfig(line_);
-    scope (exit)
-        rmdirRecurse(tmpDir);
-    chan.configure(ToolFilter(), McpConfigData(buildPath2Config(tmpDir), false,
-            true)).capture(&got).then(&onReady);
+    // Minimal config the test world needs (LlmConfig.init, no readConfig
+    // call - this removes the tests' read of real machine config, F2/F3).
+    chan.configure(ToolFilter(), LlmConfig.init).capture(&got).then(&onReady);
     foreach (_; 0 .. 8)
         pumpLoop(serverShell, clientShell, readerShell, Clock.currTime());
     assert(got.ok, "configure succeeded: " ~ got.errMsg);
@@ -158,7 +136,7 @@ unittest {
 
     auto clientShell = ActorShell(makeAddress);
     auto chan = Channel!McpServerActor(serverShell.address, &clientShell);
-    configureAndWait(serverShell, clientShell, readerShell, chan, __LINE__);
+    configureAndWait(serverShell, clientShell, readerShell, chan);
     assert(exitState.get == 0, "still running after a successful configure");
 
     // The full loop: one scripted frame via the READER path (production
@@ -216,7 +194,7 @@ unittest {
 
     auto clientShell = ActorShell(makeAddress);
     auto chan = Channel!McpServerActor(serverShell.address, &clientShell);
-    configureAndWait(serverShell, clientShell, readerShell, chan, __LINE__);
+    configureAndWait(serverShell, clientShell, readerShell, chan);
 
     // Graceful shutdown through the typed channel: the actor stops (exit cell
     // 1) and closes the transport; the reader keeps ticking into the dead
@@ -227,12 +205,4 @@ unittest {
     assert(exitState.get == 1, "stopped ok: no handler errors seen");
     assert(transport.closeCount == 1, "transport closed exactly once");
     assert(transport.closed());
-}
-
-/// buildPath2Config: join the config file name onto the tmp dir - a tiny
-/// helper so the unittests above stay one-liners at the configure call.
-private string buildPath2Config(string tmpDir) {
-    import std.path : buildPath;
-
-    return buildPath(tmpDir, "config.yaml");
 }

@@ -36,7 +36,7 @@ import my.path : Path;
 import llm.app_config : UserConfig;
 import llm.config : LlmConfig, readConfig;
 import llm.mcp_server.transport : StdioTransport, Transport;
-import llm.mcp_server : McpConfigData, McpServerActor, ReadyReply, StdioReaderActor;
+import llm.mcp_server : McpServerActor, ReadyReply, StdioReaderActor;
 
 int appMain(UserConfig uconf, UserConfig.Mcp conf) {
     import colorlog;
@@ -164,13 +164,6 @@ int runServer(UserConfig uconf, UserConfig.Mcp conf, LlmConfig llmConf) {
         return 1;
     }
 
-    // Extract config parameters for passing to the server actor.
-    // The actor will call readConfig() to reconstruct LlmConfig.
-    McpConfigData configData;
-    configData.configPath = uconf.config.toString;
-    configData.noCwdConfig = uconf.noCwdConfig;
-    configData.trustedConfig = uconf.trustedConfig;
-
     // Block termination signals in this thread BEFORE spawning so that every
     // actor thread inherits the blocked mask and the default signal action
     // can never kill the process. The main thread consumes pending signals
@@ -218,7 +211,7 @@ int runServer(UserConfig uconf, UserConfig.Mcp conf, LlmConfig llmConf) {
     ReadyReply configureReply;
     bool configureArrived;
     bool hadError = false;
-    server.configure(llmConf.toolFilter, configData).capture(&configureReply,
+    server.configure(llmConf.toolFilter, llmConf).capture(&configureReply,
             &configureArrived).then(&onConfigureReply, (scope ref ActorShell self, scope ErrorMsg e) {
         logger.errorf("MCP server failed to confirm startup: %s", e.reason).collectException;
         hadError = true;

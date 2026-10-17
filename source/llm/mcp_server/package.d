@@ -33,24 +33,13 @@ import my.gc.refc : RefCounted;
 
 import llm.agent.context : AgentContext;
 import llm.app_config : createRag;
-import llm.config : LlmConfig, readConfig, ToolFilter;
+import llm.config : LlmConfig, ToolFilter;
 import llm.mcp_server.protocol;
 import llm.mcp_server.transport : EOFException, StdioTransport, Transport;
 import llm.mcp_server.types;
 import llm.rag.rag : RAG;
 import llm.skill : SkillManager, makeSkillManager;
 import llm.tool_call : Context, descAllFunctions, executeFunc, filterToolDescriptions;
-
-/// Carries only the scalar parameters needed to reconstruct LlmConfig inside the actor (LlmConfig holds associative arrays and the my.actor Variant gives no unshared-aliasing guarantee, so the flattened payload is passed through messages instead).
-///
-/// Note: userCliWorkArea is intentionally omitted because the MCP subcommand has no --workarea CLI flag. The work area is read from the config file. If MCP ever needs CLI work area override, extend this struct.
-///
-/// Note: userToLlmConfig() is not called in the actor because UserConfig.Mcp has no fields that overlap with LlmConfig. Config file values are used as-is.
-struct McpConfigData {
-    string configPath;
-    bool noCwdConfig;
-    bool trustedConfig;
-}
 
 /// MCP server that exposes @Function-registered tools over JSON-RPC 2.0. Takes a ReFilter at construction to control which tools are visible to MCP clients. Uses descAllFunctions() and executeFunc() from llm.tool_call. This class is a pure request/response handler -- the event loop lives in the McpServerActor actor, which owns the transport.
 class MCPServer {
@@ -308,9 +297,9 @@ class McpServerActor {
     /// set to 2 (stopped with error) and a self-exit sent so main converges
     /// instead of waiting out the 30 s Channel timeout; the failure reply
     /// additionally lets main exit immediately.
-    ReadyReply configure(ToolFilter filter, McpConfigData configData) {
+    ReadyReply configure(ToolFilter filter, LlmConfig llmConf) {
         try {
-            return configureWorld(filter, configData);
+            return configureWorld(filter, llmConf);
         } catch (Exception e) {
             trace("configure: handler exception, fatal stop");
             logger.errorf("Failed to configure MCP server actor: %s", e.msg);
@@ -319,21 +308,8 @@ class McpServerActor {
         }
     }
 
-    private ReadyReply configureWorld(ToolFilter filter, McpConfigData configData) {
-        trace("configure: rebuilding LlmConfig and constructing the world");
-
-        // Reconstruct LlmConfig from the config data passed from the main
-        // thread. This is fatal if it fails - we cannot operate without
-        // configuration.
-        LlmConfig llmConf;
-        try {
-            llmConf = readConfig(configData.configPath.Path, silent: true, noCwdConfig: configData.noCwdConfig,
-                    trustedConfig: configData.trustedConfig);
-            logger.trace(llmConf);
-        } catch (Exception e) {
-            logger.errorf("Failed to read configuration: %s", e.msg);
-            return ReadyReply(false, "Failed to read configuration: " ~ e.msg);
-        }
+    private ReadyReply configureWorld(ToolFilter filter, LlmConfig llmConf) {
+        trace("configure: constructing the world");
 
         // Create RAG instance - non-fatal if it fails (graceful degradation).
         try {
