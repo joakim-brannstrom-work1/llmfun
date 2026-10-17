@@ -17,6 +17,54 @@ import my.path;
 import my.optional;
 import colorlog;
 
+import llm.tool_call.io : FileContext, FileDirtyTracking, ToolLimits;
+import llm.tool_call.memory : MemoryContext, MemoryTopic;
+import llm.tool_call.completion : CompletionContext;
+
+/// Test stub for the func_call_print harness: FileContext/MemoryContext/
+/// CompletionContext with the real session-scoped dirtiness tracking
+/// (FileDirtyTracking mixin) and empty memory state. Module-level so unittests
+/// can exercise the dirty-tracking state (a fresh context starts empty).
+class DummyContext : FileContext, MemoryContext, CompletionContext {
+    mixin FileDirtyTracking;
+
+    override bool isPathInsideWorkArea(AbsolutePath p) {
+        return true;
+    }
+
+    override AbsolutePath workArea() {
+        return AbsolutePath(".");
+    }
+
+    override MemoryTopic[] getMemoryFileTopics() {
+        // Test stub: memory topics are not used by the func_call_print harness.
+        return null;
+    }
+
+    override bool saveMemoryFile(string topic, string content) {
+        return false;
+    }
+
+    override Optional!string readMemory(string topic) {
+        return Optional!string();
+    }
+
+    override bool removeMemory(string topic) {
+        return false;
+    }
+
+    Path getMemoryFile(string topic) {
+        return Path("scratch/memory") ~ (topic ~ ".md");
+    }
+
+    override ToolLimits getToolLimits() {
+        return ToolLimits();
+    }
+
+    override void taskDone(string answer) {
+    }
+}
+
 int main(string[] args) {
     UserConfig cli;
     if (!CLI!UserConfig.parseArgs(cli, args[1 .. $]))
@@ -209,44 +257,6 @@ int appMain(UserConfig uconf, UserConfig.FuncCallPrint conf) {
     writeln(getFunctions);
 
     class DummyCtx : Context {
-    }
-
-    static class DummyContext : FileContext, MemoryContext, CompletionContext {
-        override bool isPathInsideWorkArea(AbsolutePath p) {
-            return true;
-        }
-
-        override AbsolutePath workArea() {
-            return AbsolutePath(".");
-        }
-
-        override MemoryTopic[] getMemoryFileTopics() {
-            // Test stub: memory topics are not used by the func_call_print harness.
-            return null;
-        }
-
-        override bool saveMemoryFile(string topic, string content) {
-            return false;
-        }
-
-        override Optional!string readMemory(string topic) {
-            return Optional!string();
-        }
-
-        override bool removeMemory(string topic) {
-            return false;
-        }
-
-        Path getMemoryFile(string topic) {
-            return Path("scratch/memory") ~ (topic ~ ".md");
-        }
-
-        override ToolLimits getToolLimits() {
-            return ToolLimits();
-        }
-
-        override void taskDone(string answer) {
-        }
     }
 
     auto ctx = new DummyContext;

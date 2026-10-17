@@ -53,6 +53,8 @@ version (unittest) {
         override ToolLimits getToolLimits() {
             return ToolLimits();
         }
+
+        mixin FileDirtyTracking;
     }
 
     void createTestFile(TestFileContext ctx, string relativePath, string content) {
@@ -3300,4 +3302,247 @@ unittest {
     assert(!outcome.autoCountUsed);
     assert(outcome.note.empty);
     assert(outcome.matched.matchedLines == 3);
+}
+
+// === Bug 4: session-scoped file dirtiness tracking ===
+//
+// Direct state-machine tests below use TestFileContext (which mixes in
+// FileDirtyTracking); the end-to-end tests drive the tools themselves so the
+// observable behavior (dirty enforcement, error message, clearing) is covered.
+
+unittest {
+    // A fresh context starts with empty dirty-tracking state.
+    auto ctx = makeTestContext("dirty_fresh_empty");
+    scope (exit)
+        ctx.teardown;
+
+    import llm.tool_call.utility : pathToWorkarea;
+
+    auto p = pathToWorkarea(ctx, "a.md").path;
+    assert(!ctx.isDirty(p), "fresh context: nothing is dirty");
+    assert(ctx.observedHash(p) == -1, "fresh context: no snapshot recorded");
+}
+
+unittest {
+    // The tracking key is the canonical AbsolutePath, so "./a.md" and
+    // "a.md" share one entry.
+    auto ctx = makeTestContext("dirty_canonical_key");
+    scope (exit)
+        ctx.teardown;
+
+    createTestFile(ctx, "a.md", "hello\n");
+
+    import llm.tool_call.utility : pathToWorkarea;
+
+    auto viaRelative = pathToWorkarea(ctx, "a.md").path;
+    auto viaExplicit = pathToWorkarea(ctx, "./a.md").path;
+    assert(viaRelative == viaExplicit, "AbsolutePath normalizes './a.md'");
+
+    ctx.observe(viaRelative);
+    import llm.utility : computeContentHash;
+
+    assert(ctx.observedHash(viaExplicit) == computeContentHash("hello\n"),
+            "both spellings share one snapshot entry");
+    ctx.markDirty(viaExplicit);
+    assert(ctx.isDirty(viaRelative), "both spellings share one dirty entry");
+}
+
+unittest {
+    // markDirty/observe semantics: markDirty flags the path and records the
+    // snapshot; observe clears the flag and refreshes the snapshot.
+    auto ctx = makeTestContext("dirty_mark_observe");
+    scope (exit)
+        ctx.teardown;
+
+    createTestFile(ctx, "test.txt", "line1\n");
+
+    import llm.tool_call.utility : pathToWorkarea;
+
+    auto p = pathToWorkarea(ctx, "test.txt").path;
+    ctx.markDirty(p);
+    assert(ctx.isDirty(p), "markDirty sets the flag");
+    import llm.utility : computeContentHash;
+
+    assert(ctx.observedHash(p) == computeContentHash("line1\n"), "markDirty records the snapshot");
+
+    ctx.observe(p);
+    assert(!ctx.isDirty(p), "observe clears the flag");
+    assert(ctx.observedHash(p) == computeContentHash("line1\n"), "observe records the snapshot");
+}
+
+unittest {
+    // The tracked state is bounded; eviction drops the OLDEST CLEAN
+    // entries only, and dirty entries are never evicted.
+    auto ctx = makeTestContext("dirty_eviction");
+    scope (exit)
+        ctx.teardown;
+
+    import llm.tool_call.utility : pathToWorkarea;
+    import llm.utility : computeContentHash;
+
+    AbsolutePath[] cleanPaths;
+    AbsolutePath[] dirtyPaths;
+
+    foreach (i; 0 .. 250) {
+        auto name = "clean" ~ i.to!string ~ ".txt";
+        createTestFile(ctx, name, "y\n");
+        auto p = pathToWorkarea(ctx, name).path;
+        ctx.observe(p);
+        cleanPaths ~= p;
+    }
+    foreach (i; 0 .. 10) {
+        auto name = "dirty" ~ i.to!string ~ ".txt";
+        createTestFile(ctx, name, "x\n");
+        auto p = pathToWorkarea(ctx, name).path;
+        ctx.markDirty(p);
+        dirtyPaths ~= p;
+    }
+    foreach (i; 0 .. 10) {
+        auto name = "late" ~ i.to!string ~ ".txt";
+        createTestFile(ctx, name, "y\n");
+        auto p = pathToWorkarea(ctx, name).path;
+        ctx.observe(p);
+        cleanPaths ~= p;
+    }
+
+    foreach (i; 0 .. 20)
+        assert(ctx.observedHash(cleanPaths[i]) == -1, i.to!string ~ " oldest clean entries evicted");
+    foreach (i; 20 .. 260)
+        assert(ctx.observedHash(cleanPaths[i]) == computeContentHash("y\n"),
+                i.to!string ~ " got " ~ ctx.observedHash(cleanPaths[i])
+                    .to!string ~ " want " ~ computeContentHash("y\n")
+                    .to!string ~ " newer clean entries kept");
+    foreach (p; dirtyPaths) {
+        assert(ctx.isDirty(p), "dirty entries are never evicted");
+        assert(ctx.observedHash(p) == computeContentHash("x\n"), "dirty snapshot intact");
+    }
+}
+
+unittest {
+    // End-to-end: a successful edit marks the path dirty; a byLine edit on
+    // stale numbers fails with the re-read guidance; readFile clears the flag
+    // and refreshes the snapshot so the retry succeeds.
+    import llm.tool_call.io.functions : ReadFileParams, readFile;
+
+    auto ctx = makeTestContext("dirty_stale_byline");
+    scope (exit)
+        ctx.teardown;
+
+    createTestFile(ctx, "test.txt", "line1\nline2\nline3\n");
+
+    auto result = editFile(ctx, UnifiedEditFileParams(path: "test.txt",
+            content: "X", mode: "replace", marker: "line1"));
+    assert(result.success, result.msg);
+
+    auto stale = editFile(ctx, UnifiedEditFileParams(path: "test.txt", content: "Y",
+            mode: "replace", startLine: 1, count: 1));
+    assert(!stale.success, stale.msg);
+    assert(stale.msg.canFind("line numbers may be stale"), stale.msg);
+
+    auto read = readFile(ctx, ReadFileParams(path: "test.txt", startLine: 1, count: 5));
+    assert(read.success, read.msg);
+
+    auto retry = editFile(ctx, UnifiedEditFileParams(path: "test.txt", content: "Y",
+            mode: "replace", startLine: 1, count: 1));
+    assert(retry.success, retry.msg);
+}
+
+unittest {
+    // End-to-end: a dryRun edit does NOT mark the path dirty, so a
+    // following byLine edit with fresh numbers succeeds.
+    auto ctx = makeTestContext("dirty_dryrun_no_mark");
+    scope (exit)
+        ctx.teardown;
+
+    createTestFile(ctx, "test.txt", "line1\n");
+
+    auto dry = editFile(ctx, UnifiedEditFileParams(path: "test.txt", content: "X",
+            mode: "replace", marker: "line1", dryRun: true));
+    assert(dry.success, dry.msg);
+
+    auto after = editFile(ctx, UnifiedEditFileParams(path: "test.txt", content: "X",
+            mode: "replace", startLine: 1, count: 1));
+    assert(after.success, after.msg);
+}
+
+unittest {
+    // End-to-end: a failed edit does NOT mark the path dirty, so a
+    // following byLine edit with fresh numbers succeeds.
+    auto ctx = makeTestContext("dirty_failed_no_mark");
+    scope (exit)
+        ctx.teardown;
+
+    createTestFile(ctx, "test.txt", "line1\n");
+
+    auto failed = editFile(ctx, UnifiedEditFileParams(path: "test.txt",
+            content: "X", mode: "replace", marker: "nope"));
+    assert(!failed.success, failed.msg);
+
+    auto after = editFile(ctx, UnifiedEditFileParams(path: "test.txt", content: "X",
+            mode: "replace", startLine: 1, count: 1));
+    assert(after.success, after.msg);
+}
+
+unittest {
+    // A change the context did not make (external write) is caught by the
+    // best-effort snapshot cross-check; readFile refreshes the snapshot so
+    // the retry succeeds.
+    import std.file : write;
+
+    import llm.tool_call.io.functions : ReadFileParams, readFile;
+    import llm.tool_call.utility : pathToWorkarea;
+
+    auto ctx = makeTestContext("dirty_external_write");
+    scope (exit)
+        ctx.teardown;
+
+    createTestFile(ctx, "test.txt", "line1\nline2\n");
+
+    // Record the snapshot without going through the tools (as readFile does).
+    auto p = pathToWorkarea(ctx, "test.txt").path;
+    ctx.observe(p);
+
+    // External (non-context) write: the content changes, so the hash
+    // cross-check catches it.
+    write(p.toString, "line1\nline2\nexternal\n");
+
+    auto stale = editFile(ctx, UnifiedEditFileParams(path: "test.txt", content: "X",
+            mode: "replace", startLine: 1, count: 1));
+    assert(!stale.success, stale.msg);
+    assert(stale.msg.canFind("line numbers may be stale"), stale.msg);
+
+    auto read = readFile(ctx, ReadFileParams(path: "test.txt", startLine: 1, count: 5));
+    assert(read.success, read.msg);
+
+    auto retry = editFile(ctx, UnifiedEditFileParams(path: "test.txt", content: "X",
+            mode: "replace", startLine: 1, count: 1));
+    assert(retry.success, retry.msg);
+}
+
+unittest {
+    // A file removed outside the tools is not flagged stale; the existence
+    // check reports the real problem instead.
+    import std.file : remove;
+
+    import llm.tool_call.utility : pathToWorkarea;
+
+    auto ctx = makeTestContext("dirty_removed_external");
+    scope (exit)
+        ctx.teardown;
+
+    createTestFile(ctx, "test.txt", "line1\n");
+    auto p = pathToWorkarea(ctx, "test.txt").path;
+    ctx.observe(p);
+
+    remove(p.toString);
+
+    auto result = editFile(ctx, UnifiedEditFileParams(path: "test.txt",
+            content: "X", mode: "replace", startLine: 1, count: 1));
+    assert(!result.success, result.msg);
+    assert(!result.msg.canFind("stale"), result.msg);
+}
+
+unittest {
+    // Bug 4: the stale-byLine-target failure has its own error class.
+    assert(classifyEditError("Path 'a.md' was modified by a successful edit earlier in this session; line numbers may be stale — re-read it with readFile, then retry with fresh startLine/count, or switch to byMarker/byContent targeting.") == "stale_byline_target");
 }

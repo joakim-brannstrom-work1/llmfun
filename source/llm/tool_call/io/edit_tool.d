@@ -15,6 +15,7 @@ import llm.tool_call.io : classifyEditError, FileContext, sanitizeLogPath,
     fileEndsWithNewline, writeLines, EditMode, parseEditMode;
 import llm.tool_call.io.diagnostic : buildMarkerDiagnostic, buildBlockDiagnostic;
 import llm.tool_call.io.edit_dispatch : editFileUnifiedMemory;
+import llm.utility : computeContentHash;
 
 mixin RegisterLlmFunctions!();
 
@@ -108,7 +109,15 @@ package string scopeLogValue(long scopeStart, long scopeEnd) @safe {
     return "none";
 }
 
-@Function("Edit a file by applying a change to a target. " ~ "Target the file with exactly one method: startLine+count (byLine, 1-based), " ~ "marker (byMarker, substring to find), or searchContent (byContent, code block matched by trimmed equality). " ~ "The file's trailing-newline state is preserved, and the dryRun preview matches the exact bytes that would be written. " ~ "Returns a JSON object with fields: ok (bool), matchedAt (1-based line; for a mode=append call with no targeting, the line where the new content starts, which is one past the last line for a non-empty file), matchedLines (int), linesChanged (int), operations (int), lineShift (int, net line count change). " ~ "When auto-count is used, also includes: autoCountUsed (true) and note (string). " ~ "When dryRun is true, also includes: preview (string). " ~ "On failure returns JSON with ok=false, an error string, and a diagnostic field with closest-match details.") ExecuteFuncResult editFile(
+/// The byLine stale-target error: one message for both the
+/// dirty-path case (a successful edit earlier in this session) and the
+/// best-effort mismatch case (changed on disk since the last readFile).
+package string staleBylineTargetError(string path) @safe {
+    return i"Path '$(path)' was modified by a successful edit earlier in this session; line numbers may be stale — re-read it with readFile, then retry with fresh startLine/count, or switch to byMarker/byContent targeting."
+        .text;
+}
+
+@Function("Edit a file by applying a change to a target. " ~ "Target the file with exactly one method: startLine+count (byLine, 1-based), " ~ "marker (byMarker, substring to find), or searchContent (byContent, code block matched by trimmed equality). " ~ "The file's trailing-newline state is preserved, and the dryRun preview matches the exact bytes that would be written. " ~ "Returns a JSON object with fields: ok (bool), matchedAt (1-based line; for a mode=append call with no targeting, the line where the new content starts, which is one past the last line for a non-empty file), matchedLines (int), linesChanged (int), operations (int), lineShift (int, net line count change). " ~ "When auto-count is used, also includes: autoCountUsed (true) and note (string). " ~ "When dryRun is true, also includes: preview (string). " ~ "On failure returns JSON with ok=false, an error string, and a diagnostic field with closest-match details. " ~ "byLine edits on a path modified by a successful edit earlier in the same session are rejected until the file is re-read with readFile; files modified by other processes between turns are caught only by a best-effort content-hash cross-check.") ExecuteFuncResult editFile(
         Context baseCtx, UnifiedEditFileParams params) {
     mixin(baseContextToSpecific!FileContext);
 
@@ -131,6 +140,38 @@ package string scopeLogValue(long scopeStart, long scopeEnd) @safe {
                 params.mode, targeting, logPath, dryRun);
         return ExecuteFuncResult(i"error: invalid mode '$(params.mode)': $(e.msg)".text,
                 success: false);
+    }
+
+    // byLine targeting on a path modified since its last readFile. line
+    // numbers may be stale - fail loudly, forcing a re-read first.
+    if (params.startLine != -1) {
+        string staleError;
+        if (ctx.isDirty(path_)) {
+            staleError = staleBylineTargetError(params.path);
+        } else {
+            const snapHash = ctx.observedHash(path_);
+            if (snapHash >= 0) {
+                try {
+                    import std.file : readText;
+
+                    if (computeContentHash(readText(path_)) != snapHash) {
+                        staleError = staleBylineTargetError(params.path);
+                    }
+                } catch (Exception e) {
+                    logger.tracef("tool=editFile event=stale_check_skip path=%s reason=%s",
+                            logPath, e.msg);
+                }
+            }
+        }
+        if (!staleError.empty) {
+            auto json = JSONValue.emptyObject;
+            json["ok"] = false;
+            json["error"] = staleError;
+            logger.warningf("tool=editFile event=failure mode=%s targeting=%s path=%s errorType=stale_byline_target dryRun=%s scope=%s",
+                    params.mode, targeting, logPath, dryRun,
+                    scopeLogValue(params.scopeStart, params.scopeEnd));
+            return ExecuteFuncResult(json.toString(JSONOptions.doNotEscapeSlashes), success: false);
+        }
     }
 
     string[] fileLines;
@@ -163,6 +204,7 @@ package string scopeLogValue(long scopeStart, long scopeEnd) @safe {
             json["preview"] = preview;
         } else {
             writeLines(path_, outcome.lines, !trailingNewline);
+            ctx.markDirty(path_);
         }
         logger.tracef("tool=editFile event=success mode=%s targeting=%s path=%s linesChanged=%d autoCountUsed=%s dryRun=%s scope=%s",
                 mode_.to!string, targeting, logPath, outcome.linesChanged, outcome.autoCountUsed

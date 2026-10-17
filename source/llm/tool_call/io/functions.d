@@ -72,6 +72,7 @@ struct WriteFileParams {
             mkdirRecurse(path_.dirName.toString);
         }
         File(path_.toString, "w").write(params.content);
+        ctx.markDirty(path_);
         return ExecuteFuncResult("OK", success: true);
     } catch (Exception e) {
         return ExecuteFuncResult(i"error: failed writing content to file '$(params.path)': $(e.msg)".text,
@@ -115,6 +116,7 @@ struct ReadFileParams {
     }
     try {
         if (getSize(path_) == 0) {
+            ctx.observe(path_);
             json["content"] = "";
             return ExecuteFuncResult(json.toString(JSONOptions.doNotEscapeSlashes), success: true);
         }
@@ -130,6 +132,7 @@ struct ReadFileParams {
             buf.put(line.value);
             buf.put('\n');
         }
+        ctx.observe(path_);
         json["content"] = buf[];
         return ExecuteFuncResult(json.toString(JSONOptions.doNotEscapeSlashes), success: true);
     } catch (Exception e) {

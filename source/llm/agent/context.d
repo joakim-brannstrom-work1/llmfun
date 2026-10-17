@@ -28,7 +28,7 @@ import llm.tool_call : Context, RegFunction;
 import llm.tool_call.broker : BrokerState;
 import llm.tool_call.completion : CompletionContext;
 import llm.tool_call.context : ContextManagement;
-import llm.tool_call.io : FileContext;
+import llm.tool_call.io : FileContext, FileDirtyTracking;
 import llm.tool_call.memory : MemoryContext, MemoryTopic;
 import llm.tool_call.metrics : MetricsContext;
 import llm.tool_call.pipeline : PipelineControlContext;
@@ -51,6 +51,8 @@ class AgentContext : Context, FileContext, RAGContext, MemoryContext,
     VisionContext, SkillContext, EnvironmentContext, ContextManagement,
     DialogueContext, ReasoningContext {
         import llm.vfs : FlatVfs;
+
+        mixin FileDirtyTracking;
 
         private {
             LlmConfig conf;
