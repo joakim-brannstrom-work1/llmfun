@@ -1,5 +1,4 @@
 /// Targeting resolution and dispatch for the unified in-memory edit engine.
-/// Breaks the former editFileUnifiedMemory monolith into per-method helpers.
 module llm.tool_call.io.edit_dispatch;
 
 import std.algorithm : any, canFind;
@@ -61,10 +60,10 @@ package EditFileOutcome executeByLine(string[] fileLines, EditMode mode, string 
     return EditFileOutcome(res.lines, res.matched, res.linesChanged, 1, false, "");
 }
 
-/// byMarker targeting: auto-count heuristic, replaceAll with scope pre-copy.
-/// Supports both single-line markers (substring match on one line) and
-/// multi-line markers (first line as anchor, subsequent lines verified as
-/// substrings of consecutive file lines).
+/// byMarker targeting: search, auto-count, replaceAll with scope. Supports
+/// single-line markers (substring match on one line) and multi-line markers
+/// (first line as anchor, subsequent lines verified as substrings of
+/// consecutive file lines).
 package EditFileOutcome executeByMarker(string[] fileLines, EditMode mode, string content,
         const(string[]) contentLines, long contentLineCount, string marker, long count, bool replaceAll, long matchIndex,
         size_t scopeBegin, size_t scopeEndExclusive, long scopeStart, long scopeEnd) @safe {
@@ -80,10 +79,10 @@ package EditFileOutcome executeByMarker(string[] fileLines, EditMode mode, strin
     bool autoCount = false;
     if (isRangeMode && targetCount < 1) {
         if (isMultiLine) {
-            targetCount = cast(long) markerLines.length; // auto-count from marker lines
+            targetCount = cast(long) markerLines.length;
             autoCount = true;
         } else if (mode == EditMode.replace && contentLineCount > 1) {
-            targetCount = contentLineCount; // auto-count heuristic
+            targetCount = contentLineCount;
             autoCount = true;
         } else {
             targetCount = 1;
@@ -108,10 +107,7 @@ package EditFileOutcome executeByMarker(string[] fileLines, EditMode mode, strin
             scopeStart, scopeEnd) : i"marker $(markerDisplay) not found in file".text;
 
     if (replaceAll) {
-        // Replace every in-scope occurrence; each match replaces
-        // targetCount lines. Lines outside the scope are preserved.
         auto app = appender!(string[])();
-        // Preserve lines before the scope start (search begins at scopeBegin).
         if (scopeBegin < fileLines.length)
             app.put(fileLines[0 .. scopeBegin]);
         size_t pos = scopeBegin;
@@ -205,9 +201,7 @@ package EditFileOutcome executeByContent(string[] fileLines, EditMode mode, stri
     if (replaceAll) {
         // Explicit count would silently change nothing, so reject it instead.
         enforce(count < 1, "explicit count is not supported with replaceAll and byContent; each occurrence replaces the full matched block (omit count, or use byMarker with count for fixed-size blocks)");
-        // Replace every in-scope occurrence with the full matched block.
         auto app = appender!(string[])();
-        // Preserve lines before the scope start (search begins at scopeBegin).
         if (scopeBegin < fileLines.length)
             app.put(fileLines[0 .. scopeBegin]);
         size_t pos = scopeBegin;
@@ -282,17 +276,25 @@ package EditFileOutcome executeByContent(string[] fileLines, EditMode mode, stri
     return EditFileOutcome(res.lines, res.matched, res.linesChanged, 1, autoCount, note);
 }
 
-/// Validate exactly one targeting method and replaceAll/matchIndex combos.
+/// Validate the targeting method combination and the replaceAll/matchIndex
+/// combos. Zero targeting parameters are allowed only for mode=append (pure
+/// insertion at the end of the file); every other mode requires exactly one.
 package void resolveTargeting(long startLine, string marker, string searchContent,
-        bool replaceAll, long matchIndex) @safe {
+        bool replaceAll, long matchIndex, EditMode mode) @safe {
     // -1 is the "not provided" sentinel (the params struct defaults to it);
     // an explicit 0 or negative startLine is a validation error, not "absent".
     const hasStartLine = startLine != -1;
     const hasMarker = marker.length > 0;
     const hasSearch = searchContent.length > 0;
     const provided = (hasStartLine ? 1 : 0) + (hasMarker ? 1 : 0) + (hasSearch ? 1 : 0);
-    if (provided == 0)
-        throw new Exception("no targeting method specified. Provide exactly one of: startLine (byLine), marker (byMarker), or searchContent (byContent).");
+    if (provided == 0) {
+        // append without targeting is valid: a pure insertion one past the
+        // last line; the caller anchors the EditTarget at fileLines.length.
+        // Every other mode has nothing to target without a targeting method.
+        if (mode != EditMode.append)
+            throw new Exception("no targeting method specified. Provide exactly one of: startLine (byLine), marker (byMarker), or searchContent (byContent), or use mode=append with no targeting to append at the end of the file");
+        return;
+    }
     if (provided > 1) {
         string[] names;
         if (hasStartLine)
@@ -314,7 +316,9 @@ package void resolveTargeting(long startLine, string marker, string searchConten
 
 /// Resolve the target and apply the edit entirely in memory. Single entry
 /// point for the unified editFile tool: supports byLine/byMarker/byContent,
-/// auto-count, replaceAll, matchIndex, scope, and all 5 edit modes.
+/// auto-count, replaceAll, matchIndex, scope, and all 5 edit modes. mode=append
+/// with no targeting appends at the end of the file (zero targeting is
+/// otherwise an error).
 ///
 /// Throws:
 ///     Exception on invalid targeting, failed searches, or invalid ranges;
@@ -336,7 +340,17 @@ package EditFileOutcome editFileUnifiedMemory(string[] fileLines, EditMode mode,
     const contentLineCount = cast(long) contentLines.length;
     const hasStartLine = startLine != -1;
     const hasMarker = marker.length > 0;
-    resolveTargeting(startLine, marker, searchContent, replaceAll, matchIndex);
+    const hasSearch = searchContent.length > 0;
+    resolveTargeting(startLine, marker, searchContent, replaceAll, matchIndex, mode);
+    if (!hasStartLine && !hasMarker && !hasSearch) {
+        // mode == append here (guaranteed by resolveTargeting): zero targeting
+        // means a pure insertion one past the last line; editFileInMemory
+        // clamps the insert point to the file length at EOF, so this handles
+        // both a non-empty file (insert after the last line) and an empty one.
+        auto res = editFileInMemory(fileLines, mode, content, EditTarget(cast(long) fileLines.length,
+                cast(long) fileLines.length, cast(long) fileLines.length + 1, 1));
+        return EditFileOutcome(res.lines, res.matched, res.linesChanged, 1, false, "");
+    }
     if (hasStartLine)
         return executeByLine(fileLines, mode, content, startLine, count,
                 replaceAll, verifyContent);
@@ -349,7 +363,7 @@ package EditFileOutcome editFileUnifiedMemory(string[] fileLines, EditMode mode,
             matchIndex, scopeWindow.begin, scopeWindow.endExclusive, scopeStart, scopeEnd);
 }
 
-@("byContent + append anchors at the FIRST occurrence when identical section footers repeat (incident repro)")
+@("byContent + append anchors at the FIRST occurrence when identical section footers repeat")
 unittest {
     // Real incident: a file with several sections each ending in an IDENTICAL
     // footer line; append with searchContent=<footer> must insert right after
@@ -357,15 +371,13 @@ unittest {
     // forward and returns the first full-block match, so the anchor is the
     // first occurrence.
     string[] fileLines = [
-        "## Section 1", "body one", "footer", "",
-        "## Section 2", "body two", "footer", "",
-        "## Section 3", "body three", "footer",
+        "## Section 1", "body one", "footer", "", "## Section 2", "body two",
+        "footer", "", "## Section 3", "body three", "footer",
     ];
     auto res = editFileUnifiedMemory(fileLines, EditMode.append, "NEW", searchContent: "footer");
     assert(res.lines == [
-        "## Section 1", "body one", "footer", "NEW", "",
-        "## Section 2", "body two", "footer", "",
-        "## Section 3", "body three", "footer",
+        "## Section 1", "body one", "footer", "NEW", "", "## Section 2",
+        "body two", "footer", "", "## Section 3", "body three", "footer",
     ], res.lines.to!string);
     // matched.matchedAt is the 1-based anchor line: the FIRST "footer".
     assert(res.matched.matchedAt == 3, res.matched.to!string);
@@ -374,16 +386,18 @@ unittest {
 @("byContent + insert_after/insert_before anchor on the matched block (single occurrence)")
 unittest {
     string[] fileLines = ["a", "foo", "bar", "b"];
-    auto res = editFileUnifiedMemory(fileLines, EditMode.insert_after, "X", searchContent: "foo\nbar");
+    auto res = editFileUnifiedMemory(fileLines, EditMode.insert_after, "X",
+            searchContent: "foo\nbar");
     assert(res.lines == ["a", "foo", "bar", "X", "b"], res.lines.to!string);
     // byContent matchedAt is the 1-based START of the matched block (the
     // block's first line here); for byMarker it is the 1-based anchor line.
     assert(res.matched.matchedAt == 2, res.matched.to!string);
 
     string[] fileLines2 = ["a", "foo", "bar", "b"];
-    auto res2 = editFileUnifiedMemory(fileLines2, EditMode.insert_before, "X", searchContent: "foo\nbar");
+    auto res2 = editFileUnifiedMemory(fileLines2, EditMode.insert_before, "X",
+            searchContent: "foo\nbar");
     assert(res2.lines == ["a", "X", "foo", "bar", "b"], res2.lines.to!string);
-    // insert_before anchors on the block's FIRST line (0-based 1 -> 1-based 2).
+    // insert_before anchors on the block's FIRST line.
     assert(res2.matched.matchedAt == 2, res2.matched.to!string);
 }
 
@@ -401,13 +415,13 @@ unittest {
     string[] fileLines = ["a", "m", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.insert_after, "X", marker: "m");
     assert(res.lines == ["a", "m", "X", "b"], res.lines.to!string);
-    // insert_after anchors on the marker line (0-based 1 -> 1-based 2).
+    // insert_after anchors on the marker line.
     assert(res.matched.matchedAt == 2, res.matched.to!string);
 
     string[] fileLines2 = ["a", "m", "b"];
     auto res2 = editFileUnifiedMemory(fileLines2, EditMode.insert_before, "X", marker: "m");
     assert(res2.lines == ["a", "X", "m", "b"], res2.lines.to!string);
-    // insert_before anchors on the marker line (0-based 1 -> 1-based 2).
+    // insert_before anchors on the marker line.
     assert(res2.matched.matchedAt == 2, res2.matched.to!string);
 }
 
@@ -419,13 +433,13 @@ unittest {
     assert(res.matched.matchedAt == 4, res.matched.to!string);
 
     string[] fileLines2 = [
-        "## Section 1", "body", "footer", "",
-        "## Section 2", "body", "footer",
+        "## Section 1", "body", "footer", "", "## Section 2", "body", "footer",
     ];
-    auto res2 = editFileUnifiedMemory(fileLines2, EditMode.append, "NEW", searchContent: "footer", matchIndex: 2);
+    auto res2 = editFileUnifiedMemory(fileLines2, EditMode.append, "NEW",
+            searchContent: "footer", matchIndex: 2);
     assert(res2.lines == [
-        "## Section 1", "body", "footer", "",
-        "## Section 2", "body", "footer", "NEW",
+        "## Section 1", "body", "footer", "", "## Section 2", "body", "footer",
+        "NEW",
     ], res2.lines.to!string);
     assert(res2.matched.matchedAt == 7, res2.matched.to!string);
 }
