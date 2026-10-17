@@ -80,12 +80,24 @@ Justification:
 
 /// Load the reasoning summary prompt: the configured file (resolved against
 /// LlmConfig.promptDir), falling back to the built-in default constant when
-/// the file is missing or unreadable.
+/// the file is missing or unreadable. The fallback decision is also returned
+/// as data in `warnings` - one entry per emitted warning; this overload
+/// renders the collected warnings via the logger.
 string loadReasoningPrompt(LlmConfig conf) {
+    string[] warnings;
+    auto prompt = loadReasoningPrompt(conf, warnings);
+    foreach (w; warnings)
+        logger.warningf("%s", w);
+    return prompt;
+}
+
+/// ditto, but collects the rendered fallback decision into `warnings`
+/// instead of logging - the caller asserts on the returned data.
+private string loadReasoningPrompt(LlmConfig conf, ref string[] warnings) {
     try {
         return conf.readPromptFile(conf.reasoningSummaryPrompt);
     } catch (Exception e) {
-        logger.warningf("loadReasoningPrompt: using built-in default (%s)", e.msg);
+        warnings ~= format("loadReasoningPrompt: using built-in default (%s)", e.msg);
         return defaultReasoningPrompt;
     }
 }
@@ -556,40 +568,6 @@ version (unittest) {
         }
     }
 
-    /// Test seam: a Logger that captures formatted messages so the
-    /// fallback test can assert the warning. Installed via the std.logger
-    /// `sharedLog` swap (same pattern as D7LogCapture in dialogue_worker.d);
-    /// thread-safe because other tests' threads may log concurrently.
-    private class T6LogCapture : logger.Logger {
-        import core.sync.mutex;
-        import std.array : Appender;
-
-        private {
-            Appender!(string[]) lines;
-            Mutex mtx;
-        }
-
-        this(const logger.LogLevel lvl = logger.LogLevel.all) {
-            super(lvl);
-            this.mtx = new Mutex;
-        }
-
-        override void writeLogMsg(ref LogEntry payload) @trusted {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            lines.put(payload.msg);
-        }
-
-        string[] takeLines() {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            auto tmp = lines[];
-            lines.clear();
-            return tmp;
-        }
-    }
 }
 
 // renderTrace tests
@@ -1138,8 +1116,6 @@ unittest {
     // Missing file: readPromptFile throws, loadReasoningPrompt falls back to
     // the built-in default with a warning — startup never hard-fails on this
     // file.
-    import llm.test_util : sharedLogSwapMutex;
-
     auto s = setupTest("loadReasoningPrompt_fallback");
     scope (exit)
         teardownTest(s);
@@ -1155,31 +1131,16 @@ unittest {
     }
     assert(threw, "readPromptFile must throw when the prompt file is missing");
 
-    // Capture the fallback warning via the std.logger sharedLog seam
-    // (restored on exit). The swap+drain window is serialized against the
-    // other capture tests (llm.config, llm.rag.dialogue_worker) through
-    // test_util's sharedLogSwapMutex: silly runs unittests in parallel, so
-    // overlapping windows would send log lines into the WRONG capture.
-    synchronized (sharedLogSwapMutex) {
-        auto prevLog = logger.sharedLog;
-        auto prevLevel = logger.globalLogLevel;
-        auto cap = cast(shared) new T6LogCapture();
-        logger.sharedLog = cap;
-        logger.globalLogLevel = logger.LogLevel.trace;
-        scope (exit) {
-            logger.globalLogLevel = prevLevel;
-            logger.sharedLog = prevLog;
-        }
-
-        string loaded = loadReasoningPrompt(conf); // must not throw
-        assert(loaded == defaultReasoningPrompt,
-                "missing file must fall back to the built-in default prompt");
-        bool warned = false;
-        foreach (l; (cast() cap).takeLines())
-            if (l.canFind("loadReasoningPrompt: using built-in default"))
-                warned = true;
-        assert(warned, "fallback must log a warning");
-    }
+    // The fallback decision is returned as data: the overload with the
+    // warnings out-param collects it; assert on the returned data instead of
+    // the log. The public overload still renders the collected warnings via
+    // the logger.
+    string[] warnings;
+    string loaded = loadReasoningPrompt(conf, warnings); // must not throw
+    assert(loaded == defaultReasoningPrompt,
+            "missing file must fall back to the built-in default prompt");
+    assert(warnings.canFind!(w => w.canFind("loadReasoningPrompt: using built-in default")),
+            "fallback must surface its decision as data: " ~ warnings.join("\n"));
 }
 
 unittest {

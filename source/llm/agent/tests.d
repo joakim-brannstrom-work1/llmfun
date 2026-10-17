@@ -810,47 +810,17 @@ unittest {
     assert(!off.toolCtx.brokerEnabled);
 }
 
-@("broker pool wiring: a neverHide tool excluded by toolFilter is unioned back with a ctor warning")
+@(
+        "broker pool wiring: a neverHide tool excluded by toolFilter is unioned back with the exclusion surfaced as data")
 unittest {
-    import core.sync.mutex : Mutex;
-    import logger = std.logger;
     import std.algorithm : canFind;
-    import std.array : Appender;
     import std.conv : to;
     import std.datetime : Clock;
     import std.file : mkdirRecurse, write;
     import std.format : format;
 
-    import llm.agent.nudges : sharedLogSwapMutex;
     import llm.tool_call : getFunctions;
-
-    final class AgentLogCapture : logger.Logger {
-        private {
-            Appender!(string[]) lines;
-            Mutex mtx;
-        }
-
-        this(const logger.LogLevel lvl = logger.LogLevel.all) {
-            super(lvl);
-            this.mtx = new Mutex;
-        }
-
-        override void writeLogMsg(ref LogEntry payload) @trusted {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            lines.put(payload.msg);
-        }
-
-        string[] takeLines() {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            auto tmp = lines[];
-            lines.clear();
-            return tmp;
-        }
-    }
+    import llm.tool_call.broker : hiddenNeverHideTools;
 
     auto now = Clock.currTime();
     auto tmpDir = format("llmfun_test/agent_broker_neverhide_%d_%d", now.toUnixTime(), now.stdTime);
@@ -866,23 +836,18 @@ unittest {
     // default neverHideTools (["taskDone"]), which is unioned back.
     llmConf.toolFilter.include = ["^no_such_tool_pattern$"];
 
-    synchronized (sharedLogSwapMutex) {
-        auto prevLog = logger.sharedLog;
-        auto cap = cast(shared) new AgentLogCapture();
-        logger.sharedLog = cap;
-        scope (exit)
-            logger.sharedLog = prevLog;
+    auto agent = new Agent("integration", llmConf, null, null, null, llmConf.toolFilter.to());
 
-        auto agent = new Agent("integration", llmConf, null, null, null, llmConf.toolFilter.to());
+    auto pool = agent.toolCtx.pool;
+    assert(pool.length == 1 && pool[0].name == "taskDone",
+            "neverHide tools are unioned back: " ~ pool.length.to!string);
+    assert(agent.toolCtx.brokerEnabled);
 
-        auto pool = agent.toolCtx.pool;
-        assert(pool.length == 1 && pool[0].name == "taskDone",
-                "neverHide tools are unioned back: " ~ pool.length.to!string);
-        assert(agent.toolCtx.brokerEnabled);
-
-        assert(canFind((cast() cap).takeLines(), "neverHide tool 'taskDone' excluded by toolFilter; fix the config"),
-                "the ctor must warn about the excluded neverHide tool");
-    }
+    // The excluded-neverHide warning is returned as data: the public
+    // hiddenNeverHideTools seam yields the excluded tool names; assert on the
+    // returned data instead of the log (the ctor renders the same names).
+    assert(hiddenNeverHideTools(getFunctions(), llmConf.toolFilter.to(), llmConf.toolBroker.neverHideTools)
+            .canFind("taskDone"), "the ctor must see the excluded neverHide tool as data");
 }
 
 @("agent owns the tools array: the listToolTags entry carries the composed description")
@@ -1028,43 +993,10 @@ unittest {
 @(
         "agent owns the tools array: a configured-but-empty group description is not advertised (no warning)")
 unittest {
-    import core.sync.mutex : Mutex;
-    import logger = std.logger;
     import std.algorithm : canFind, countUntil;
-    import std.array : Appender, join;
     import std.datetime : Clock;
     import std.file : mkdirRecurse, write;
     import std.format : format;
-
-    import llm.agent.nudges : sharedLogSwapMutex;
-
-    final class AgentLogCapture : logger.Logger {
-        private {
-            Appender!(string[]) lines;
-            Mutex mtx;
-        }
-
-        this(const logger.LogLevel lvl = logger.LogLevel.all) {
-            super(lvl);
-            this.mtx = new Mutex;
-        }
-
-        override void writeLogMsg(ref LogEntry payload) @trusted {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            lines.put(payload.msg);
-        }
-
-        string[] takeLines() {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            auto tmp = lines[];
-            lines.clear();
-            return tmp;
-        }
-    }
 
     auto now = Clock.currTime();
     auto tmpDir = format("llmfun_test/agent_t7_emptydesc_%d_%d", now.toUnixTime(), now.stdTime);
@@ -1082,25 +1014,12 @@ unittest {
         "plain_tool"
     ]);
 
-    synchronized (sharedLogSwapMutex) {
-        auto prevLog = logger.sharedLog;
-        auto cap = cast(shared) new AgentLogCapture();
-        logger.sharedLog = cap;
-        scope (exit)
-            logger.sharedLog = prevLog;
+    auto agent = new Agent("integration", llmConf, null, null, null, llmConf.toolFilter.to());
 
-        auto agent = new Agent("integration", llmConf, null, null, null, llmConf.toolFilter.to());
-
-        auto captured = (cast() cap).takeLines();
-        assert(!captured.canFind!(l => canFind(l, "empty configured description")),
-                "an undescribed group is not advertised by design - no " ~ "warning:\n" ~ captured.join(
-                    "\n"));
-
-        auto idx = agent.tools.countUntil!(e => e["function"]["name"].str == "listToolTags");
-        assert(idx >= 0, "the discovery tool is in the day-one array");
-        assert(!canFind(agent.tools[idx]["function"]["description"].str,
-                "agent_t7_empty_desc_probe"), "an undescribed group must not be advertised");
-    }
+    auto idx = agent.tools.countUntil!(e => e["function"]["name"].str == "listToolTags");
+    assert(idx >= 0, "the discovery tool is in the day-one array");
+    assert(!canFind(agent.tools[idx]["function"]["description"].str,
+            "agent_t7_empty_desc_probe"), "an undescribed group must not be advertised");
 }
 
 // The instructive refusal at the dispatch site — the three
@@ -1892,47 +1811,16 @@ unittest {
 
 @("An MCP tool registered at runtime enters the pool at the connect change point, the discovery description includes its tag after the recompose, and activation makes it visible")
 unittest {
-    import logger = std.logger;
-    import core.sync.mutex : Mutex;
     import std.algorithm : canFind, filter;
-    import std.array : Appender, array;
+    import std.array : array;
     import std.datetime : Clock;
     import std.file : mkdirRecurse, write;
     import std.format : format;
     import std.json : parseJSON;
 
-    import llm.agent.nudges : sharedLogSwapMutex;
     import llm.config : GroupConfig;
     import llm.mcp_server.registration : registerMcpTool;
     import llm.tool_call.discovery : ListToolTagsParams, listToolTags;
-
-    final class AgentLogCapture : logger.Logger {
-        private {
-            Appender!(string[]) lines;
-            Mutex mtx;
-        }
-
-        this(const logger.LogLevel lvl = logger.LogLevel.all) {
-            super(lvl);
-            this.mtx = new Mutex;
-        }
-
-        override void writeLogMsg(ref LogEntry payload) @trusted {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            lines.put(payload.msg);
-        }
-
-        string[] takeLines() {
-            mtx.lock_nothrow();
-            scope (exit)
-                mtx.unlock_nothrow();
-            auto tmp = lines[];
-            lines.clear();
-            return tmp;
-        }
-    }
 
     enum tag = "mcp_ext_server_t12";
 

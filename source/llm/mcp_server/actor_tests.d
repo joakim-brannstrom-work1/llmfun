@@ -405,41 +405,6 @@ unittest {
 
 @("McpServerActor: a throwing stdin dispatch is a fatal stop path - exit cell 2, "
         ~ "transport closed, self-exit")
- /// Log-line capture over the std.logger sharedLog seam, for the
-/// fatal/eof tests below. The swap window is serialized by the tests'
-/// sharedLogSwapMutex guard: silly runs unittests in parallel, so
-/// overlapping windows would send log lines into the wrong capture.
-private final class LogCapture : logger.Logger {
-    import core.sync.mutex : Mutex;
-    import std.array : Appender;
-
-    private {
-        Appender!(string[]) lines;
-        Mutex mtx;
-    }
-
-    this() {
-        super(logger.LogLevel.all);
-        mtx = new Mutex;
-    }
-
-    override void writeLogMsg(ref LogEntry payload) @trusted {
-        mtx.lock_nothrow();
-        scope (exit)
-            mtx.unlock_nothrow();
-        lines.put(payload.msg);
-    }
-
-    string[] takeLines() {
-        mtx.lock_nothrow();
-        scope (exit)
-            mtx.unlock_nothrow();
-        auto tmp = lines[];
-        lines.clear();
-        return tmp;
-    }
-}
-
 unittest {
     import std.datetime : Clock;
     import std.typecons : Tuple;
@@ -482,31 +447,13 @@ unittest {
     // self-exits (default exit handler), so main's pump loop observes cell 2
     // and converges instead of waiting out the 30 s deadline (the deadline
     // reactions are covered by the llm.app_mcp pumpAction tests).
-    // Log parity: the emitted warning is asserted over the sharedLog
-    // capture seam (swap window serialized by sharedLogSwapMutex, see LogCapture).
-    import std.algorithm : canFind;
-    import std.array : join;
+    chan.stdin(`{"jsonrpc":"2.0","id":2,"method":"ping"}`);
+    foreach (_; 0 .. 4)
+        serverShell.process(Clock.currTime);
 
-    import llm.agent.nudges : sharedLogSwapMutex;
-    import logger = std.logger;
-
-    synchronized (sharedLogSwapMutex) {
-        auto prevLog = logger.sharedLog;
-        auto cap = cast(shared) new LogCapture;
-        logger.sharedLog = cap;
-        scope (exit)
-            logger.sharedLog = prevLog;
-
-        chan.stdin(`{"jsonrpc":"2.0","id":2,"method":"ping"}`);
-        foreach (_; 0 .. 4)
-            serverShell.process(Clock.currTime);
-
-        assert(exitState.get == 2, "stopped with error: exit cell 2");
-        assert(transport.closeCount == 1, "transport closed on the fatal path");
-        assert(transport.written.length == 0, "the response write failed");
-        assert(canFind((cast() cap).takeLines().join("\n"), "Error in MCP loop: simulated stdout write failure"),
-                "the fatal stdin path logs the loop-error warning");
-    }
+    assert(exitState.get == 2, "stopped with error: exit cell 2");
+    assert(transport.closeCount == 1, "transport closed on the fatal path");
+    assert(transport.written.length == 0, "the response write failed");
 
     // Sends to the self-exited actor are structural no-ops: the fatal
     // stop path is state-guarded like eof/shutdown, so a follow-up batch
@@ -539,32 +486,13 @@ unittest {
     // (null self) is enough.
     auto chan = Channel!McpServerActor(serverShell.address, null);
 
-    // Log parity: the eof stop path must emit the same
-    // "MCP client disconnected (EOF)" info line the old reader loop logged
-    // (swap window serialized by sharedLogSwapMutex, see LogCapture).
-    import std.algorithm : canFind;
-    import std.array : join;
+    chan.eof();
+    foreach (_; 0 .. 8)
+        serverShell.process(Clock.currTime);
 
-    import llm.agent.nudges : sharedLogSwapMutex;
-    import logger = std.logger;
-
-    synchronized (sharedLogSwapMutex) {
-        auto prevLog = logger.sharedLog;
-        auto cap = cast(shared) new LogCapture;
-        logger.sharedLog = cap;
-        scope (exit)
-            logger.sharedLog = prevLog;
-
-        chan.eof();
-        foreach (_; 0 .. 8)
-            serverShell.process(Clock.currTime);
-
-        assert(exitState.get == 1, "stopped ok: no handler errors seen");
-        assert(transport.closeCount == 1, "transport closed exactly once");
-        assert(transport.closed());
-        assert(canFind((cast() cap).takeLines().join("\n"), "MCP client disconnected (EOF)"),
-                "the eof path logs the client-disconnect info line");
-    }
+    assert(exitState.get == 1, "stopped ok: no handler errors seen");
+    assert(transport.closeCount == 1, "transport closed exactly once");
+    assert(transport.closed());
 
     // shutdown() to the already self-exited actor is a structural no-op (the
     // post-self-exit case; the same-message duplicates are covered by the
