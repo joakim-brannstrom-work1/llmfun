@@ -6,14 +6,18 @@
 module llm.test_util;
 
 import core.atomic : atomicFetchAdd;
+import core.sys.posix.signal : SIGPIPE, SIG_IGN, signal;
 import core.thread : Thread;
 import miniorm : spinSql;
 import std.conv : to;
 import std.datetime;
+import std.exception : ErrnoException;
 import std.file : SpanMode, dirEntries, exists, FileException, isDir,
     mkdirRecurse, readText, rmdirRecurse;
 import std.format : format;
+import std.logger : FileLogger, LogLevel, logf, sharedLog;
 import std.path : buildPath;
+import std.stdio : stderr;
 import std.string : indexOf, split;
 
 import llm.rag.database : timeout;
@@ -80,6 +84,22 @@ version (unittest) {
 
         auto p = AbsolutePath(TestBaseDir) ~ format("%s_%s_%s", baseName(file), line, testName);
         return TestArea(p);
+    }
+
+    /// FileLogger that drops the line instead of throwing when the sink
+    /// write fails (EAGAIN on a non-draining stderr, EPIPE on a closed pipe).
+    class EagainTolerantLogger : FileLogger {
+        this() @trusted {
+            super(stderr, LogLevel.info);
+        }
+
+        override void writeLogMsg(ref LogEntry payload) @trusted {
+            try {
+                super.writeLogMsg(payload);
+            } catch (ErrnoException) {
+                // Unhealthy sink - drop the line.
+            }
+        }
     }
 
     /// Cross-module serialization for the sharedLog-swapping capture tests:
