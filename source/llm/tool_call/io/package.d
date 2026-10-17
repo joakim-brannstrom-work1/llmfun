@@ -5,7 +5,7 @@ import std.algorithm : map, filter, startsWith, count, joiner, endsWith, splitte
 import std.array : empty, appender, array, join;
 import std.conv : to, text;
 import std.exception : enforce;
-import std.file : readText, exists, mkdirRecurse, getSize, remove, dirEntries, SpanMode;
+import std.file : readText, exists, mkdirRecurse, remove, dirEntries, SpanMode;
 import std.json : JSONValue, parseJSON, JSONOptions, JSONType;
 import std.path : relativePath;
 import std.process : execute;
@@ -24,6 +24,96 @@ interface FileContext : Context {
     bool isPathInsideWorkArea(AbsolutePath path);
     AbsolutePath workArea();
     ToolLimits getToolLimits();
+
+    /// Session-scoped file dirtiness tracking: editFile/writeFile
+    /// call markDirty(path) on success (non-dryRun); readFile calls observe
+    /// on success. A byLine edit on a dirty path fails loudly, forcing a
+    /// re-read first. State is bounded: oldest clean entries are evicted,
+    /// dirty entries are never evicted.
+    void markDirty(AbsolutePath path);
+    void observe(AbsolutePath path);
+    bool isDirty(AbsolutePath path);
+    /// Content hash at last observation; -1 when never observed (the
+    /// best-effort staleness cross-check skips such paths).
+    long observedHash(AbsolutePath path);
+}
+
+mixin template FileDirtyTracking() {
+    import logger = std.logger;
+    import llm.utility : computeContentHash;
+    import llm.tool_call.io : sanitizeLogPath;
+
+    private {
+        long[AbsolutePath] dirtyHash; // computeContentHash at last observation
+        bool[AbsolutePath] dirty; // dirtied since last observation
+        AbsolutePath[] dirtyOrder; // insertion order, for clean-entry eviction
+        bool[AbsolutePath] inOrder; // dirtyOrder membership (no duplicates)
+    }
+
+    private void update(AbsolutePath path) {
+        import std.file : readText;
+
+        try {
+            dirtyHash[path] = computeContentHash(readText(path.toString));
+        } catch (Exception e) {
+            // The file may have vanished mid-session; keep the dirty flag but
+            // no snapshot — the best-effort cross-check skips paths without
+            // one.
+            dirtyHash.remove(path);
+            logger.tracef("read failed for %s: %s", sanitizeLogPath(path.toString), e.msg);
+        }
+        if (path !in inOrder) {
+            inOrder[path] = true;
+            dirtyOrder ~= path;
+        }
+    }
+
+    override void markDirty(AbsolutePath path) {
+        update(path);
+        dirty[path] = true;
+        maybeEvictDirtyEntries;
+    }
+
+    override void observe(AbsolutePath path) {
+        update(path);
+        dirty.remove(path);
+        maybeEvictDirtyEntries;
+    }
+
+    override bool isDirty(AbsolutePath path) {
+        return (path in dirty) !is null;
+    }
+
+    override long observedHash(AbsolutePath path) {
+        auto p = path in dirtyHash;
+        return p ? *p : -1;
+    }
+
+    /// Bounded state: evict the oldest CLEAN entries only - a dirty entry is
+    /// never evicted (that would re-enable stale byLine targeting).
+    private void maybeEvictDirtyEntries() {
+        import std.algorithm : countUntil;
+
+        enum maxTrackedFiles = 256;
+
+        if (dirtyOrder.length < maxTrackedFiles)
+            return;
+
+        // TODO: use a map with time instead of the order array, making
+        // eviction O(1). Also evict a few extra entries so a full cache does
+        // not need eviction on every operation.
+        while (dirtyOrder.length > (maxTrackedFiles - 10)) {
+            auto idx = dirtyOrder.countUntil!(p => (p in dirty) is null);
+            if (idx == -1)
+                return; // every tracked entry is dirty: keep them all
+            const victim = dirtyOrder[idx];
+            foreach (i; idx .. dirtyOrder.length - 1)
+                dirtyOrder[i] = dirtyOrder[i + 1];
+            dirtyOrder = dirtyOrder[0 .. $ - 1];
+            dirtyHash.remove(victim);
+            inOrder.remove(victim);
+        }
+    }
 }
 
 /// Sanitize a path parameter for log output: never log absolute paths or
@@ -48,6 +138,8 @@ string classifyEditError(string msg) @safe {
         return "ambiguous_targeting";
     if (msg.canFind("no targeting method specified"))
         return "missing_targeting";
+    if (msg.canFind("line numbers may be stale"))
+        return "stale_byline_target";
     if (msg.canFind("not found"))
         return "search_not_found";
     if (msg.canFind("matchIndex="))
