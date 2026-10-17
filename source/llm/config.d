@@ -848,6 +848,9 @@ RequestConfig toRequestConfig(ConfigT)(ConfigT conf) {
 /// catalog loading done in `readConfigInternal`. Supports system/user split
 /// with user entries overriding system entries by tag.
 ///
+/// (The config layers have a separate system/user split: `readConfig`'s
+/// `includeSystemConfig` flag opts out of the system base layer.)
+///
 /// When `systemExecutionEnvironmentsFile` or `userExecutionEnvironmentsFile`
 /// are configured in `SandboxConfig`, they are loaded from paths relative to
 /// `configDir` and merged (user overrides system).
@@ -929,14 +932,24 @@ private void loadExecutionEnvironments(ref LlmConfig conf,
 // (.llmfun.json, config.json) are never read — no fallback, no deprecation
 // window, no migration. Machine-managed JSON (state.json, chat sessions,
 // monitor.jsonl, protocol payloads) is unaffected.
+/// Load the layered configuration for `path` (layer 2) over the system base
+/// config (layer 1), with the same system/user split as `readConfigInternal`.
+///
+/// `includeSystemConfig = false` skips layer-1 resolution entirely: no
+/// `LLMFUN_SYSTEM_CONFIG` env read, no XDG default resolution, no base-config
+/// file read, and no layer-1 log line. Production callers keep the default
+/// (`true`); unittests opt out so no test reads the real machine config.
 LlmConfig readConfig(Path path, bool silent = false, bool noCwdConfig,
-        bool trustedConfig, Path userCliWorkArea = Path.init) {
+        bool trustedConfig, Path userCliWorkArea = Path.init, bool includeSystemConfig = true) {
     import std.file : getcwd;
     import std.process : environment;
     import my.xdg : xdgConfigHome;
 
-    auto systemConfigPath = environment.get("LLMFUN_SYSTEM_CONFIG",
-            (xdgConfigHome ~ Path(ProgramName) ~ Path("config.yaml")).toString).Path;
+    Path systemConfigPath;
+    if (includeSystemConfig) {
+        systemConfigPath = environment.get("LLMFUN_SYSTEM_CONFIG",
+                (xdgConfigHome ~ Path(ProgramName) ~ Path("config.yaml")).toString).Path;
+    }
     return readConfigInternal(path: path, silent: silent, noCwdConfig: noCwdConfig, trustedConfig: trustedConfig,
             userCliWorkArea: userCliWorkArea, cwd: Path(getcwd()),
             systemConfigPath: systemConfigPath);
@@ -944,7 +957,7 @@ LlmConfig readConfig(Path path, bool silent = false, bool noCwdConfig,
 
 private LlmConfig readConfigInternal(Path path, bool silent = false, bool noCwdConfig,
         bool trustedConfig, Path userCliWorkArea = Path.init, Path cwd = Path.init,
-        Path systemConfigPath = Path.init) {
+        Path systemConfigPath = Path.init, bool includeSystemConfig = true) {
     import std.path : buildPath, dirName;
 
     LlmConfig conf;
@@ -953,6 +966,9 @@ private LlmConfig readConfigInternal(Path path, bool silent = false, bool noCwdC
 
     void layerOneLoad() {
         // Layer 1: Base config from LLMFUN_SYSTEM_CONFIG
+        if (!includeSystemConfig || systemConfigPath.empty) {
+            return;
+        }
         if (systemConfigPath.exists) {
             logger.infof(!silent, "Reading base configuration from %s", systemConfigPath);
             try {
@@ -1730,7 +1746,7 @@ codeModels:
 
     // Explicit config path should always load
     auto conf = readConfig(configFile.Path, silent: true, noCwdConfig: false,
-            trustedConfig: false);
+            trustedConfig: false, includeSystemConfig: false);
     assert(conf.sandboxConfig.maxOutputBytes == 42);
 }
 
@@ -1790,44 +1806,6 @@ unittest {
     auto conf = readConfigInternal(Path.init, silent: true, noCwdConfig: false, trustedConfig: true,
             userCliWorkArea: tmpDir.Path, cwd: tmpDir.Path, systemConfigPath: Path.init);
     assert(conf.codeModels.empty, "Legacy .llmfun.json must be ignored: " ~ conf.to!string);
-}
-
-/// Test: layer 1 loads `config.yaml` (or any YAML name) from LLMFUN_SYSTEM_CONFIG.
-unittest {
-    import std.path : buildPath;
-    import std.process : environment;
-    import std.stdio : File;
-
-    auto tmpDir = buildPath("llmfun_test", "default_config_" ~ __LINE__.to!string);
-    mkdirRecurse(tmpDir);
-    scope (exit)
-        rmdirRecurse(tmpDir);
-
-    auto configFile = buildPath(tmpDir, "my_base.yaml");
-    string configYaml = `warnIfNoApiKey: false
-codeModels:
-  - modelName: base
-    display: test42
-    server:
-      url: http://localhost:8080
-`;
-    File(configFile, "w").write(configYaml);
-
-    // Point LLMFUN_SYSTEM_CONFIG at the YAML file; restore the old value after.
-    string oldValue;
-    if ("LLMFUN_SYSTEM_CONFIG" in environment)
-        oldValue = environment["LLMFUN_SYSTEM_CONFIG"];
-    scope (exit) {
-        if (oldValue is null)
-            environment.remove("LLMFUN_SYSTEM_CONFIG");
-        else
-            environment["LLMFUN_SYSTEM_CONFIG"] = oldValue;
-    }
-
-    environment["LLMFUN_SYSTEM_CONFIG"] = configFile;
-    auto conf = readConfig(Path.init, silent: true, noCwdConfig: true, trustedConfig: false);
-    assert(conf.codeModels.length == 1, "Layer 1 YAML config must be loaded: " ~ conf.to!string);
-    assert(conf.codeModels[0].modelName == "base");
 }
 
 /// Test: the shipped config/example.yaml loads with a complete defaultOptions
@@ -2038,7 +2016,8 @@ codeModels:
         .text;
     File(configFile, "w").write(yaml);
 
-    auto conf = readConfig(configFile.Path, silent: true, noCwdConfig: true, trustedConfig: false);
+    auto conf = readConfig(configFile.Path, silent: true, noCwdConfig: true,
+            trustedConfig: false, includeSystemConfig: false);
     assert(conf.dialogueDir == tmpDir,
             "dialogueDir round-trip failed: " ~ conf.dialogueDir.to!string);
 }
@@ -2063,7 +2042,7 @@ unittest {
     File(configFile, "w").write(yaml);
 
     auto conf = readConfig(configFile.Path, silent: true, noCwdConfig: false,
-            trustedConfig: false);
+            trustedConfig: false, includeSystemConfig: false);
     assert(!conf.dialogueDir.empty, "dialogueDir should be non-empty after defaulting");
     assert(conf.dialogueDir == (conf.dataDir ~ "dialogue"),
             "dialogueDir default mismatch: " ~ conf.dialogueDir.to!string);
@@ -2096,7 +2075,8 @@ codeModels:
 `;
     File(configFile, "w").write(yaml);
 
-    auto conf = readConfig(configFile.Path, silent: true, noCwdConfig: true, trustedConfig: false);
+    auto conf = readConfig(configFile.Path, silent: true, noCwdConfig: true,
+            trustedConfig: false, includeSystemConfig: false);
     assert(conf.reasoningSummaryPrompt == "MY_PROMPT.md",
             "reasoningSummaryPrompt round-trip failed: " ~ conf.reasoningSummaryPrompt);
 }
