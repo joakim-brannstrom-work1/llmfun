@@ -25,7 +25,7 @@ RUN apt install -y --no-install-recommends \
         # vulkan-tools libvulkan-dev vulkan-validationlayers glslc spirv-headers pkg-config
 WORKDIR /opt
 
-ENV LDC_VERSION=1.42.0
+ENV LDC_VERSION=1.43.0
 RUN curl -L https://github.com/ldc-developers/ldc/releases/download/v${LDC_VERSION}/ldc2-${LDC_VERSION}-linux-x86_64.tar.xz \
     -o ldc.tar.xz \
  && tar -xf ldc.tar.xz \
