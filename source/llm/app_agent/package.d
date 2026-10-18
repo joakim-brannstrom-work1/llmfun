@@ -741,10 +741,10 @@ struct AgentApp {
         }
     }
 
-    /** Sidebar delete handler (TUIListener.sessionDelete): clear pending delete,
-     * validate the id, then delete. The C++ panel already ran the
-     * two-step confirmation, so D delegates to doDeleteSession (active
-     * fallback incl.).
+    /** Sidebar delete handler (TUIListener.sessionDelete): clear pending
+     * delete, validate the id, then delete. The TUI panel queues the delete
+     * single-press (no confirmation); D validates the id and delegates to
+     * doDeleteSession (active fallback incl.).
      */
     package void doSidebarDelete(SessionId id) {
         pendingDeleteId = SessionId.init;

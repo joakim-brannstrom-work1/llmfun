@@ -556,8 +556,7 @@ void tuiReadyStatus(TuiState* state, int ready);
  *
  * The active id is recomputed from the snapshot (the entry with
  * isActive != 0; at most one such entry is expected - the last one wins
- * defensively). The panel's pending two-step delete confirmation is
- * cleared when its id is absent from the new snapshot.
+ * defensively).
  *
  * Null-safe: no-op if state is NULL. `items` may be NULL when count == 0
  * (empty list); a NULL items pointer with count > 0 is treated as empty.

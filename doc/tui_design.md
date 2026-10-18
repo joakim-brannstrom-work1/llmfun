@@ -567,7 +567,7 @@ New functions:
 
 | Function | Semantics |
 |----------|-----------|
-| `tuiSetSessionList(TuiState*, const SessionItem*, size_t)` | Full replace of the panel snapshot. All inbound strings are copied into `std::string` during the call (caller buffers may be reused/freed immediately). Recomputes the active id (the entry with `isActive != 0`; at most one expected, last wins defensively). Clears the panel's two-step delete confirmation when its id is absent from the new snapshot. Null-safe; `items == NULL` with `count == 0` is an empty list |
+| `tuiSetSessionList(TuiState*, const SessionItem*, size_t)` | Full replace of the panel snapshot. All inbound strings are copied into `std::string` during the call (caller buffers may be reused/freed immediately). Recomputes the active id (the entry with `isActive != 0`; at most one expected, last wins defensively). Closes the rename box when its binding row (`renameRowId`) is absent from the new snapshot. Null-safe; `items == NULL` with `count == 0` is an empty list |
 | `tuiIsSessionActionReady(TuiState*)` | Pure check: 1 iff at least one action is queued, 0 otherwise. Consumes nothing. Null-safe (0) |
 | `tuiGetSessionAction(TuiState*)` | Pops exactly one action from the front of the queue (consume-on-read). Returned strings are malloc'd (via `String_NewBuf`) and MUST be freed with `String_Free`; empty fields are `{NULL, 0}`. Empty queue returns `{TuiSessionAction_None, {NULL, 0}, {NULL, 0}}`. Null-safe |
 
@@ -654,22 +654,31 @@ runs the existing session methods.
 ```cpp
 struct ChatTabSessionPanel {
     ImVec4 activeButton = ImVec4(0.4f, 0.4f, 0.45f, 1.0f); // highlight color
+    ImVec4 previewColor = ImVec4(0.55f, 0.55f, 0.58f, 1.0f); // dimmed preview line
+    ImVec4 pendingButton = ImVec4(0.60f, 0.52f, 0.25f, 1.0f); // queued-switch row color
     int panelW = 0;                    // 0 = unset; init to PanelWActivated
                                        // on first render
     static constexpr int PanelWActivated = 30;
+    static constexpr int PanelWCollapsed = 4; // collapsed ">" strip width
     bool panelOpen{true};              // auto-open at startup
 
     std::vector<SessionEntry> sessions; // full snapshot
     std::string activeId;               // active session id from the snapshot
     std::deque<SessionAction> actions;  // UI -> D queue
 
-    char renameBuf[128] = {};   // rename input; init on row change or
-                                // toggle-open, never per frame
-    bool renameActive{false};   // rename input visible
-    std::string renameRowId;    // row renameBuf was initialized for
-    bool renameFocus{false};    // focus the rename input next frame
-    int renameSeq{0};           // bumped per open; fresh InputText id
-    std::string pendingDeleteId; // two-step delete state
+    char renameBuf[256] = {};    // rename input; init on menu-open or
+                                 // retarget, never per frame
+    bool renameActive{false};    // rename input visible
+    std::string renameRowId;     // binding row for the rename box
+    bool renameFocus{false};     // focus the rename input next frame
+    bool renameHadFocus{false};  // rename input was keyboard-focused last
+                                 // frame; arms the focus-loss terminate
+    int renameSeq{0};            // bumped on each open/retarget; fresh
+                                 // InputText state per open
+    std::string pendingSelectId; // queued switch while busy; single slot,
+                                 // last click wins; flushed as an ordinary
+                                 // Select on the first ready frame
+    // ... (filter and match-highlight fields below; see the filter snippet)
 };
 ```
 
@@ -707,8 +716,8 @@ panel's own width. `renderTabChat` calls `renderTabChatSessionPanel` before
 - **First open**: `panelW == 0` is initialized to `PanelWActivated` (mirrors
   `renderTabChatLeftPanel`), so the first frame never offsets the output area
   by 0.
-- **Collapse**: the "Close" button clears the pending delete and rename state
-  and sets `panelW = 8`; the collapsed strip shows an "Open" button that
+- **Collapse**: the "Close" button clears the rename state and sets
+  `panelW = 8`; the collapsed strip shows an "Open" button that
   restores `PanelWActivated`.
 - **Rows**: one row per snapshot entry via the shared `renderButton` helper;
   label = title truncated to the row width with a UTF-8-safe ellipsis plus the
@@ -717,18 +726,19 @@ panel's own width. `renderTabChat` calls `renderTabChatSessionPanel` before
   queues `{Select, id}` unless it is already active (a click on the active
   row queues nothing).
 - **New**: queues `{New}`.
-- **Rename**: a "Rename" toggle on the active row reveals the `InputText`
-  (the toggle avoids an always-present tab-focus stop — imtui tab navigation
-  does not reach plain buttons). The buffer is initialized from the current
-  title only on row change or toggle-open, never per frame; a title
-  longer than the 128-byte buffer initializes the buffer empty, so a blind
-  Enter is rejected as empty — no silent truncation. Enter queues
-  `{Rename, activeId, typedTitle}` (empty/whitespace-only titles rejected
-  in-panel), Escape cancels.
-- **Delete**: each row has a `del` button; the first press arms the row
-  (`del?`), a second press on the same row queues `{Delete, id}` and clears
-  the arm. Pressing another row's delete moves the pending target; any
-  non-delete control clears it.
+- **Rename / Delete**: each row carries a `|...|` menu button that opens an
+  ImGui popup with `Rename` and `Delete` items (auto-positioned; it closes on
+  click-away and on Escape). *Rename* opens a rename window over the chosen
+  row (any row, not only the active one; opening it while another row's box
+  is open switches the box and discards the draft, logged — that retarget
+  branch is defensive-only with a mouse, since opening another row's menu
+  first deactivates the open input; kept as a safety net). The buffer is
+  initialized from the row title only on open/retarget, never per frame; a
+  title longer than the 256-byte buffer initializes the buffer empty, so a
+  blind Enter is rejected as empty — no silent truncation. Enter
+  queues `{Rename, id, typedTitle}` (empty/whitespace-only titles rejected
+  in-panel), Escape cancels; keyboard focus lands on the input. *Delete*
+  queues `{Delete, id}` in a single press (guarded-and-skipped while busy).
 - **Busy gating**: when `!state.readyStatus`, every interactive widget is
   guarded so no action is queued (guard-and-skip: the widgets stay rendered,
   the handlers drop the action). A click already in flight when the busy state
@@ -736,6 +746,41 @@ panel's own width. `renderTabChat` calls `renderTabChatSessionPanel` before
   `doc/sessions.md` for the observable late-click effect.
 - **Scrolling**: the panel child window has no vertical scrollbar yet; rows
   below the terminal height are unreachable.
+
+### Popup Menu Rendering (text grid)
+
+Verified against Dear ImGui 1.92 (vendored) in the ncurses text profile:
+
+- **Keyboard navigation**: after opening a row menu with the mouse, arrow
+  keys move focus between `Rename`/`Delete`, Enter activates, Escape and a
+  click outside close the popup, and menu-Rename puts keyboard focus on the
+  rename input (`NavId == ActiveId`).
+- **Popup borders are N/A in the text profile**: `ImTui_ImplText_Init`
+  (imtui-impl-text.cpp:355-373) zeroes `PopupBorderSize` (plus the other
+  border sizes) and sets `ItemSpacing.y = 0`, so popups render as borderless
+  text blocks; the GUI backend keeps upstream borders.
+- **Positioning is ImGui's, clamped to the display only**: the popup opens at
+  the activating selection point and is clamped to the display, not to this
+  panel. At the rightmost rows the menu paints over the output area to its
+  right (plain-popups get `r_avoid = window->Pos..Pos`, so no avoidance rect
+  is applied). A clamp to the panel *is* possible — a temporary
+  `SetNextWindowPos` before `BeginPopup` verifiably repositioned the popup
+  (probed empirically; it broke the click-item assertions by moving the menu
+  away from the button row) — but that is a workaround choice, not a
+  constraint, and the overflow behaves the same in the GUI backend, so it is
+  recorded here rather than worked around.
+- **The popup renders on the button's own row** (`ItemSpacing.y` is 0 in this
+  UI), so even the last visible row's menu is fully displayed at the bottom
+  edge; no display-bottom clipping occurs.
+- **Input ownership caveat**: Dear ImGui's click path is owner-aware
+  (`IsMouseClicked` tests `TestKeyOwner(MouseLeft, item_id)`), and a
+  successful click claims the left button for that item
+  (`ButtonBehavior`, imgui_widgets.cpp:627) until two frames after its
+  release. While a popup is open, hovering other windows' content is also
+  inhibited (`IsWindowContentHoverable`). Clicking a different widget too
+  soon after another click is therefore silently ignored — ImGui design,
+  identical in the GUI backend (the smoke test idles before each segment to
+  let ownership expire).
 
 Sidebar interactions are logged through the shared `Log& log` parameter
 (`session panel: ...` lines in the Log tab).

@@ -256,7 +256,7 @@ The panel is a `ChatTabSessionPanel` (`cpp_tui/tui.h`), auto-opened at startup:
 
 - Open width is 30 columns (`PanelWActivated`); collapsing leaves an 8-column "Open" button strip so the output area never covers it.
 - One row per session: title truncated to the row width with an ellipsis (UTF-8 safe) plus the always-kept ` [N]` message-count suffix; the active row is highlighted; hovering shows a tooltip with the full title and preview.
-- "New" at the top queues a create action; "Rename" is a toggle on the active row that reveals an `InputText`; each row has a two-step delete button (`del` -> `del?` -> confirm).
+- "New" at the top queues a create action; each row carries a `|...|` menu button that opens a small popup with `Rename` and `Delete` items: rename is available on any row via the menu, and delete is single-press (the arm/confirm re-ask is gone).
 - The panel has no vertical scrolling yet; rows below the terminal height are unreachable for now.
 
 ### Message Flow
@@ -269,7 +269,7 @@ startup / mutation / query completion:
         -> C++ replaces the panel snapshot (full replace)
 
 sidebar interaction:
-  C++ renderTabChatSessionPanel: button / rename input / two-step delete
+  C++ renderTabChatSessionPanel: row button / `|...|` menu / rename window
     -> SessionAction pushed onto panel.actions
   UI thread (after ui.render()): ui.pollSessionAction() polls at most one
     action (tuiIsSessionActionReady + tuiGetSessionAction), stashes it
@@ -318,12 +318,12 @@ internals.
 
 ### Busy Gating and the Late-Click Effect
 
-While the agent is busy (`readyStatus == false`), every interactive sidebar widget is guarded: no action is queued (guard-and-skip only; the vendored ImGui 1.81 has no `BeginDisabled`). Because the C++ queue and the agent mailbox are separate, a click that is already in flight when the busy state flips is still delivered and processed between queries — the observable effect is a click that appears to fire after the current query completes. A follow-up upgrades this to an explicit pending-switch queue; the C++ `actions` deque and its consume-on-read semantics already support it.
+While the agent is busy (`readyStatus == false`), sidebar actions are guard-and-skip (the vendored ImGui has `BeginDisabled`, but graying is not the implemented pattern). The `|...|` menu itself still opens while busy; its `Delete` item is guarded, the header `New` button is guarded, and a row click defers the switch in a single last-click-wins slot (`pendingSelectId`) that flushes as an ordinary select on the first ready frame; menu `Rename` is unguarded (only its Enter-submit step keeps its gate). Because the C++ queue and the agent mailbox are separate, a click that is already in flight when the busy state flips is still delivered and processed between queries — the observable effect is a click that appears to fire after the current query completes.
 
 ### Rename and Delete Semantics
 
-- The rename input is bound to the **active row** and the action carries the session id; D renames that id regardless of the current active session, so a rename can never hit the wrong session if a switch raced in between. Empty/whitespace-only titles are rejected in the panel and again in D; there is no length cap anywhere (matching `/rename` and `SessionStore.rename`). The panel buffer holds 128 bytes; a title that does not fit initializes the buffer empty, so a blind Enter is rejected as empty until a new title is typed — no silent truncation. The buffer is (re)initialized only on row change or toggle-open, never per frame.
-- Two-step delete is owned by the C++ panel (`pendingDeleteId` in the panel): the first press arms the row, a second press on the same row queues the confirmed delete, pressing another row's delete moves the pending target, and any non-delete control clears it. The slash `/delete` keeps its own confirmation state machine, and every sidebar handler clears the agent-side `pendingDeleteId` on entry, so a stale slash confirmation can never fire against a session that was switched away from, renamed, or deleted via the sidebar.
+- The rename box binds to **its row** (`renameRowId`; any row via the menu — no follow-active rebind) and the action carries that id; D renames that id regardless of the current active session, so a rename can never hit the wrong session if a switch raced in between. Menu `Rename` on row B while the box is open on row A retargets the box to B and reinitializes its buffer, discarding A's draft (logged). That branch is defensive-only with a mouse: opening another row's menu first deactivates the open input, so the focus-loss terminate fires before the popup's Rename item can run — it is kept as a safety net. Empty/whitespace-only titles are rejected in the panel and again in D; there is no length cap anywhere (matching `/rename` and `SessionStore.rename`). The panel buffer holds 256 bytes; a title that does not fit initializes the buffer empty, so a blind Enter is rejected as empty until a new title is typed — no silent truncation. The buffer is (re)initialized only on open/retarget, never per frame.
+- Delete is single-press via the menu: clicking `Delete` queues `{Delete, id}` immediately (guard-and-skipped while busy) — no armed/pending state exists in the C++ panel anymore. The slash-command `/delete` keeps its own two-step confirmation state machine (`decideDeleteCommand` and the agent-side `pendingDeleteId`, untouched), and every sidebar handler still clears the agent-side `pendingDeleteId` on entry, so a stale slash confirmation can never fire against a session that was switched away from, renamed, or deleted via the sidebar.
 - Deleting the active session goes through the same fallback (most recently updated remaining session, else a fresh one); deleting a non-active session removes it and refreshes without switching.
 
 ### Refresh Rule
@@ -342,7 +342,7 @@ The sidebar boundary lives in the pure C API (`cpp_tui/tui_api.h`, `TUI_API_VERS
 
 | Function | Behavior |
 |----------|----------|
-| `tuiSetSessionList(TuiState*, const SessionItem*, size_t)` | Full replace of the panel snapshot; copies all inbound strings during the call; recomputes the active id; clears the panel's pending two-step delete when its id is absent; null-safe |
+| `tuiSetSessionList(TuiState*, const SessionItem*, size_t)` | Full replace of the panel snapshot; copies all inbound strings during the call; recomputes the active id; closes the rename box when its binding row is absent from the snapshot; null-safe |
 | `tuiIsSessionActionReady(TuiState*)` | 1 iff at least one action is queued; pure check, consumes nothing; null-safe |
 | `tuiGetSessionAction(TuiState*)` | Pops exactly one action from the front (consume-on-read); returned strings are malloc'd and must be freed with `String_Free`; `{TuiSessionAction_None, {NULL, 0}, {NULL, 0}}` when empty; null-safe |
 
