@@ -563,20 +563,8 @@ void tuiSetSessionList(TuiState* state, const SessionItem* items, size_t count) 
             panel.sessions.push_back(std::move(e));
         }
     }
-    // Two-step delete confirmation: drop the pending id when the target
-    // session is no longer in the snapshot.
-    if (!panel.pendingDeleteId.empty()) {
-        const std::string& pending = panel.pendingDeleteId;
-        auto found = std::find_if(
-            panel.sessions.begin(), panel.sessions.end(),
-            [&pending](const ::llmfun::tui::SessionEntry& s) { return s.id == pending; });
-        if (found == panel.sessions.end())
-            panel.pendingDeleteId.clear();
-    }
-    // Pending-switch slot: drop the queued id when its target left
-    // the snapshot (mirror of the pendingDeleteId rule above) or when the
-    // active session changed since the previous snapshot - a slash
-    // /switch typed while busy wins over the queued click.
+    // Pending-switch slot: drop the queued id when its target left the snapshot
+    // or the active session changed - a /switch typed while busy wins over the queued click.
     if (!panel.pendingSelectId.empty()) {
         const std::string& pending = panel.pendingSelectId;
         auto found = std::find_if(
@@ -585,14 +573,13 @@ void tuiSetSessionList(TuiState* state, const SessionItem* items, size_t count) 
         if (found == panel.sessions.end() || panel.activeId != prevActiveId)
             panel.pendingSelectId.clear();
     }
-    // The rename box binds to the active row; when the active row is no
-    // longer in the snapshot (deleted between refreshes, or the snapshot
-    // has no active entry at all), close the box - an open box bound to a
-    // missing row is dead-but-harmless state.
+    // The rename box binds to renameRowId; when that row is no longer in the
+    // snapshot, close the box - an open box bound to a missing row is
+    // dead-but-harmless state.
     if (panel.renameActive) {
         auto found = std::find_if(
             panel.sessions.begin(), panel.sessions.end(),
-            [&panel](const ::llmfun::tui::SessionEntry& s) { return s.id == panel.activeId; });
+            [&panel](const ::llmfun::tui::SessionEntry& s) { return s.id == panel.renameRowId; });
         if (found == panel.sessions.end()) {
             panel.renameActive = false;
             panel.renameFocus = false;

@@ -404,8 +404,7 @@ void setSnapshot(std::vector<SessionEntry> v) { g_state.sessionPanel.sessions = 
 
 // The "Sessions ---" separator row, and derived positions:
 //   +1 = filter input row, +2 = first session row (the rows child has no
-//   visible border row; the active session's Rename button occupies the
-//   row directly below it).
+//   visible border row).
 int sepRowY() {
     int y = findRow(grid(), "Sessions");
     if (y < 0)
@@ -458,6 +457,54 @@ void clickChar(char c) {
     click(x, y);
 }
 
+// Click the menu button of the session row at grid row yButton: find the
+// row's menu glyph - the text grid renders the "|" label as a single '.' cell
+// (the button frame itself draws no glyphs); take the LAST drawn '.' on the
+// row - the menu button sits right of the title, so it wins even when the
+// title carries its own dots - click it, and let the popup open. The popup
+// lists its items BELOW the button row; clickMenuItem scans downward from the
+// button row for an item label.
+// Returns the y of the menu button row after clicking it, -1 on failure (bad
+// row / no menu glyph on it).
+int openSessionMenu(int yButton) {
+    if (yButton < 0 || yButton >= grid().ny)
+        return -1;
+    Grid g = grid();
+    const int* row = &g.ch[yButton * g.nx];
+    int xDots = -1;
+    for (int x = 1; x < g.nx; ++x)
+        if (row[x] == '.')
+            xDots = x;
+    if (xDots < 0)
+        return -1;
+    click(xDots, yButton);
+    idle(2);
+    return yButton;
+}
+
+// Click a menu item by its label: scan downward from the openSessionMenu
+// button row yButton (inclusive: the popup's top-left is the click cell, so
+// its first item renders ON the button row) for a row whose text contains
+// the label, then click one cell right of the label's first character (same
+// convention as clickRowByTitle).
+// Returns the y of the clicked item row, -1 if the popup/label is absent
+// (menu not open, or the item list not rendered yet).
+int clickMenuItem(const std::string& label, int yButton) {
+    if (yButton < 0)
+        return -1;
+    Grid g = grid();
+    for (int y = yButton; y < g.ny; ++y) {
+        const std::string text = rowText(g, y);
+        const std::size_t p = text.find(label);
+        if (p == std::string::npos)
+            continue;
+        click(static_cast<int>(p) + 1, y);
+        idle(2);
+        return y;
+    }
+    return -1;
+}
+
 int navId() {
     ImGuiContext& g = *ImGui::GetCurrentContext();
     return (int)g.NavId;
@@ -505,7 +552,6 @@ void resetClean() {
     g_state.left.agents.clear();
     setSnapshot(seedSessions());
     g_state.sessionPanel.pendingSelectId.clear();
-    g_state.sessionPanel.pendingDeleteId.clear();
     // Park the mouse so no tooltip/hover artifacts linger.
     frame([](ImGuiIO& io) {
         io.MousePos = ImVec2(0, 0);
@@ -543,8 +589,7 @@ void scenario0_calibration() {
             fail("S0: filter row not empty: '" + frow + "'");
 
     // First session row: directly under the filter row (the rows child has
-    // no visible border row). The active session's "Rename" button occupies
-    // the row below the active title row.
+    // no visible border row).
     int yFirst = findRow(g, "Alpha refactor [3]");
     if (yFirst < 0)
         fail("S0: first session row 'Alpha refactor [3]' not found");
@@ -552,6 +597,25 @@ void scenario0_calibration() {
         fail("S0: first session row at " + std::to_string(yFirst) + ", expected " +
              std::to_string(ySep + 2));
 
+    // Title budget: the label-fit |.| menu button (1 glyph + 2 FramePadding
+    // cells) narrows the menu column, so the row budget is 23 cells. The
+    // long-title row pins it exactly: 16 title chars + "..." + " [1]" + the
+    // spacing cell that follows (the row continues with the menu button, so
+    // the pin is a 24-cell window from the label start).
+    const int yLong = findRow(g, "aaaa");
+    if (yLong < 0)
+        fail("S0: long-title row not found");
+    const std::string longLabel = rowText(g, yLong);
+    const std::size_t lblStart = longLabel.find_first_not_of(' ');
+    if (lblStart == std::string::npos ||
+        longLabel.compare(lblStart, 24, std::string("aaaaxxxxxxxxxxxx") + "... [1] ") != 0)
+        fail("S0: long-title label does not match the 23-cell budget: '" + longLabel + "'");
+    // The active row is single-line: no preview row below it, so the
+    // next session's row follows the active title row directly.
+    int yBeta = findRow(g, "Beta deploy [5]");
+    if (yBeta != yFirst + 1)
+        fail("S0: expected 'Beta deploy [5]' directly below the active row (yBeta=" +
+             std::to_string(yBeta) + ", yFirst+1=" + std::to_string(yFirst + 1) + ")");
     if (statusRowY() < 0)
         fail("S0: status row not found");
 
@@ -638,17 +702,16 @@ void scenario1_filter_ranks() {
              "," + std::to_string(y3) + "," + std::to_string(y4) + "," + std::to_string(y5) + "," +
              std::to_string(y6) + "," + std::to_string(y7) + ")");
     // Preview rows sit right below their session rows. At the default panel
-    // width the row budget is 22 cells, so longer previews render truncated
-    // with an ellipsis (previewRowLabel): the 23-char Kappa preview
-    // becomes "set up kappa monito...", the 24-char Iota preview becomes
-    // "rollback the iota c...".
-    if (findRow(g, "set up kappa monito...") < 0)
+    // width the row budget is 23 cells, so the 23-char Kappa preview fits
+    // fully and the 24-char Iota preview renders truncated with an ellipsis
+    // (previewRowLabel): "set up kappa monitoring" and "rollback the iota ch...".
+    if (findRow(g, "set up kappa monitoring") < 0)
         fail("S1: Kappa preview row missing");
-    if (findRow(g, "rollback the iota c...") < 0)
+    if (findRow(g, "rollback the iota ch...") < 0)
         fail("S1: Iota preview row missing");
-    if (findRow(g, "set up kappa monito...") <= y6 || findRow(g, "set up kappa monito...") >= y7)
+    if (findRow(g, "set up kappa monitoring") <= y6 || findRow(g, "set up kappa monitoring") >= y7)
         fail("S1: Kappa preview row not directly below its title row");
-    if (findRow(g, "rollback the iota c...") <= y7)
+    if (findRow(g, "rollback the iota ch...") <= y7)
         fail("S1: Iota preview row not below its title row");
     // Non-matches hidden.
     for (const char* hidden : {"Alpha refactor", "Gamma debug", "Epsilon test", "Caf\u00E9 au lait",
@@ -757,6 +820,17 @@ void scenario5_click_row() {
     checkAction(SessionActionType::Select, "s002-1", "S5");
     if (!filterIsEmpty())
         fail("S5: filter not cleared after row click");
+    // H3: menu Delete happy path — one click queues exactly one Delete.
+    idle(1); // settle the filter-clear re-render before targeting a row
+    int yDel = findRow(grid(), "Gamma debug [1]");
+    if (yDel < 0)
+        fail("S5: menu row 'Gamma debug' not found");
+    const int yMenu = openSessionMenu(yDel);
+    if (yMenu < 0)
+        fail("S5: session menu did not open");
+    if (clickMenuItem("Delete", yMenu) < 0)
+        fail("S5: menu Delete item not clickable");
+    checkAction(SessionActionType::Delete, "s003-2", "S5 menu delete");
 }
 
 // (f) Enter while busy queues pendingSelect; it flushes on the first ready
@@ -776,6 +850,18 @@ void scenario6_enter_busy() {
         fail("S6: pendingSelectId != top match ('" + g_state.sessionPanel.pendingSelectId + "')");
     if (!filterIsEmpty())
         fail("S6: filter not cleared immediately while busy");
+    // H3: menu Delete while busy queues nothing and logs the busy line.
+    int yMenu = findRow(grid(), "Zeta backup [4]");
+    if (yMenu < 0)
+        fail("S6: menu row 'Zeta backup' not found while busy");
+    const int yBtn = openSessionMenu(yMenu);
+    if (yBtn < 0)
+        fail("S6: session menu did not open while busy");
+    if (clickMenuItem("Delete", yBtn) < 0)
+        fail("S6: menu Delete item not clickable while busy");
+    if (actionCount() != 0)
+        fail("S6: menu Delete queued an action while busy");
+    // The busy log line itself is asserted by S23's needles.
     g_state.readyStatus = true;
     idle(2);
     checkAction(SessionActionType::Select, "s007-6", "S6 flush");
@@ -792,6 +878,9 @@ void scenario7_click_busy_last_wins() {
     g_state.readyStatus = false;
     idle(1);
     clickRowByTitle("Zeta backup");
+    // The row click clears the filter, which re-renders the list one frame
+    // later; let that settle so the second click targets the row it found.
+    idle(1);
     clickRowByTitle("Delta release");
     idle(1);
     if (g_state.sessionPanel.pendingSelectId != "s004-3")
@@ -881,10 +970,19 @@ void scenario8_snapshot_updates() {
 void scenario9_a28_rename_closes() {
     g_phase = "S9 rename closes on filter";
     resetClean();
-    clickRowByTitle("Rename"); // opens the box on the active row (s001)
+    const int yActive = findRow(grid(), "Alpha refactor [3]");
+    if (yActive < 0)
+        fail("S9: active row not found");
+    const int yBtn = openSessionMenu(yActive);
+    if (yBtn < 0)
+        fail("S9: session menu did not open");
+    if (clickMenuItem("Rename", yBtn) < 0)
+        fail("S9: Rename item not rendered");
     idle(2);
+    // The menu's Rename item opens the rename box; the buffer assertions
+    // below must run, so a closed box is a failure too.
     if (!g_state.sessionPanel.renameActive)
-        fail("S9: rename box did not open");
+        fail("S9: rename box did not open after clicking the Rename item");
     {
         std::string r(g_state.sessionPanel.renameBuf.data());
         if (r != "Alpha refactor")
@@ -923,47 +1021,49 @@ void scenario10_esc_priority() {
     typeAll("alp"); // shows s001 (active)
     idle(1);
     {
-        int y = findRow(grid(), "Rename");
-        int x = firstNonSpace(grid(), y);
-        frame([&](ImGuiIO& io) {
-            io.MousePos = ImVec2(x + 1, y);
-            io.MouseDown[0] = true;
-        });
-        frame([&](ImGuiIO& io) {
-            io.MousePos = ImVec2(x + 1, y);
-            io.MouseDown[0] = false;
-        });
+        const int yActive = findRow(grid(), "Alpha refactor [3]");
+        if (yActive < 0)
+            fail("S10: active row not found");
+        const int yBtn = openSessionMenu(yActive);
+        if (yBtn < 0)
+            fail("S10: session menu did not open");
+        if (clickMenuItem("Rename", yBtn) < 0)
+            fail("S10: Rename item not rendered");
     }
-    frame(); // focus request queued by the open is applied on the next frame
-    frame();
+    // The menu's Rename item opens the rename box the Esc-priority
+    // assertions below check, so a closed box is a failure too.
     if (!g_state.sessionPanel.renameActive)
-        fail("S10: rename box did not open");
+        fail("S10: rename box did not open after clicking the Rename item");
     {
-        std::string r0(g_state.sessionPanel.renameBuf.data());
-        if (r0 != "Alpha refactor")
-            fail("S10: buffer right after open ('" + r0 + "')");
+        frame(); // focus request queued by the open is applied on the next frame
+        frame();
+        {
+            std::string r0(g_state.sessionPanel.renameBuf.data());
+            if (r0 != "Alpha refactor")
+                fail("S10: buffer right after open ('" + r0 + "')");
+        }
+        {
+            ImGuiContext& g = *ImGui::GetCurrentContext();
+            if (g.InputTextState.Stb->select_start != 0 || g.InputTextState.Stb->select_end != 14)
+                fail("S10: code-focused rename input is not pre-selected "
+                     "(select " +
+                     std::to_string(g.InputTextState.Stb->select_start) + ".." +
+                     std::to_string(g.InputTextState.Stb->select_end) + ")");
+        }
+        frame([](ImGuiIO& io) { io.AddInputCharacter('!'); });
+        idle(1);
+        {
+            std::string r(g_state.sessionPanel.renameBuf.data());
+            if (r != "!")
+                fail("S10: typing did not replace the pre-selected title ('" + r + "')");
+        }
+        pressKey(ImGuiKey_Escape);
+        idle(1);
+        if (g_state.sessionPanel.renameActive)
+            fail("S10: first Esc did not close the rename box");
+        if (filter() != "alp")
+            fail("S10: first Esc consumed by rename but cleared the filter too");
     }
-    {
-        ImGuiContext& g = *ImGui::GetCurrentContext();
-        if (g.InputTextState.Stb->select_start != 0 || g.InputTextState.Stb->select_end != 14)
-            fail("S10: code-focused rename input is not pre-selected "
-                 "(select " +
-                 std::to_string(g.InputTextState.Stb->select_start) + ".." +
-                 std::to_string(g.InputTextState.Stb->select_end) + ")");
-    }
-    frame([](ImGuiIO& io) { io.AddInputCharacter('!'); });
-    idle(1);
-    {
-        std::string r(g_state.sessionPanel.renameBuf.data());
-        if (r != "!")
-            fail("S10: typing did not replace the pre-selected title ('" + r + "')");
-    }
-    pressKey(ImGuiKey_Escape);
-    idle(1);
-    if (g_state.sessionPanel.renameActive)
-        fail("S10: first Esc did not close the rename box");
-    if (filter() != "alp")
-        fail("S10: first Esc consumed by rename but cleared the filter too");
     {
         Grid g = grid();
         if (findRow(g, "Alpha refactor [3]") < 0)
@@ -977,32 +1077,40 @@ void scenario10_esc_priority() {
         fail("S10: second Esc did not clear the filter");
 }
 
-// (h) Rename box + filter coexistence: clicking the filter unfocuses but does
-//      NOT close the box while the active row stays visible.
+// (h) Rename + filter: clicking the filter while the box is open moves
+//      keyboard focus off the rename input, which terminates the box
+//      (focus-loss rule) and discards the draft.
 void scenario11_rename_coexist() {
-    g_phase = "S11 (h) rename + filter coexist";
+    g_phase = "S11 (h) filter click terminates the rename box";
     resetClean();
-    clickRowByTitle("Rename");
+    const int yActive = findRow(grid(), "Alpha refactor [3]");
+    if (yActive < 0)
+        fail("S11: active row not found");
+    const int yBtn = openSessionMenu(yActive);
+    if (yBtn < 0)
+        fail("S11: session menu did not open");
+    if (clickMenuItem("Rename", yBtn) < 0)
+        fail("S11: Rename item not rendered");
     idle(2);
+    // The menu's Rename item opens the box the assertions below check, so a
+    // closed box is a failure too.
     if (!g_state.sessionPanel.renameActive)
-        fail("S11: rename box did not open");
-    clickFilter();  // box stays open, just unfocused
-    typeAll("alp"); // s001 still visible -> the auto-close must NOT fire
-    idle(1);
-    if (!g_state.sessionPanel.renameActive)
-        fail("S11 (h): rename box closed while its row is still visible");
-    if (filter() != "alp")
-        fail("S11: filter not set while coexisting with the rename box");
-    pressKey(ImGuiKey_Escape); // closes rename first
+        fail("S11: rename box did not open after clicking the Rename item");
+    clickFilter();  // focus leaves the rename input -> the box terminates
+    typeAll("alp"); // the click focused the filter; typing filters
     idle(1);
     if (g_state.sessionPanel.renameActive)
-        fail("S11: Esc did not close the rename box first");
+        fail("S11: clicking the filter did not close the rename box");
     if (filter() != "alp")
-        fail("S11: Esc cleared the filter instead of closing the rename box");
-    pressKey(ImGuiKey_Escape);
+        fail("S11: filter not set after the rename box closed");
+    if (actionCount() != 0)
+        fail("S11: focus-loss terminate must not queue a rename action");
+    pressKey(ImGuiKey_Escape); // box already closed -> Esc clears the filter
     idle(1);
     if (!filterIsEmpty())
-        fail("S11: filter not cleared on the second Esc");
+        fail("S11: filter not cleared on Esc");
+    if (g_state.sessionPanel.renameActive)
+        fail("S11: Esc re-opened the rename box");
 }
 
 // (d2) Enter on a single match that IS the active session: no-op.
@@ -1362,11 +1470,16 @@ void scenario23_log_lines() {
     std::fclose(f);
     for (const char* needle :
          {"filter cleared (Escape)", "filter queued select", "pending select",
-          "flushed pending select", "rename closed (active row filtered out, A28)",
-          "rename cancelled"}) {
+          "flushed pending select", "rename closed (binding row filtered out)", "rename cancelled",
+          "session panel: rename opened", "session panel: menu delete queued",
+          "session panel: delete", "skipped (busy)"}) {
         if (all.find(needle) == std::string::npos)
             fail(std::string("S23: log line missing: '") + needle + "'");
     }
+    // The two-step delete arm's log line died with the del/del? buttons
+    // (task 03/04); its absence pins that removal at the log level too.
+    if (all.find("delete armed") != std::string::npos)
+        fail("S23: stale two-step delete arm line 'delete armed' still logged");
 }
 
 // Cell-exact column of the first occurrence of an ASCII needle on row y.
@@ -1531,6 +1644,395 @@ void scenario24_input_group_geometry() {
     if (!input().empty())
         fail("S24: input buffer not empty at scenario end");
 }
+// Task 7: the per-row |...| popup menu in the TUI text-grid backend; see
+// doc/tui_design.md ("Popup Menu Rendering"). Popup borders are not asserted:
+// the text backend zeroes every *BorderSize style value (ImTui_ImplText_Init),
+// so borders never rasterize as grid cells; the GUI backend keeps upstream
+// borders.
+void scenario28_tui_popup_menu() {
+    g_phase = "S28 popup menu";
+
+    // Keyboard navigation through the popup; Enter on Rename opens the box
+    // and closes the popup with keyboard focus on the rename input.
+    resetClean();
+    const int yA = findRow(grid(), "Alpha refactor [3]");
+    openSessionMenu(yA);
+    idle(2);
+    const int nav0 = navId();
+    if (nav0 == 0)
+        fail("S28: popup has no keyboard focus after open");
+    pressKey(ImGuiKey_DownArrow);
+    if (navId() == nav0)
+        fail("S28: Down does not move focus in the popup");
+    pressKey(ImGuiKey_UpArrow);
+    if (navId() != nav0)
+        fail("S28: Up does not move focus back in the popup");
+    pressKey(ImGuiKey_Enter);
+    idle(1);
+    if (!g_state.sessionPanel.renameActive)
+        fail("S28: menu-Enter did not open the rename box");
+    if (findRow(grid(), "Delete") >= 0)
+        fail("S28: popup still rendered after menu-Rename");
+    if (navId() != activeId() || navId() == 0)
+        fail("S28: keyboard focus not on the rename input after menu-Rename");
+    pressKey(ImGuiKey_Escape);
+    idle(1);
+    if (g_state.sessionPanel.renameActive)
+        fail("S28: Escape did not cancel the rename box");
+
+    // Esc and click-away close the popup.
+    resetClean();
+    openSessionMenu(findRow(grid(), "Beta deploy [5]"));
+    idle(1);
+    pressKey(ImGuiKey_Escape);
+    idle(1);
+    if (findRow(grid(), "Rename") >= 0)
+        fail("S28: Escape did not close the popup");
+    resetClean();
+    openSessionMenu(findRow(grid(), "Gamma debug [1]"));
+    idle(1);
+    click(70, 2); // click far outside the panel
+    idle(1);
+    if (findRow(grid(), "Rename") >= 0)
+        fail("S28: click-away did not close the popup");
+
+    // Popup items render (Rename shares the button row - see clickMenuItem).
+    resetClean();
+    openSessionMenu(findRow(grid(), "Delta release [2]"));
+    idle(1);
+    if (findRow(grid(), "Rename") < 0 || findRow(grid(), "Delete") < 0)
+        fail("S28: popup items not rendered");
+    pressKey(ImGuiKey_Escape); // close the popup: resetClean cannot
+    idle(1);
+
+    // Display-edge clamping: at the last visible session row the popup is
+    // still fully rendered.
+    // The last visible row may have a session title containing '.' or "..."
+    // (left over from a renamed session), so openSessionMenu's last-'.'-on-
+    // the-row heuristic would click the title instead of the menu button. The
+    // menu button always sits right of the title's agent count "[N]", so click
+    // the first '.' after the last ']'.
+    resetClean();
+    int yLast = -1;
+    for (int y = grid().ny - 1; y >= 0 && yLast < 0; --y) {
+        Grid gg = grid();
+        for (int x = 0; x + 2 < gg.nx; ++x) {
+            const int* row = &gg.ch[y * gg.nx];
+            if (row[x] == '[' && row[x + 1] >= '0' && row[x + 1] <= '9' && row[x + 2] == ']') {
+                yLast = y;
+                break;
+            }
+        }
+    }
+    if (yLast < 0)
+        fail("S28: no session row visible");
+    {
+        Grid gg = grid();
+        const std::string text = rowText(gg, yLast);
+        const std::size_t pBracket = text.find_last_of(']');
+        // The text-grid menu button renders as a single '.' cell right of the
+        // title (which may itself carry dots or an ellipsis, but those sit
+        // before the "[N]" count). The only cell between the count and the
+        // button is a spacing cell, so the first '.' after the ']' is the
+        // button.
+        const std::size_t pDot =
+            pBracket == std::string::npos ? std::string::npos : text.find('.', pBracket + 1);
+        if (pBracket == std::string::npos || pDot == std::string::npos)
+            fail("S28: menu button not found on the last session row");
+        click(static_cast<int>(pDot), yLast); // the menu button's '.' cell
+    }
+    idle(1);
+    if (findRow(grid(), "Rename") < 0 || findRow(grid(), "Delete") < 0)
+        fail("S28: popup clipped at the display bottom edge");
+    pressKey(ImGuiKey_Escape); // close the popup for resetClean
+    idle(1);
+}
+
+// S23 reads the log file once at its point in main; the scenarios below
+// register after it, so they count occurrences of their own needles here
+// instead of riding S23's needle list.
+int logNeedleCount(const char* needle) {
+    // The per-frame log FILE* opened by tuiRender is never
+    // fclosed, so a frame's log lines sit in that frame's leaked stdio buffer
+    // until something flushes it. S23 passes on append-mode leftovers from
+    // earlier runs; these scenarios read their OWN run's lines, so flush all
+    // open output streams (fflush(NULL)) before reading - it only empties
+    // stdio buffers onto disk, it closes nothing.
+    std::fflush(nullptr);
+    FILE* f = std::fopen("llmfun_ui_log.txt", "rb");
+    if (!f)
+        fail("logNeedleCount: llmfun_ui_log.txt not found (logging off?)");
+    std::string all;
+    char buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+        all.append(buf, n);
+    std::fclose(f);
+    int count = 0;
+    for (std::size_t p = all.find(needle); p != std::string::npos; p = all.find(needle, p + 1))
+        ++count;
+    return count;
+}
+
+// S25: the rename input terminates on focus loss, so any click outside it
+// (a row click, another row's menu button) closes the open box and discards
+// its draft; the row click still queues its Select. Menu-Rename afterwards
+// therefore opens a fresh box on that row (the retarget path in
+// session_panel.cpp is unreachable with a mouse). Escape cancels; the filter
+// is untouched.
+void scenario25_rename_retarget() {
+    g_phase = "S25 row click closes an open box; menu rename reopens fresh";
+    resetClean();
+    const int yA = findRow(grid(), "Beta deploy [5]");
+    if (yA < 0)
+        fail("S25: non-active row 'Beta deploy' not found");
+    if (openSessionMenu(yA) < 0)
+        fail("S25: session menu did not open");
+    if (clickMenuItem("Rename", yA) < 0)
+        fail("S25: Rename item not rendered");
+    idle(2);
+    if (!g_state.sessionPanel.renameActive)
+        fail("S25: rename box did not open on the non-active row");
+    typeAll("draft");
+    idle(1);
+
+    // Clicking another row queues its Select and terminates the box (focus
+    // loss discards the draft). With the box open on "Beta deploy" the
+    // floating rename input hides that row and the row below it in the text
+    // grid, so click a row that stays visible ("Delta release", two rows
+    // down).
+    clickRowByTitle("Delta release");
+    idle(1);
+    checkAction(SessionActionType::Select, "s004-3", "S25 row click");
+    if (g_state.sessionPanel.renameActive)
+        fail("S25: row click did not close the open rename box (focus loss)");
+
+    // Menu-Rename on another row now opens a fresh box on that row (the
+    // open-box click already closed the old one). The log file is append
+    // mode and persists across runs, so the needle count is a run-scoped
+    // delta, not an absolute.
+    const int opensBefore = logNeedleCount("session panel: rename opened s001-0");
+    const int yB = findRow(grid(), "Alpha refactor [3]");
+    if (yB < 0)
+        fail("S25: active row 'Alpha refactor' not found");
+    if (openSessionMenu(yB) < 0)
+        fail("S25: session menu did not open for the reopen");
+    if (clickMenuItem("Rename", yB) < 0)
+        fail("S25: Rename item not rendered for the reopen");
+    idle(2);
+    if (!g_state.sessionPanel.renameActive || g_state.sessionPanel.renameRowId != "s001-0")
+        fail("S25: rename box not opened on the clicked row");
+    {
+        std::string r(g_state.sessionPanel.renameBuf.data());
+        if (r != "Alpha refactor")
+            fail("S25: reopen did not initialize the buffer from the row's "
+                 "title ('" +
+                 r + "')");
+    }
+    if (logNeedleCount("session panel: rename opened s001-0") != opensBefore + 1)
+        fail("S25: rename-opened log line missing");
+
+    pressKey(ImGuiKey_Escape);
+    idle(1);
+    if (g_state.sessionPanel.renameActive)
+        fail("S25: Escape did not cancel the reopened box");
+    if (!filterIsEmpty())
+        fail("S25: Escape touched the filter");
+}
+
+// S26: a popup whose row leaves the visible set closes silently (the row's
+// BeginPopup stops running; the popup has no close log of its own - the rename
+// box's close IS logged) and does NOT reappear when the row returns (filter
+// cleared or a fresh snapshot). The rename box's close on a filtered-out row
+// is logged (pinned by S9) while the popup's close stays silent - the
+// popup-vs-box contrast is asserted here, not unified.
+void scenario26_popup_closes_with_row() {
+    g_phase = "S26 popup closes silently when its row leaves the set";
+    resetClean();
+
+    // (a1) With Beta's popup open (no rename box), a click-away on the
+    // filter closes the popup silently: the click is consumed and does not
+    // reach the filter, so a second click is needed to focus it. Filtering
+    // the row out afterwards leaves the popup closed.
+    const int yB = findRow(grid(), "Beta deploy [5]");
+    if (yB < 0)
+        fail("S26: row 'Beta deploy' not found");
+    if (openSessionMenu(yB) < 0)
+        fail("S26: session menu did not open");
+    idle(1);
+    if (findRow(grid(), "Rename") < 0 || findRow(grid(), "Delete") < 0)
+        fail("S26: menu items not rendered");
+    const int closesBefore = logNeedleCount("rename closed (binding row filtered out)");
+    clickFilter(); // a click outside the open popup closes it (click-away);
+                   // the click is consumed and does not reach the filter
+    idle(1);
+    if (findRow(grid(), "Rename") >= 0 || findRow(grid(), "Delete") >= 0)
+        fail("S26: click-away did not close the popup");
+    clickFilter();  // now that the popup is closed, this focuses the filter
+    typeAll("alp"); // Beta leaves the filtered list ("eta" is a substring of
+                    // "Beta" and would keep the row visible)
+    idle(1);
+    {
+        Grid g = grid();
+        if (findRow(g, "Rename") >= 0 || findRow(g, "Delete") >= 0)
+            fail("S26: popup still rendered after its row was filtered out");
+        if (findRow(g, "Beta deploy") >= 0)
+            fail("S26: filtered-out row still rendered");
+    }
+    if (g_state.sessionPanel.renameActive)
+        fail("S26: rename box opened without its menu item");
+    if (logNeedleCount("rename closed (binding row filtered out)") != closesBefore)
+        fail("S26: rename box close logged without an open box");
+    pressKey(ImGuiKey_Escape); // clear the filter; the row returns
+    idle(1);
+    if (!filterIsEmpty())
+        fail("S26: filter not cleared after Esc");
+    {
+        Grid g = grid();
+        if (findRow(g, "Beta deploy [5]") < 0)
+            fail("S26: filtered-out row did not return after the filter cleared");
+        if (findRow(g, "Rename") >= 0 || findRow(g, "Delete") >= 0)
+            fail("S26: popup reappeared after its row returned");
+    }
+    // (a2) With Beta's rename box open instead, a snapshot refresh that drops
+    // the binding row closes the box with a log line (part (b) covers the
+    // same rule for Delete). The box cannot survive an outside click under
+    // the focus-loss rule, so the row cannot be filtered out by a filter
+    // click while the box is open - a refresh (no click involved) is the
+    // only way to reach that close path.
+    if (openSessionMenu(yB) < 0)
+        fail("S26: session menu did not open for the rename box");
+    if (clickMenuItem("Rename", yB) < 0)
+        fail("S26: Rename item not rendered");
+    idle(2);
+    if (!g_state.sessionPanel.renameActive)
+        fail("S26: rename box did not open");
+    auto vv = seedSessions();
+    vv.erase(std::remove_if(vv.begin(), vv.end(),
+                            [](const SessionEntry& e) { return e.id == "s002-1"; }),
+             vv.end());
+    setSnapshot(std::move(vv));
+    idle(2);
+    {
+        Grid g = grid();
+        if (findRow(g, "Beta deploy") >= 0)
+            fail("S26: rename box's binding row still rendered after the refresh");
+        if (findRow(g, "Rename") >= 0 || findRow(g, "Delete") >= 0)
+            fail("S26: popup rendered after the refresh");
+    }
+    if (g_state.sessionPanel.renameActive)
+        fail("S26: rename box stayed open with its row dropped from the snapshot");
+    if (logNeedleCount("rename closed (binding row filtered out)") != closesBefore + 1)
+        fail("S26: rename box close not logged exactly once (the popup's "
+             "close must stay silent)");
+    setSnapshot(seedSessions()); // the row returns in a later refresh
+    idle(2);
+    if (!filterIsEmpty())
+        fail("S26: snapshot refresh touched the filter");
+    {
+        Grid g = grid();
+        if (findRow(g, "Beta deploy [5]") < 0)
+            fail("S26: dropped row did not return after the refresh");
+        if (findRow(g, "Rename") >= 0 || findRow(g, "Delete") >= 0)
+            fail("S26: popup reappeared after its row returned");
+    }
+    if (g_state.sessionPanel.renameActive)
+        fail("S26: closed rename box came back with its row");
+
+    // (b) Menu-Delete the row: the popup closes and does not reappear when a
+    // fresh snapshot brings the same set back.
+    resetClean();
+    const int yG = findRow(grid(), "Gamma debug [1]");
+    if (yG < 0)
+        fail("S26: row 'Gamma debug' not found");
+    if (openSessionMenu(yG) < 0)
+        fail("S26: session menu did not open");
+    if (clickMenuItem("Delete", yG) < 0)
+        fail("S26: menu Delete item not rendered");
+    idle(1);
+    checkAction(SessionActionType::Delete, "s003-2", "S26 menu delete");
+    {
+        Grid g = grid();
+        if (findRow(g, "Rename") >= 0 || findRow(g, "Delete") >= 0)
+            fail("S26: popup still rendered after its Delete click");
+    }
+    auto v = seedSessions(); // D-side delete refresh: the row leaves
+    v.erase(
+        std::remove_if(v.begin(), v.end(), [](const SessionEntry& e) { return e.id == "s003-2"; }),
+        v.end());
+    setSnapshot(std::move(v));
+    idle(2);
+    {
+        Grid g = grid();
+        if (findRow(g, "Gamma debug") >= 0)
+            fail("S26: deleted row still rendered after the refresh");
+        if (findRow(g, "Rename") >= 0 || findRow(g, "Delete") >= 0)
+            fail("S26: popup rendered after its row was deleted");
+    }
+    setSnapshot(seedSessions()); // the row "returns" in a later refresh
+    idle(2);
+    {
+        Grid g = grid();
+        if (findRow(g, "Gamma debug [1]") < 0)
+            fail("S26: row did not return in the refreshed snapshot");
+        if (findRow(g, "Rename") >= 0 || findRow(g, "Delete") >= 0)
+            fail("S26: popup reappeared after the row returned");
+    }
+}
+
+// S27: menu-Rename from a NON-ACTIVE row submits the Rename action with that
+// row's id (not the active session's), closes the box and logs the submit;
+// Enter while busy still defers with the busy log line.
+void scenario27_rename_from_non_active_row() {
+    g_phase = "S27 menu rename from a non-active row submits to that row";
+    resetClean();
+    const int yB = findRow(grid(), "Beta deploy [5]");
+    if (yB < 0)
+        fail("S27: non-active row 'Beta deploy' not found");
+    // The log file is append mode and persists across runs, so the needle
+    // counts below are run-scoped deltas, not absolutes.
+    const int queuedBefore = logNeedleCount("session panel: queued rename s002-1");
+    const int busyBefore = logNeedleCount("session panel: rename skipped (busy)");
+    if (openSessionMenu(yB) < 0)
+        fail("S27: session menu did not open");
+    if (clickMenuItem("Rename", yB) < 0)
+        fail("S27: Rename item not rendered");
+    idle(2);
+    if (!g_state.sessionPanel.renameActive)
+        fail("S27: rename box did not open on the non-active row");
+    typeAll("New title");
+    pressKey(ImGuiKey_Enter);
+    idle(1);
+    // The queued Rename must carry the NON-ACTIVE row's id (s002-1), not the
+    // active session's (s001-0).
+    checkAction(SessionActionType::Rename, "s002-1", "S27 non-active rename");
+    if (g_state.sessionPanel.renameActive)
+        fail("S27: rename box stayed open after Enter");
+    if (logNeedleCount("session panel: queued rename s002-1") != queuedBefore + 1)
+        fail("S27: 'queued rename' log line missing");
+
+    // Busy path: Enter while busy defers (logs, queues nothing, box open).
+    g_state.readyStatus = false;
+    idle(1);
+    if (openSessionMenu(yB) < 0)
+        fail("S27: session menu did not open while busy");
+    if (clickMenuItem("Rename", yB) < 0)
+        fail("S27: Rename item not rendered while busy");
+    idle(2);
+    typeAll("Busy title");
+    pressKey(ImGuiKey_Enter);
+    idle(1);
+    if (actionCount() != 0)
+        fail("S27: rename queued while busy (should be deferred)");
+    if (logNeedleCount("session panel: rename skipped (busy)") != busyBefore + 1)
+        fail("S27: 'rename skipped (busy)' log line missing");
+    if (!g_state.sessionPanel.renameActive)
+        fail("S27: busy Enter closed the rename box (box must stay open)");
+    // No flush-after-ready arm here: Enter deactivates the EnterReturnsTrue
+    // rename input (so a flush Enter would land nowhere); the happy path
+    // above already covers submission once ready.
+}
+
 } // namespace
 
 // harness:
@@ -1601,6 +2103,12 @@ int main() {
     scenario22_empty_snapshot();
     scenario23_log_lines();
     scenario24_input_group_geometry();
+
+    scenario28_tui_popup_menu();
+
+    scenario25_rename_retarget();
+    scenario26_popup_closes_with_row();
+    scenario27_rename_from_non_active_row();
 
     harnessShutdown();
     std::printf("OK: all session-filter scenarios passed (%d frames)\n", g_frames);

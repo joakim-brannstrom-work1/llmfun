@@ -545,7 +545,9 @@ ChildResult runChild(const char* mode) {
         }
         const auto remainingMs =
             std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
-        struct pollfd pfd{errPipe[0], POLLIN, 0};
+        struct pollfd pfd {
+            errPipe[0], POLLIN, 0
+        };
         const int pr = poll(&pfd, 1, static_cast<int>(remainingMs));
         if (pr < 0) {
             if (errno == EINTR)

@@ -215,14 +215,15 @@ struct ChatTabSessionPanel {
     std::string activeId;               // active session id from the snapshot
     std::deque<SessionAction> actions;  // UI -> D queue
 
-    std::array<char, 128> renameBuf = {}; // rename input; init on row change or
-                                          // toggle-open, never per frame
+    std::array<char, 256> renameBuf = {}; // rename input; init on row change or
+                                          // retarget, never per frame
     bool renameActive{false};             // rename input visible
-    std::string renameRowId;              // row renameBuf was initialized for
+    std::string renameRowId;              // binding row for the rename box
     bool renameFocus{false};              // focus the rename input on the next frame
+    bool renameHadFocus{false};          // the rename input was keyboard-focused last
+                                         // frame; arms the focus-loss terminate branch
     int renameSeq{0};                     // bumped on each toggle-open; keeps the
                                           // InputText state fresh per open
-    std::string pendingDeleteId;          // two-step delete state
     std::string pendingSelectId;          // queued switch while busy; single
                                           // slot, last click wins; set by the busy
                                           // row-click branch, flushed as an ordinary
