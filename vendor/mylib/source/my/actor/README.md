@@ -107,6 +107,27 @@ What is checked where:
 | `dynSend` / `dynRequest` / `dynDelayedSend` | none |
 | `sendExit`, `linkTo`, `monitor`, ... | address validity only (fixed system messages) |
 
+### Payload shape
+
+A payload is type-erased into a `Variant`, so it is stored as follows: the
+argument value itself for a single-argument message, a `Tuple` of the
+arguments for several, and an empty tuple for none. A reply is always one
+value, stored as itself — a method returning `Tuple!(...)` stores that tuple,
+which the `.then` handler can take as one tuple parameter or as several.
+
+The unwrapped single argument is what lets a payload struct with
+`const`/`immutable` members travel — `Variant(Tuple!T)` cannot be instantiated
+for such a struct, because Phobos's tuple branch assigns the element and D
+forbids assigning it.
+
+Receiving handlers accept both the value form and a single-element `Tuple` box
+(`receive((T v) {...})` and a hand-built `Variant(Tuple!T)`). Both are valid
+shapes: the box is what a multi-argument payload carries, and a hand-built
+message may use it for one argument too. The framework itself does not wrap a
+single argument. Every payload type must be copy-constructible;
+`@disable this(this)` types are rejected at compile time with an explicit
+message.
+
 ## Repeating self-tick
 
 An actor can have one repeating self-tick: at every interval the shell
@@ -164,6 +185,27 @@ timeout — the channel's default is `SysTime.max` (`infTimeout()`); pass
 A handler may defer its reply: returning `RequestResult!(T)` that holds a
 `Promise!T` answers the requester when the promise is delivered — see the
 flow-control actor in `utility/limiter.d`.
+
+### Reply payload shape
+
+A reply carries the returned value itself: `int total()` answers with a
+`Variant(int)`, and `Tuple!(int, string) pair()` answers with a `Variant` of
+that tuple. The framework does not wrap a reply in a single-element `Tuple`
+(it did before the payload change of 2026-10-19).
+
+`.then` handlers accept both shapes, so `(int v)` and `(Tuple!int t)` keep
+working. Code that inspects `Reply.data` itself must use the value type:
+
+```d
+assert(reply.data.get!int == 42);
+// assert(reply.data.get!(Tuple!int) == Tuple!int(42));  // VariantException: not the stored type
+```
+
+`Msg` payloads built by hand follow the same rule: the value itself for one
+argument, `Tuple!Args` for several. A single-element box is accepted on the
+receiving side as well; a payload that matches neither raises `PayloadMismatch`
+(dispatch is keyed by method name + parameter types, so that indicates a
+malformed message, not a race).
 
 ## Hooks
 
