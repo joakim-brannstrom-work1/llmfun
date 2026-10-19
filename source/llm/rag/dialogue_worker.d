@@ -31,24 +31,32 @@ import llm.rag.rag : Document, Origin, Topic, addToDatabase;
 import llm.session.types : SessionId, isValidId;
 import llm.summary_agent : stripFences;
 
-/// A single evicted dialogue episode to be indexed verbatim.
-///
-/// `topicName` is the fully-encoded Topic name (built by DialogueIndex via the episode codec); the worker uses it directly as the Document origin, so it is never parsed or re-encoded here.
+// A single evicted dialogue episode to be indexed verbatim.
+//
+// `topicName` is the fully-encoded Topic name (built by DialogueIndex via the
+// episode codec); the worker uses it directly as the Document origin, so it is
+// never parsed or re-encoded here.
 struct DiEpisode {
     string topicName;
     string text;
     long turnEnd;
 }
 
-/// One compression checkpoint's worth of episodes for a single session.
-///
-/// `episodes` ownership transfers with the message: the worker reads the buffer asynchronously, so the sender must not retain or mutate it after sending. Mutable array on purpose -- mylib's Channel boxes payloads in `Variant(Tuple!...)`, and D forbids the struct assignment that storing a `Tuple` of a struct with `immutable` members requires. The strings are `char[]` (already immutable) and the worker dup's what it needs.
+// One compression checkpoint's worth of episodes for a single session.
+//
+// `episodes` ownership transfers with the message: the worker reads the buffer
+// asynchronously, so the sender must not retain or mutate it after sending.
+// The buffer is built fresh for the send (and the worker dup's what it needs),
+// so the transfer is a convention between the two call sites, not enforced by
+// the type.
 struct DiJob {
     string sessionId;
     DiEpisode[] episodes;
 }
 
-/// Drain request: the reply target carries a gate; waiters pause on `ScopedActor.receiveTimeout` and close the gate when they stop waiting. A closed gate means the reply is skipped.
+// Drain request: the reply target carries a gate; waiters pause on
+// `ScopedActor.receiveTimeout` and close the gate when they stop waiting. A
+// closed gate means the reply is skipped.
 struct DiDrain {
     WeakAddress replyTo;
     CompletionGate gate;
@@ -69,14 +77,20 @@ struct DiDrained {
     bool deadlineHit;
 }
 
-/// Sent to the owner when the worker cannot create its embedder. Indexing is then disabled for the process lifetime (known hole, no recovery); the worker still answers DiDrain so disposal never hangs.
+// Sent to the owner when the worker cannot create its embedder. Indexing is
+// then disabled for the process lifetime (known hole, no recovery); the worker
+// still answers DiDrain so disposal never hangs.
 struct DiDegraded {
     immutable string reason;
 }
 
-// Reasoning protocol: RiJob in -> per-job detached SummarizerActor (LLM call OFF the mailbox, dedicated timeout) -> RiRecord / RiDone back -> indexed verbatim into the session DB (kind r_).
+// Reasoning protocol: RiJob in -> per-job detached SummarizerActor (LLM call
+// OFF the mailbox, dedicated timeout) -> RiRecord / RiDone back -> indexed
+// verbatim into the session DB (kind r_).
 
-/// One eviction's pre-formatted, budget-capped trace (built by ReasoningIndex.onCheckpoint). All value types; traceText dup'd (DiEpisode discipline).
+// One eviction's pre-formatted, budget-capped trace (built by
+// ReasoningIndex.onCheckpoint). All value types; traceText dup'd (DiEpisode
+// discipline).
 struct RiJob {
     string sessionId;
     string traceText;
@@ -96,19 +110,39 @@ struct RiDone {
     string reason;
 }
 
-/// DI seam (mirrors EmbedderFactory): null = real dedicated-config LlmRequester call; a test fake may sleep to prove off-mailbox. The seam is a function pointer, not a `string delegate(...)`: a plain (unshared) delegate carries a hidden context pointer, so it cannot cross into the actor via `spawn` at all (message values must not alias sender state). A function pointer (the EmbedderFactory shape this seam mirrors) has no context pointer and is spawn-legal; test fakes are module-scope functions, and null keeps the "real LlmRequester" meaning.
+// DI seam (mirrors EmbedderFactory): null = real dedicated-config LlmRequester
+// call; a test fake may sleep to prove off-mailbox. The seam is a function
+// pointer, not a `string delegate(...)`: a plain (unshared) delegate carries a
+// hidden context pointer, so it cannot cross into the actor via `spawn` at all
+// (message values must not alias sender state). A function pointer (the
+// EmbedderFactory shape this seam mirrors) has no context pointer and is
+// spawn-legal; test fakes are module-scope functions, and null keeps the "real
+// LlmRequester" meaning.
 alias SummarizerFn = string function(string prompt, string traceText);
 
 // Dedicated budget: NEVER inherits the summary model's timeout chain (unbounded when timeoutSeconds unset).
 immutable int ReasoningTimeoutS = 300;
 immutable int ReasoningMaxTokens = 512;
 
-// The bounded drain deadline (the summarizer's dedicated timeout plus 30s of slack). Production default: a DiDrain carrying no override makes the worker wait this long for in-flight completions before finalizing. Unit tests exercise the deadline path in seconds via the per-drain DiDrain.budget override -- the budget travels in the message, so no cross-thread mutable global is involved. The budget override exists because hard-coding the sum in the drain handler would be infeasible to test at 330s.
+// The bounded drain deadline (the summarizer's dedicated timeout plus 30s of
+// slack). Production default: a DiDrain carrying no override makes the worker
+// wait this long for in-flight completions before finalizing. Unit tests
+// exercise the deadline path in seconds via the per-drain DiDrain.budget
+// override -- the budget travels in the message, so no cross-thread mutable
+// global is involved. The budget override exists because hard-coding the sum
+// in the drain handler would be infeasible to test at 330s.
 Duration ReasoningDrainBudget = (ReasoningTimeoutS + 30).dur!"seconds";
 
-/// Completion delivery gate (single protocol: lockedOpen / unlock / close; no raw field access). The waiter holds `open_` while its target is provably not torn down; the closer runs before any teardown and takes the same mutex as the delivery path, so a late completion either delivers or skips -- never both.
-///
-/// Delivery inside the locked section must be NON-BLOCKING: the target must be an UNBOUNDED mailbox (plain `sys.spawn`, never `spawnBounded`) -- a bounded, full mailbox drops the completion silently, and a blocking send from a non-actor sender would stall the closer in close().
+// Completion delivery gate (single protocol: lockedOpen / unlock / close; no
+// raw field access). The waiter holds `open_` while its target is provably not
+// torn down; the closer runs before any teardown and takes the same mutex as
+// the delivery path, so a late completion either delivers or skips -- never
+// both.
+//
+// Delivery inside the locked section must be NON-BLOCKING: the target must be
+// an UNBOUNDED mailbox (plain `sys.spawn`, never `spawnBounded`) -- a bounded,
+// full mailbox drops the completion silently, and a blocking send from a
+// non-actor sender would stall the closer in close().
 final class CompletionGate {
     private Mutex mutex_;
     private bool open_ = true;
@@ -139,7 +173,9 @@ final class CompletionGate {
     }
 }
 
-/// One-shot reasoning run (off the mailbox): the ONLY mailbox contact is the ONE gate-guarded completion send; all exceptions are caught internally (an escaping Error terminates the process).
+// One-shot reasoning run (off the mailbox): the ONLY mailbox contact is the
+// ONE gate-guarded completion send; all exceptions are caught internally (an
+// escaping Error terminates the process).
 private void runSummarizer(const SummaryModelConfig* cfg, string prompt, string traceText,
         string topicName, SummarizerFn fn, CompletionGate gate, WeakAddress worker) {
     string raw;
@@ -190,7 +226,9 @@ private void runSummarizer(const SummaryModelConfig* cfg, string prompt, string 
     }
 }
 
-/// One-shot summarizer: no public methods -- after onSpawn the actor self-terminates via the empty-behavior rule. Completion is delivered under the gate; a closed gate skips without touching the worker's address.
+// One-shot summarizer: no public methods -- after onSpawn the actor
+// self-terminates via the empty-behavior rule. Completion is delivered under
+// the gate; a closed gate skips without touching the worker's address.
 final class SummarizerActor {
     private {
         SummaryModelConfig cfg_;
@@ -218,10 +256,10 @@ final class SummarizerActor {
     }
 }
 
-/// The compile-checked send surface for DialogueWorkerActor
-//(Channel!DialogueWorkerAPI). The by-name deadline self-message
-//(drainDeadline) is deliberately NOT here: the Channel surface is the external
-//protocol, while the deadline is an internal scheduling ticket.
+// The compile-checked send surface for DialogueWorkerActor
+// (Channel!DialogueWorkerAPI). The by-name deadline self-message
+// (drainDeadline) is deliberately NOT here: the Channel surface is the
+// external protocol, while the deadline is an internal scheduling ticket.
 interface DialogueWorkerAPI {
     void diJob(DiJob job);
     void riJob(RiJob job);
@@ -230,12 +268,12 @@ interface DialogueWorkerAPI {
     void diDrain(DiDrain drain);
 }
 
-/// The dialogue worker actor: per-session WAL databases on an actor mailbox.
-//The embedder is created on spawn, on the actor's own thread (never shared);
-//riJob spawns a DETACHED SummarizerActor whose LLM call runs OFF the mailbox
-//and whose completion is delivered through the worker's gate; drain replies
-//are gate-guarded per waiter, and the worker keeps serving after a drain
-//(later drains re-checkpoint and re-close).
+// The dialogue worker actor: per-session WAL databases on an actor mailbox.
+// The embedder is created on spawn, on the actor's own thread (never shared);
+// riJob spawns a DETACHED SummarizerActor whose LLM call runs OFF the mailbox
+// and whose completion is delivered through the worker's gate; drain replies
+// are gate-guarded per waiter, and the worker keeps serving after a drain
+// (later drains re-checkpoint and re-close).
 final class DialogueWorkerActor : DialogueWorkerAPI {
     /// One drain request's reply target + its gate.
     private struct DrainWaiter {
@@ -243,7 +281,8 @@ final class DialogueWorkerActor : DialogueWorkerAPI {
         CompletionGate gate;
     }
 
-    // Ctor-stored config (no I/O, no sends -- the ctor runs on the caller's thread; the actor has no address yet).
+    // Ctor-stored config (no I/O, no sends -- the ctor runs on the caller's
+    // thread; the actor has no address yet).
     private {
         System* sys_;
         WeakAddress owner_; // supervisor/agent or scoped test admin; empty = skip the degraded notice
@@ -256,7 +295,8 @@ final class DialogueWorkerActor : DialogueWorkerAPI {
         SummarizerFn summarizerFn_;
     }
 
-    // Worker state: only this mailbox reads or writes it; the detached summarizers share no state with it.
+    // Worker state: only this mailbox reads or writes it; the detached
+    // summarizers share no state with it.
     private {
         WeakAddress self_;
         CompletionGate gate_;
@@ -292,7 +332,10 @@ final class DialogueWorkerActor : DialogueWorkerAPI {
         self_ = self.address();
         gate_ = new CompletionGate;
         try {
-            // Create our OWN embedder on this thread. There is NO shared embedder between this worker and any other thread. Tests inject a factory (embedderFactory_ != null); production goes through the registry.
+            // Create our OWN embedder on this thread. There is NO shared
+            // embedder between this worker and any other thread. Tests inject
+            // a factory (embedderFactory_ != null); production goes through
+            // the registry.
             try {
                 embedder_ = embedderFactory_ is null ? createEmbedder(embedConfig_) : embedderFactory_(
                         embedConfig_);
@@ -314,10 +357,16 @@ final class DialogueWorkerActor : DialogueWorkerAPI {
 
     void onExit(ExitMsg _) {
         exited_ = true;
-        // First action: close the worker-side gate under the same mutex as the summarizer's delivery path, so a late completion either delivers or skips -- never both.
+        // First action: close the worker-side gate under the same mutex as the
+        // summarizer's delivery path, so a late completion either delivers or
+        // skips -- never both.
         if (gate_ !is null)
             gate_.close();
-        // Destroy any remaining handles WITHOUT checkpoint (known loss window): WAL sidecars, if any, are recovered by SQLite on the next read-write open. Every handler early-returns on exited_ from here on -- no ensureDb reopen, no embedder call, no finalize during shutdown.
+        // Destroy any remaining handles WITHOUT checkpoint (known loss
+        // window): WAL sidecars, if any, are recovered by SQLite on the next
+        // read-write open. Every handler early-returns on exited_ from here on
+        // -- no ensureDb reopen, no embedder call, no finalize during
+        // shutdown.
         foreach (db; dbs_.byKeyValue) {
             db.value.destroy;
         }
@@ -325,7 +374,8 @@ final class DialogueWorkerActor : DialogueWorkerAPI {
     }
 
     void onException(Exception e) {
-        // Shell-level exception (dispatch plumbing outside the handler bodies): log-only -- the actor survives and the gate stays valid.
+        // Shell-level exception (dispatch plumbing outside the handler
+        // bodies): log-only -- the actor survives and the gate stays valid.
         logger.warningf("dialogue worker actor exception: %s", e.msg);
     }
 
@@ -369,7 +419,9 @@ final class DialogueWorkerActor : DialogueWorkerAPI {
                 sys_.spawn!(Config.detached, SummarizerActor)(summaryCfg_,
                         reasoningPrompt_, job.traceText, topicName, summarizerFn_, gate_, self_);
             } catch (Exception e) {
-                // A failed spawn must not leak the counter, or a later drain would burn its full budget waiting for a completion that will never arrive.
+                // A failed spawn must not leak the counter, or a later drain
+                // would burn its full budget waiting for a completion that
+                // will never arrive.
                 --outstandingThreads_;
                 logger.tracef("dialogue worker: reasoning spawn failed (topic '%s'): %s",
                         topicName, e.msg);
@@ -493,7 +545,8 @@ final class DialogueWorkerActor : DialogueWorkerAPI {
     // -- the DialogueIndex constructor mkdirRecurse's the directory, so this
     // only fails on an unwritable directory.
     private bool ensureDb(string sessionId) {
-        // Defense in depth: onCheckpoint validates, but the worker must never be a path-traversal vector for a future caller that bypasses it.
+        // Defense in depth: onCheckpoint validates, but the worker must never
+        // be a path-traversal vector for a future caller that bypasses it.
         if (sessionId.empty || !isValidId(SessionId(sessionId))) {
             logger.warningf("dialogue worker: refusing invalid session '%s'", sessionId);
             return false;
@@ -880,7 +933,11 @@ version (unittest) {
         }
     }
 
-    // Plain-function embedder factories for the actor tests: each test injects its own factory into the worker actor, so no test touches the process-wide "remote" factory slot (a parallel test swapping that slot while another test's worker was starting used to race the worker onto the wrong embedder - or onto a degraded one - for its whole life).
+    // Plain-function embedder factories for the actor tests: each test injects
+    // its own factory into the worker actor, so no test touches the
+    // process-wide "remote" factory slot (a parallel test swapping that slot
+    // while another test's worker was starting used to race the worker onto
+    // the wrong embedder - or onto a degraded one - for its whole life).
     private Embedder wkEmbedderFactory(EmbedConfig config) {
         return new WkEmbedder();
     }
@@ -941,14 +998,22 @@ version (unittest) {
         }
     }
 
-    // Reasoning-protocol test fakes. SummarizerFn is a plain function pointer (spawn-legal; a delegate carries a hidden context pointer and cannot cross into the actor), so the fakes are module-scope functions with no captures; per-test state goes in statics. Each fake is used by exactly one test below.
+    // Reasoning-protocol test fakes. SummarizerFn is a plain function pointer
+    // (spawn-legal; a delegate carries a hidden context pointer and cannot
+    // cross into the actor), so the fakes are module-scope functions with no
+    // captures; per-test state goes in statics. Each fake is used by exactly
+    // one test below.
 
     /// Fake: returns a fenced record body; the worker must strip the fences before indexing (stripFences), verbatim otherwise.
     private string riFixedFake(string prompt, string traceText) {
         return "```\nRI_FIXED_ALPHA\n```";
     }
 
-    /// Fake: sleeps 3 s before answering, proving the LLM call runs OFF the mailbox (dedicated timeout): a DiJob queued behind an in-flight RiJob must complete (its chunk FTS-visible) well before the sleep ends. Also used by the deadline test, where the 1.5 s budget is shorter than the sleep.
+    // Fake: sleeps 3 s before answering, proving the LLM call runs OFF the
+    // mailbox (dedicated timeout): a DiJob queued behind an in-flight RiJob
+    // must complete (its chunk FTS-visible) well before the sleep ends. Also
+    // used by the deadline test, where the 1.5 s budget is shorter than the
+    // sleep.
     private string riSlowFake(string prompt, string traceText) {
         import core.thread : Thread;
 
@@ -956,7 +1021,8 @@ version (unittest) {
         return "SLOWRI record body zeta";
     }
 
-    /// Fake: sleeps 800 ms (drain test: the record must land in the DB during the bounded drain wait, before the drain's checkpoint+close).
+    // Fake: sleeps 800 ms (drain test: the record must land in the DB during
+    // the bounded drain wait, before the drain's checkpoint+close).
     private string riDrainFake(string prompt, string traceText) {
         import core.thread : Thread;
 
@@ -964,19 +1030,23 @@ version (unittest) {
         return "DRAINJOIN_GAMMA";
     }
 
-    /// Fake: simulates an LLM failure -> the worker takes the RiDone path (no record indexed, warning logged, mailbox unblocked).
+    // Fake: simulates an LLM failure -> the worker takes the RiDone path (no
+    // record indexed, warning logged, mailbox unblocked).
     private string riThrowingFake(string prompt, string traceText) {
         throw new Exception("riThrowingFake: simulated LLM failure (test)");
     }
 
-    /// Fake: records that it was invoked (module-scope flag: a plain function pointer cannot capture state). Proves a degraded worker never spawns a summarizer thread (no LLM spend while degraded).
+    // Fake: records that it was invoked (module-scope flag: a plain function
+    // pointer cannot capture state). Proves a degraded worker never spawns a
+    // summarizer thread (no LLM spend while degraded).
     private bool riCountFakeInvoked;
     private string riCountFake(string prompt, string traceText) {
         riCountFakeInvoked = true;
         return "counted";
     }
 
-    /// Fake for the SummarizerActor gate smoke tests: returns a non-empty record body (fence-stripped verbatim by the run).
+    // Fake for the SummarizerActor gate smoke tests: returns a non-empty
+    // record body (fence-stripped verbatim by the run).
     private string riGateFake(string prompt, string traceText) {
         return "gate record body";
     }
@@ -992,8 +1062,9 @@ version (unittest) {
     private shared bool riRelSkipFlag;
     private shared bool riRelStaleFlag;
 
-    /// Fake: spins until the drain-while-pending test releases the flag, holding the RiRecord in flight so the
-    /// drain's pending path is observable; then returns a record body.
+    // Fake: spins until the drain-while-pending test releases the flag,
+    // holding the RiRecord in flight so the drain's pending path is
+    // observable; then returns a record body.
     private string riRelPendingFake(string prompt, string traceText) {
         import core.thread : Thread;
 
@@ -1002,8 +1073,9 @@ version (unittest) {
         return "PENDINGREL record body";
     }
 
-    /// Fake: spins until the early-finalize test releases the flag, then returns a record body; the completion
-    /// lands far before the armed deadline.
+    // Fake: spins until the early-finalize test releases the flag, then
+    // returns a record body; the completion lands far before the armed
+    // deadline.
     private string riRelEarlyFake(string prompt, string traceText) {
         import core.thread : Thread;
 
@@ -1012,8 +1084,8 @@ version (unittest) {
         return "EARLYREL record body";
     }
 
-    /// Fake: spins until the gate-skip test releases the flag, then returns a record body; the requester's gate is
-    /// already closed when it lands.
+    // Fake: spins until the gate-skip test releases the flag, then returns a
+    // record body; the requester's gate is already closed when it lands.
     private string riRelSkipFake(string prompt, string traceText) {
         import core.thread : Thread;
 
@@ -1022,8 +1094,10 @@ version (unittest) {
         return "SKIPREL record body";
     }
 
-    /// Fake: spins until the stale-deadline test releases the flag, then returns a record body; the block re-holds
-    /// it for a second record so the first drain's stale ticket fires while a newer drain is pending (seq guard).
+    // Fake: spins until the stale-deadline test releases the flag, then
+    // returns a record body; the block re-holds it for a second record so the
+    // first drain's stale ticket fires while a newer drain is pending (seq
+    // guard).
     private string riRelStaleFake(string prompt, string traceText) {
         import core.thread : Thread;
 
@@ -1173,7 +1247,11 @@ version (unittest) {
     }
 }
 
-/// A non-thread-safe embedder that mimics LlamaEmbedder: it writes the input into a per-instance pre-allocated scratch buffer, sleeps to force concurrent overlap, then reads it back. A SINGLE instance shared across threads would corrupt here; the per-thread instances produced by the worker pattern are isolated.
+// A non-thread-safe embedder that mimics LlamaEmbedder: it writes the input
+// into a per-instance pre-allocated scratch buffer, sleeps to force concurrent
+// overlap, then reads it back. A SINGLE instance shared across threads would
+// corrupt here; the per-thread instances produced by the worker pattern are
+// isolated.
 unittest {
     import std.format : format;
 
@@ -1194,7 +1272,12 @@ unittest {
         sys.shutdown();
     auto sup = scopedActor;
 
-    // Each worker embeds ITS OWN text with ITS OWN embedder and self-verifies the result against the input. A shared non-thread-safe instance would corrupt its scratch buffer under concurrent overlap and fail the check. The float[] result is checked inside the worker and only a bool verdict is carried back. Detached placement: isolation is the point of the test, pool occupancy must not be a factor.
+    // Each worker embeds ITS OWN text with ITS OWN embedder and self-verifies
+    // the result against the input. A shared non-thread-safe instance would
+    // corrupt its scratch buffer under concurrent overlap and fail the check.
+    // The float[] result is checked inside the worker and only a bool verdict
+    // is carried back. Detached placement: isolation is the point of the test,
+    // pool occupancy must not be a factor.
     foreach (i; 0 .. N) {
         auto a = sys.spawn!(Config.detached, NtsIsolationActor)(i, texts[i],
                 cfg, &ntsEmbedderFactory, sup.address());
@@ -1213,7 +1296,9 @@ unittest {
     assert(allOk, "an embedder instance was not isolated (cross-thread corruption detected)");
 }
 
-/// Worker integration: spawn the actor, feed it one DiJob, drain it (the mailbox is FIFO so the drain proves the job was processed), and verify the per-session DB was created and contains indexed chunks.
+// Worker integration: spawn the actor, feed it one DiJob, drain it (the
+// mailbox is FIFO so the drain proves the job was processed), and verify the
+// per-session DB was created and contains indexed chunks.
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse, tempDir;
     import std.path : buildPath;
@@ -1237,7 +1322,9 @@ unittest {
     auto ch = Channel!DialogueWorkerAPI(sys.spawn!DialogueWorkerActor(&sys, WeakAddress.init, tmpDir.workArea,
             cfg, ragCfg, &wkEmbedderFactory, SummaryModelConfig.init, "", SummarizerFn(null)), null);
 
-    // One episode. topicName is opaque to the worker (it never parses topic names - the codec round-trip is exercised by dialogue_index tests), but the session id must pass the worker's own validation.
+    // One episode. topicName is opaque to the worker (it never parses topic
+    // names - the codec round-trip is exercised by dialogue_index tests), but
+    // the session id must pass the worker's own validation.
     string sid = "20240101-120000-abcd";
     string topicName = "d_20240101_120000_abcd__t11_11__1000";
     string episodeText;
@@ -1275,7 +1362,10 @@ unittest {
     assert(hits[0].text.length > 0, "hit must carry the verbatim chunk text");
 }
 
-/// Identical episode text under two different topics must both be indexed. The topic name is the dedup salt, so the two salted identities differ; with content-only dedup the second episode would be dropped as a duplicate and only one source would exist.
+// Identical episode text under two different topics must both be indexed. The
+// topic name is the dedup salt, so the two salted identities differ; with
+// content-only dedup the second episode would be dropped as a duplicate and
+// only one source would exist.
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.conv : to;
@@ -1323,7 +1413,10 @@ unittest {
                 db.getSources().length));
 }
 
-/// A turn split across two compressions re-arrives under the same topic. The worker merges the existing episode text with the new piece (instead of replacing it): after both jobs, one source holds "old\nnew" verbatim and both pieces are text-searchable.
+// A turn split across two compressions re-arrives under the same topic. The
+// worker merges the existing episode text with the new piece (instead of
+// replacing it): after both jobs, one source holds "old\nnew" verbatim and
+// both pieces are text-searchable.
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.format : format;
@@ -1383,7 +1476,9 @@ unittest {
     assert(h2 !is null && h2.length >= 1, "new piece not text-searchable after the merge");
 }
 
-/// Database.sourceText reconstructs a multi-chunk source exactly - the leading-overlap stripping removes the sliding-window overlap without duplicating or dropping any text.
+// Database.sourceText reconstructs a multi-chunk source exactly - the
+// leading-overlap stripping removes the sliding-window overlap without
+// duplicating or dropping any text.
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.conv : to;
@@ -1440,7 +1535,9 @@ unittest {
             "sourceText must round-trip the original text exactly (no duplicated overlap, no lost text)");
 }
 
-/// A pre-existing source with no chunks (empty reconstruction) must not poison the merge - the plain piece is indexed, replacing the empty source (one source, no throw out of the job).
+// A pre-existing source with no chunks (empty reconstruction) must not poison
+// the merge - the plain piece is indexed, replacing the empty source (one
+// source, no throw out of the job).
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.format : format;
@@ -1493,7 +1590,10 @@ unittest {
     assert(h !is null && h.length >= 1, "the plain piece was not indexed");
 }
 
-/// Two back-to-back jobs for one session (the second arriving well inside the old 1 s coalescing window) must BOTH be text-searchable after the drain - every job that committed chunks rebuilds the FTS index itself, and the drain no longer flushes any deferred rebuilds.
+// Two back-to-back jobs for one session (the second arriving well inside the
+// old 1 s coalescing window) must BOTH be text-searchable after the drain -
+// every job that committed chunks rebuilds the FTS index itself, and the drain
+// no longer flushes any deferred rebuilds.
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.format : format;
@@ -1543,14 +1643,25 @@ unittest {
             "job 2 token not text-searchable (per-job rebuild missing)");
 }
 
-/// Result carried back from the concurrent read-only reader (WAL test) to the test's scoped receiver. A Database cannot cross the actor boundary, so the reader reports a verdict: the committed chunk count it observed and any lock/validity errors.
+// Result carried back from the concurrent read-only reader (WAL test) to the
+// test's scoped receiver. A Database cannot cross the actor boundary, so the
+// reader reports a verdict: the committed chunk count it observed and any
+// lock/validity errors.
 private struct WkRdResult {
     long count; // committed chunk count observed (-1 = never read a valid count)
     int errors; // lock/validity errors hit while polling
     bool ready; // true = handshake (read-only connection open), false = final verdict
 }
 
-/// Concurrent read-only reader (WAL test) as an actor. Opens the session DB file READ-ONLY while the worker holds its WAL write connection, and polls (50 ms backoff) the committed chunk count until it observes the worker's second commit (count >= 4) or times out. It sends a `ready` handshake once its connection is open (so the test thread commits the second job while the reader is definitely open -- a true concurrent writer+reader overlap) and a final `ready=false` verdict at the end. Runs on its own detached thread; the constructor stores only, `run` does the blocking work and reports the verdicts to `outAddr`.
+// Concurrent read-only reader (WAL test) as an actor. Opens the session DB
+// file READ-ONLY while the worker holds its WAL write connection, and polls
+// (50 ms backoff) the committed chunk count until it observes the worker's
+// second commit (count >= 4) or times out. It sends a `ready` handshake once
+// its connection is open (so the test thread commits the second job while the
+// reader is definitely open -- a true concurrent writer+reader overlap) and a
+// final `ready=false` verdict at the end. Runs on its own detached thread; the
+// constructor stores only, `run` does the blocking work and reports the
+// verdicts to `outAddr`.
 private final class ReaderProbeActor {
     private {
         string dbPath_;
@@ -1566,7 +1677,9 @@ private final class ReaderProbeActor {
         import core.thread : Thread;
         import std.string : indexOf;
 
-        // Step 1: open the DB read-only. openDatabase(readOnly) returns None immediately when the file does not exist yet (no 5 s retry), so poll until the worker has created the file + schema.
+        // Step 1: open the DB read-only. openDatabase(readOnly) returns None
+        // immediately when the file does not exist yet (no 5 s retry), so poll
+        // until the worker has created the file + schema.
         Database db = Database.init;
         bool opened = false;
         foreach (i; 0 .. 300) {
@@ -1579,7 +1692,9 @@ private final class ReaderProbeActor {
             Thread.sleep(50.dur!"msecs"); // poll backoff
         }
 
-        // Handshake: the read-only connection is open (or we give up below). Let the test thread commit the second job while we hold the connection open, so the reader and writer genuinely coexist.
+        // Handshake: the read-only connection is open (or we give up below).
+        // Let the test thread commit the second job while we hold the
+        // connection open, so the reader and writer genuinely coexist.
         dynSend(out_, "wkRd", WkRdResult(-1, 0, true));
 
         if (!opened) {
