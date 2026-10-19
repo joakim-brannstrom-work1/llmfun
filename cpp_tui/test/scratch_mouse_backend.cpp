@@ -4,6 +4,7 @@
 // minimal ImGui window with a button; reports io-level mouse events and hits.
 #include "imtui/imtui-impl-ncurses.h"
 #include "imtui/imtui.h"
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -14,7 +15,7 @@
 #include <termios.h>
 #include <unistd.h>
 
-static char g_slavepath[32];
+static std::array<char, 32> g_slavepath{};
 
 static int open_pty(void) {
     int m = open("/dev/ptmx", O_RDWR | O_NOCTTY);
@@ -29,8 +30,8 @@ static int open_pty(void) {
         close(m);
         return -1;
     } // TIOCSPTLCK
-    snprintf(g_slavepath, sizeof g_slavepath, "/dev/pts/%d", n);
-    int s = open(g_slavepath, O_RDWR | O_NOCTTY);
+    snprintf(g_slavepath.data(), g_slavepath.size(), "/dev/pts/%d", n);
+    int s = open(g_slavepath.data(), O_RDWR | O_NOCTTY);
     if (s < 0) {
         close(m);
         return -1;
@@ -53,11 +54,12 @@ static int open_pty(void) {
 
 static void feeder(int m) {
     // Task 8 clicktest timeline: clicks (SGR coalesced press+release) + \n pokes.
-    struct {
+    struct Step {
         int ms;
         const char* bytes;
         long n;
-    } steps[] = {
+    };
+    const std::array<Step, 7> steps = {{
         {600, "\x1b[<0;2;5M\x1b[<0;2;5m", 18}, // Alpha row (row5,col2)
         {400, "\n", 1},
         {400, "\x1b[<0;2;5M\x1b[<0;2;5m", 18},
@@ -65,9 +67,9 @@ static void feeder(int m) {
         {400, "\x1b[<0;3;2M\x1b[<0;3;2m", 18}, // Close button (row2,col3)
         {400, "\n", 1},
         {1000, "", 0},
-    };
+    }};
     usleep(300 * 1000);
-    for (unsigned i = 0; i < sizeof steps / sizeof steps[0]; i++) {
+    for (size_t i = 0; i < steps.size(); i++) {
         usleep(steps[i].ms * 1000);
         if (steps[i].n)
             (void)!write(m, steps[i].bytes, (size_t)steps[i].n);

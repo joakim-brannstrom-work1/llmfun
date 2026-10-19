@@ -9,6 +9,7 @@
 
 #include "imgui/imgui.h"
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -32,17 +33,17 @@ static void SetClipboardText(void*, const char* text) {
 }
 
 static const char* GetClipboardText(void*) {
-    static char buf[8192];
+    static std::array<char, 8192> buf{};
     const char* cmd = isWayland() ? "wl-paste -n" : "xclip -selection clipboard -o";
     FILE* f = popen(cmd, "r");
     if (f) {
-        if (fread(buf, 1, sizeof(buf) - 1, f) <= 0) {
+        if (fread(buf.data(), 1, buf.size() - 1, f) <= 0) {
             return "";
         }
-        buf[sizeof(buf) - 1] = '\0';
+        buf[buf.size() - 1] = '\0';
         pclose(f);
     }
-    return buf;
+    return buf.data();
 }
 
 namespace {

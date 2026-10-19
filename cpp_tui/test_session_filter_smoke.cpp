@@ -52,6 +52,7 @@ namespace ImStb {
 #include "tui.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <clocale>
 #include <cstdio>
@@ -885,7 +886,7 @@ void scenario9_a28_rename_closes() {
     if (!g_state.sessionPanel.renameActive)
         fail("S9: rename box did not open");
     {
-        std::string r(g_state.sessionPanel.renameBuf);
+        std::string r(g_state.sessionPanel.renameBuf.data());
         if (r != "Alpha refactor")
             fail("S9: rename buffer not initialized from the row title ('" + r + "')");
     }
@@ -938,7 +939,7 @@ void scenario10_esc_priority() {
     if (!g_state.sessionPanel.renameActive)
         fail("S10: rename box did not open");
     {
-        std::string r0(g_state.sessionPanel.renameBuf);
+        std::string r0(g_state.sessionPanel.renameBuf.data());
         if (r0 != "Alpha refactor")
             fail("S10: buffer right after open ('" + r0 + "')");
     }
@@ -953,7 +954,7 @@ void scenario10_esc_priority() {
     frame([](ImGuiIO& io) { io.AddInputCharacter('!'); });
     idle(1);
     {
-        std::string r(g_state.sessionPanel.renameBuf);
+        std::string r(g_state.sessionPanel.renameBuf.data());
         if (r != "!")
             fail("S10: typing did not replace the pre-selected title ('" + r + "')");
     }
@@ -1354,10 +1355,10 @@ void scenario23_log_lines() {
     if (!f)
         fail("S23: llmfun_ui_log.txt not found (logging off?)");
     std::string all;
-    char buf[4096];
+    std::array<char, 4096> buf{};
     size_t n;
-    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
-        all.append(buf, n);
+    while ((n = std::fread(buf.data(), 1, buf.size(), f)) > 0)
+        all.append(buf.data(), n);
     std::fclose(f);
     for (const char* needle :
          {"filter cleared (Escape)", "filter queued select", "pending select",
@@ -1457,10 +1458,11 @@ void scenario24_input_group_geometry() {
         // no glyphs, so presence+column is the regression catcher).
         const int groupW = g.nx - lpw - 1;     // rootPad 0, colSlack 1
         const int inputWidth = groupW - 9 - 1; // buttonWidth 9, ItemSpacing.x 1
-        const int rows[3] = {findRow(g, "Send"), findRow(g, "Prev"), findRow(g, "Next")};
-        const int expRows[3] = {sy + 1, sy + 2, sy + 3};
-        const char* names[3] = {"Send", "Prev", "Next"};
-        for (int k = 0; k < 3; ++k) {
+        const std::array<int, 3> rows = {findRow(g, "Send"), findRow(g, "Prev"),
+                                         findRow(g, "Next")};
+        const std::array<int, 3> expRows = {sy + 1, sy + 2, sy + 3};
+        const std::array<const char*, 3> names = {"Send", "Prev", "Next"};
+        for (size_t k = 0; k < rows.size(); ++k) {
             if (rows[k] != expRows[k])
                 fail(std::string(tag) + ": " + names[k] + " row " + std::to_string(rows[k]) +
                      " != expected " + std::to_string(expRows[k]));

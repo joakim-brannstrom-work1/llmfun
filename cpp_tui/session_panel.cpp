@@ -227,9 +227,10 @@ static void sameLineAfterButton(float buttonWidth, float labelWidth) {
 // Initialize the rename buffer from a title. A title that does not fit the
 // 128-byte buffer initializes the buffer empty - no silent truncation.
 static void initRenameBuf(ChatTabSessionPanel& panel, const std::string& title) {
-    const size_t bufSize = sizeof(panel.renameBuf);
+    const size_t bufSize = panel.renameBuf.size();
     if (title.size() < bufSize) {
-        std::strncpy(panel.renameBuf, title.c_str(), bufSize - 1);
+        // TODO: do not use strncpy
+        std::strncpy(panel.renameBuf.data(), title.c_str(), bufSize - 1);
         panel.renameBuf[bufSize - 1] = '\0';
     } else {
         panel.renameBuf[0] = '\0';
@@ -627,8 +628,8 @@ void renderTabChatSessionPanel(TuiState& state, Log& log) {
                 ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
                 const std::string inputId = "##session_rename_" + std::to_string(panel.renameSeq);
                 const bool enter =
-                    ImGui::InputText(inputId.c_str(), panel.renameBuf, sizeof(panel.renameBuf),
-                                     ImGuiInputTextFlags_EnterReturnsTrue);
+                    ImGui::InputText(inputId.c_str(), panel.renameBuf.data(),
+                                     panel.renameBuf.size(), ImGuiInputTextFlags_EnterReturnsTrue);
 
                 // The vendored InputText clears its own ActiveId on Escape
                 // (1.81 behavior, no EscapeClearsAll flag needed), so
@@ -645,7 +646,7 @@ void renderTabChatSessionPanel(TuiState& state, Log& log) {
                     renameEscClosedThisFrame = true;
                     log("session panel: rename cancelled\n");
                 } else if (enter) {
-                    const std::string newTitle(panel.renameBuf);
+                    const std::string newTitle(panel.renameBuf.data());
                     if (isWhitespaceOnly(newTitle)) {
                         // Empty titles are rejected here and again in D.
                         log("session panel: empty rename rejected\n");

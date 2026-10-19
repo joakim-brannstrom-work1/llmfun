@@ -215,31 +215,31 @@ struct ChatTabSessionPanel {
     std::string activeId;               // active session id from the snapshot
     std::deque<SessionAction> actions;  // UI -> D queue
 
-    char renameBuf[128] = {};            // rename input; init on row change or
-                                         // toggle-open, never per frame
-    bool renameActive{false};            // rename input visible
-    std::string renameRowId;             // row renameBuf was initialized for
-    bool renameFocus{false};             // focus the rename input on the next frame
-    int renameSeq{0};                    // bumped on each toggle-open; keeps the
-                                         // InputText state fresh per open
-    std::string pendingDeleteId;         // two-step delete state
-    std::string pendingSelectId;         // queued switch while busy; single
-                                         // slot, last click wins; set by the busy
-                                         // row-click branch, flushed as an ordinary
-                                         // Select on the first ready frame, cleared
-                                         // by tuiSetSessionList when stale
-    std::array<char, 64> filterBuf = {}; // filter query; whitespace = no
-                                         // filter; zero-init because TuiState's
-                                         // user-provided ctor skips value-init
-    int filterSeq{0};                    // bumped on every programmatic clear;
-                                         // suffixes the InputText id to force
-                                         // a fresh state
-    bool filterNonEmptyLastFrame{false}; // rendered buffer was a real query at
-                                         // the end of the last frame; lets the
-                                         // clear tell that 1.81's cancel_edit
-                                         // revert already emptied the buffer on
-                                         // the Esc frame (the revert runs in
-                                         // NewFrame, before this code)
+    std::array<char, 128> renameBuf = {}; // rename input; init on row change or
+                                          // toggle-open, never per frame
+    bool renameActive{false};             // rename input visible
+    std::string renameRowId;              // row renameBuf was initialized for
+    bool renameFocus{false};              // focus the rename input on the next frame
+    int renameSeq{0};                     // bumped on each toggle-open; keeps the
+                                          // InputText state fresh per open
+    std::string pendingDeleteId;          // two-step delete state
+    std::string pendingSelectId;          // queued switch while busy; single
+                                          // slot, last click wins; set by the busy
+                                          // row-click branch, flushed as an ordinary
+                                          // Select on the first ready frame, cleared
+                                          // by tuiSetSessionList when stale
+    std::array<char, 64> filterBuf = {};  // filter query; whitespace = no
+                                          // filter; zero-init because TuiState's
+                                          // user-provided ctor skips value-init
+    int filterSeq{0};                     // bumped on every programmatic clear;
+                                          // suffixes the InputText id to force
+                                          // a fresh state
+    bool filterNonEmptyLastFrame{false};  // rendered buffer was a real query at
+                                          // the end of the last frame; lets the
+                                          // clear tell that 1.81's cancel_edit
+                                          // revert already emptied the buffer on
+                                          // the Esc frame (the revert runs in
+                                          // NewFrame, before this code)
 };
 
 struct ChatTab {

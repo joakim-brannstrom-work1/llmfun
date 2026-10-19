@@ -17,6 +17,7 @@
 // 1.81-identical behavior, documented separately (real-app check).
 #include "imtui/imtui-impl-ncurses.h"
 #include "imtui/imtui.h"
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -27,7 +28,7 @@
 #include <termios.h>
 #include <unistd.h>
 
-static char g_slavepath[32];
+static std::array<char, 32> g_slavepath{};
 
 static int open_pty(void) {
     int m = open("/dev/ptmx", O_RDWR | O_NOCTTY);
@@ -42,8 +43,8 @@ static int open_pty(void) {
         close(m);
         return -1;
     } // TIOCSPTLCK = 0
-    snprintf(g_slavepath, sizeof g_slavepath, "/dev/pts/%d", n);
-    int s = open(g_slavepath, O_RDWR | O_NOCTTY);
+    snprintf(g_slavepath.data(), g_slavepath.size(), "/dev/pts/%d", n);
+    int s = open(g_slavepath.data(), O_RDWR | O_NOCTTY);
     if (s < 0) {
         close(m);
         return -1;
@@ -68,10 +69,14 @@ static void feeder(int m) {
         int ms;
         const char* keys;
     };
-    Plan plan[] = {{100, "hi\r"}, {400, "\x1b"}, {200, "\x1bOA\x1bOB\x1bOC\x1bOD"},
-                   {300, "\t"},   {200, "\x03"}, {200, ""}};
-    char b[65536];
-    for (unsigned i = 0; i < sizeof(plan) / sizeof(plan[0]); ++i) {
+    const std::array<Plan, 6> plan = {{{100, "hi\r"},
+                                       {400, "\x1b"},
+                                       {200, "\x1bOA\x1bOB\x1bOC\x1bOD"},
+                                       {300, "\t"},
+                                       {200, "\x03"},
+                                       {200, ""}}};
+    std::array<char, 65536> b{};
+    for (size_t i = 0; i < plan.size(); ++i) {
         usleep(plan[i].ms * 1000);
         if (plan[i].keys[0]) {
             ssize_t r = write(m, plan[i].keys, strlen(plan[i].keys));
@@ -80,7 +85,7 @@ static void feeder(int m) {
         // drain the master in 10ms slices so the tty buffer never fills
         // (the harness's DrawScreen escape-sequence stream goes here)
         for (int k = 0; k < plan[i].ms / 10 + 1; ++k) {
-            while (read(m, b, sizeof b) > 0) {
+            while (read(m, b.data(), b.size()) > 0) {
             }
             usleep(10 * 1000);
         }
@@ -102,7 +107,7 @@ int main() {
     if (pid == 0)
         feeder(m);
 
-    int s = open(g_slavepath, O_RDWR | O_NOCTTY);
+    int s = open(g_slavepath.data(), O_RDWR | O_NOCTTY);
     dup2(s, 0); // ncurses input
     dup2(s, 1); // ncurses output must be a tty (initscr); drained by feeder
     close(s);
@@ -166,12 +171,13 @@ int main() {
     };
     report("box6 runtime: ConfigInputTrickleEventQueue == true after Init", trickle_true);
     report("chars 'h' arrived", h_frame >= 0);
-    char buf[128];
-    snprintf(buf, sizeof buf, " (h frame %d, i frame %d)", h_frame, i_frame);
+    std::array<char, 128> buf{};
+    snprintf(buf.data(), buf.size(), " (h frame %d, i frame %d)", h_frame, i_frame);
     report("chars 'hi' incremental: 'i' not before 'h' (trickle batch)",
-           i_frame >= h_frame && i_frame >= 0, buf);
-    snprintf(buf, sizeof buf, " (enter frame %d)", enter_frame);
-    report("Enter fired, on a later frame than the 'i' char event", enter_frame > i_frame, buf);
+           i_frame >= h_frame && i_frame >= 0, buf.data());
+    snprintf(buf.data(), buf.size(), " (enter frame %d)", enter_frame);
+    report("Enter fired, on a later frame than the 'i' char event", enter_frame > i_frame,
+           buf.data());
     report("Escape fired", esc);
     report("Up/Down/Left/Right arrows fired", up && down && left && right);
     report("Tab fired", tab);

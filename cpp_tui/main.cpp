@@ -1,5 +1,6 @@
 #include "tui_api.h"
 
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -94,14 +95,14 @@ int main(int argc, char** argv) {
     // rows and the action poll can be exercised. Inbound strings are copied
     // by tuiSetSessionList, so the literals may go out of scope.
     if (maxFrames >= 0) {
-        SessionItem sessions[] = {
+        std::array<SessionItem, 3> sessions = {{
             {makeStr("20260815-100000-aaaa"), makeStr("Alpha session"),
              makeStr("first user preview"), 3, 1},
             {makeStr("20260815-100000-bbbb"), makeStr("Beta session"),
              makeStr("second user preview"), 5, 0},
             {makeStr("20260815-100000-cccc"), makeStr("Gamma session"), makeStr(""), 0, 0},
-        };
-        tuiSetSessionList(state, sessions, sizeof(sessions) / sizeof(sessions[0]));
+        }};
+        tuiSetSessionList(state, sessions.data(), sessions.size());
     }
 
     for (int i = 0; i < 300; ++i) {

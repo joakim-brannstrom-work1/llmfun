@@ -3,6 +3,7 @@
 // (llmfun_ui_log.txt) gets "session panel:" lines.
 #include "tui_api.h"
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -14,7 +15,7 @@
 #include <termios.h>
 #include <unistd.h>
 
-static char g_slavepath[32];
+static std::array<char, 32> g_slavepath{};
 
 static int open_pty(void) {
     int m = open("/dev/ptmx", O_RDWR | O_NOCTTY);
@@ -29,8 +30,8 @@ static int open_pty(void) {
         close(m);
         return -1;
     }
-    snprintf(g_slavepath, sizeof g_slavepath, "/dev/pts/%d", n);
-    int s = open(g_slavepath, O_RDWR | O_NOCTTY);
+    snprintf(g_slavepath.data(), g_slavepath.size(), "/dev/pts/%d", n);
+    int s = open(g_slavepath.data(), O_RDWR | O_NOCTTY);
     if (s < 0) {
         close(m);
         return -1;
@@ -52,11 +53,12 @@ static int open_pty(void) {
 }
 
 static void feeder(int m) {
-    struct {
+    struct Step {
         int ms;
         const char* bytes;
         long n;
-    } steps[] = {
+    };
+    const std::array<Step, 7> steps = {{
         {600, "\x1b[<0;2;8M\x1b[<0;2;8m",
          18}, // Beta row first (row8,col2, inactive -> queued select)
         {800, "\n", 1},
@@ -65,9 +67,9 @@ static void feeder(int m) {
         {400, "\x1b[<0;3;2M\x1b[<0;3;2m", 18}, // Close button (row2,col3)
         {400, "\n", 1},
         {1500, "", 0},
-    };
+    }};
     usleep(300 * 1000);
-    for (unsigned i = 0; i < sizeof steps / sizeof steps[0]; i++) {
+    for (size_t i = 0; i < steps.size(); i++) {
         usleep(steps[i].ms * 1000);
         if (steps[i].n)
             (void)!write(m, steps[i].bytes, (size_t)steps[i].n);
@@ -121,14 +123,14 @@ int main() {
     tuiSetStatusText(state, makeStr("Context: 0/0 tokens | Model: none | Ready"));
 
     // Same headless seed as the app's main.cpp.
-    SessionItem sessions[] = {
+    const std::array<SessionItem, 3> sessions = {{
         {makeStr("20260815-100000-aaaa"), makeStr("Alpha session"), makeStr("first user preview"),
          3, 1},
         {makeStr("20260815-100000-bbbb"), makeStr("Beta session"), makeStr("second user preview"),
          5, 0},
         {makeStr("20260815-100000-cccc"), makeStr("Gamma session"), makeStr(""), 0, 0},
-    };
-    tuiSetSessionList(state, sessions, sizeof(sessions) / sizeof(sessions[0]));
+    }};
+    tuiSetSessionList(state, sessions.data(), sessions.size());
 
     for (int frame = 0; frame < 600; frame++) {
         tuiBackendNewFrame(state);
@@ -142,14 +144,14 @@ int main() {
 
     FILE* f = fopen("llmfun_ui_log.txt", "r");
     long panelLines = 0, selects = 0, closeClicked = 0;
-    char line[512];
+    std::array<char, 512> line{};
     if (f) {
-        while (fgets(line, sizeof line, f)) {
-            if (strstr(line, "session panel:"))
+        while (fgets(line.data(), line.size(), f)) {
+            if (strstr(line.data(), "session panel:"))
                 panelLines++;
-            if (strstr(line, "queued select"))
+            if (strstr(line.data(), "queued select"))
                 selects++;
-            if (strstr(line, "session panel: close"))
+            if (strstr(line.data(), "session panel: close"))
                 closeClicked++;
         }
         fclose(f);

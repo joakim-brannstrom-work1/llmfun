@@ -41,6 +41,7 @@
 #include "imtui/imtui.h" // ImGui:: context bookkeeping points
 #include "tui_api.h"
 
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -512,8 +513,8 @@ std::string describeChild(const ChildResult& r) {
 // fails the suite instead of hanging it.
 ChildResult runChild(const char* mode) {
     ChildResult r;
-    int errPipe[2];
-    if (pipe(errPipe) != 0)
+    std::array<int, 2> errPipe{};
+    if (pipe(errPipe.data()) != 0)
         fail("pipe() failed");
     pid_t pid = fork();
     if (pid < 0) {
@@ -535,7 +536,7 @@ ChildResult runChild(const char* mode) {
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(kChildTimeoutSeconds);
     bool timedOut = false;
-    char buf[4096];
+    std::array<char, 4096> buf{};
     for (;;) {
         const auto now = std::chrono::steady_clock::now();
         if (now >= deadline) {
@@ -555,9 +556,9 @@ ChildResult runChild(const char* mode) {
             timedOut = true;
             break;
         }
-        const ssize_t n = read(errPipe[0], buf, sizeof(buf));
+        const ssize_t n = read(errPipe[0], buf.data(), buf.size());
         if (n > 0) {
-            r.errText.append(buf, static_cast<size_t>(n));
+            r.errText.append(buf.data(), static_cast<size_t>(n));
             continue;
         }
         if (n < 0 && errno == EINTR)

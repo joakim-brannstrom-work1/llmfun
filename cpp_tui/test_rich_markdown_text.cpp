@@ -67,6 +67,7 @@
 
 #include "tui.h" // llmfun::tui: TuiState, tuiRender, markdown text-mode lifecycle
 
+#include <array>
 #include <clocale>
 #include <cstdlib>
 #include <cstring>
@@ -329,9 +330,9 @@ void debugDump(llmfun::tui::TuiState& state, const char* phase) {
             const ImTui::TCell& c = g_screen.data[y * g_screen.nx + x];
             if (c.ch == 0 || c.ch == ' ')
                 continue;
-            char tmp[64];
-            ::snprintf(tmp, sizeof tmp, "%d:U+%04X(w%u) ", x, c.ch, c.chwidth);
-            cells += tmp;
+            std::array<char, 64> tmp{};
+            ::snprintf(tmp.data(), tmp.size(), "%d:U+%04X(w%u) ", x, c.ch, c.chwidth);
+            cells += tmp.data();
         }
         ::fprintf(f, "%2d |%s| cells: %s\n", y, cleanRow(y).c_str(), cells.c_str());
     }
@@ -348,9 +349,9 @@ struct ErrCapture {
     void start() {
         ::fflush(stderr);
         ::fflush(g_errOut);
-        int fds[2];
+        std::array<int, 2> fds{};
         saved = ::dup(2);
-        bool piped = ::pipe(fds) == 0;
+        bool piped = ::pipe(fds.data()) == 0;
         if (saved < 0 || !piped || ::dup2(fds[1], 2) != 2) {
             // Close everything opened so far so a partial failure leaks nothing.
             if (saved >= 0)
@@ -373,10 +374,10 @@ struct ErrCapture {
         ::fflush(stderr); // buffered libc writes -> the pipe
         ::close(2);
         std::string s;
-        char buf[4096];
+        std::array<char, 4096> buf;
         ssize_t n;
-        while ((n = ::read(pipeR, buf, sizeof buf)) > 0)
-            s.append(buf, (size_t)n);
+        while ((n = ::read(pipeR, buf.data(), buf.size())) > 0)
+            s.append(buf.data(), (size_t)n);
         ::close(pipeR);
         pipeR = -1;
         ::dup2(saved, 2);

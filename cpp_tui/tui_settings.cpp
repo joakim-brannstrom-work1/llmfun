@@ -9,6 +9,7 @@
 #include "tui.h"
 #endif
 
+#include <array>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -139,10 +140,10 @@ void loadTuiSettings(TuiSettings& settings, const std::string& iniFilename) {
     if (f == nullptr)
         return; // missing file: the struct keeps its values
     std::string contents;
-    char buf[256];
+    std::array<char, 256> buf;
     size_t n = 0;
-    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
-        contents.append(buf, n);
+    while ((n = std::fread(buf.data(), 1, buf.size(), f)) > 0)
+        contents.append(buf.data(), n);
     std::fclose(f);
 
     size_t start = 0;

@@ -2,6 +2,7 @@
 /// Reusable ImGui render helpers shared by the sidebar and chat cluster.
 #pragma once
 
+#include <array>
 #include <string>
 #include <string_view>
 
@@ -16,7 +17,7 @@ bool renderButton(const std::string& label, int width, bool active, ImVec4 color
 // Per-TU private copy (internal linkage): each including translation unit gets
 // its own `static` definition, so this adds no new exported symbol.
 static void renderSeparator(const std::string& prefix, std::string_view ch, int n, bool disabled) {
-    static char buf[256];
+    static std::array<char, 256> buf{};
     if (n > 255)
         n = 255;
     if (n < 0)
@@ -28,9 +29,9 @@ static void renderSeparator(const std::string& prefix, std::string_view ch, int 
     }
     buf[n] = 0;
     if (disabled) {
-        ImGui::TextDisabled("%s%s", prefix.c_str(), buf);
+        ImGui::TextDisabled("%s%s", prefix.c_str(), buf.data());
     } else {
-        ImGui::Text("%s%s", prefix.c_str(), buf);
+        ImGui::Text("%s%s", prefix.c_str(), buf.data());
     }
 }
 

@@ -25,6 +25,7 @@
 // Run headless from the repo root (scratch files land in the CWD):
 //   ./build/tui/test_settings
 
+#include <array>
 #include <cstdio>
 #include <string>
 
@@ -66,10 +67,10 @@ std::string readText() {
     if (f == nullptr)
         return "<open failed>";
     std::string out;
-    char buf[128];
+    std::array<char, 128> buf{};
     size_t n = 0;
-    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
-        out.append(buf, n);
+    while ((n = std::fread(buf.data(), 1, buf.size(), f)) > 0)
+        out.append(buf.data(), n);
     std::fclose(f);
     return out;
 }
@@ -206,11 +207,14 @@ int main() {
             int width;
             int height;
         };
-        const ClampCase cases[] = {
-            {"WindowWidth=0\n", 1, 0},           {"WindowWidth=-5\n", 1, 0},
-            {"WindowHeight=0\n", 0, 1},          {"WindowWidth=100000\n", 32767, 0},
-            {"WindowHeight=100000\n", 0, 32767}, {"WindowWidth=1\nWindowHeight=32767\n", 1, 32767},
-        };
+        const std::array<ClampCase, 6> cases = {{
+            {"WindowWidth=0\n", 1, 0},
+            {"WindowWidth=-5\n", 1, 0},
+            {"WindowHeight=0\n", 0, 1},
+            {"WindowWidth=100000\n", 32767, 0},
+            {"WindowHeight=100000\n", 0, 32767},
+            {"WindowWidth=1\nWindowHeight=32767\n", 1, 32767},
+        }};
         for (const ClampCase& c : cases) {
             writeText(c.text);
             TuiSettings s;
@@ -225,26 +229,26 @@ int main() {
 
     // font scale: in-range values accepted, the rest fall back
     {
-        const float accepted[] = {0.5f, 1.0f, 1.25f, 2.0f, 3.0f};
+        const std::array<float, 5> accepted = {0.5f, 1.0f, 1.25f, 2.0f, 3.0f};
         for (float want : accepted) {
-            char text[64];
-            std::snprintf(text, sizeof(text), "FontScaleMain=%.4f\n", want);
-            writeText(text);
+            std::array<char, 64> text{};
+            std::snprintf(text.data(), text.size(), "FontScaleMain=%.4f\n", want);
+            writeText(text.data());
             TuiSettings s;
             loadTuiSettings(s, kIniName);
             const bool ok = s.fontScaleMain == want;
             CHECK(ok);
             if (!ok)
-                std::printf("  (content \"%s\" -> %.4f)\n", text, s.fontScaleMain);
+                std::printf("  (content \"%s\" -> %.4f)\n", text.data(), s.fontScaleMain);
         }
     }
     {
         // NaN, inf, 1e40 (overflow to inf), 0, 0.4 and 4.0 all fall back to
         // the current value.
-        const char* rejected[] = {"FontScaleMain=nan\n",  "FontScaleMain=inf\n",
-                                  "FontScaleMain=-inf\n", "FontScaleMain=1e40\n",
-                                  "FontScaleMain=0\n",    "FontScaleMain=0.4\n",
-                                  "FontScaleMain=4\n"};
+        const std::array<const char*, 7> rejected = {"FontScaleMain=nan\n",  "FontScaleMain=inf\n",
+                                                     "FontScaleMain=-inf\n", "FontScaleMain=1e40\n",
+                                                     "FontScaleMain=0\n",    "FontScaleMain=0.4\n",
+                                                     "FontScaleMain=4\n"};
         for (const char* text : rejected) {
             writeText(text);
             TuiSettings s;
