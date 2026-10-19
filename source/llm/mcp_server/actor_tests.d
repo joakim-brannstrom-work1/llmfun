@@ -10,7 +10,6 @@ import logger = std.logger;
 import llm.config : LlmConfig, ToolFilter;
 import llm.mcp_server;
 import llm.mcp_server.transport : EOFException, Transport;
-import my.actor.msg : capture;
 import my.actor.system : ActorShell, makeAddress;
 import my.gc.refc : refCounted;
 
@@ -62,12 +61,9 @@ private ReadyReply pumpConfigure(Transport transport, ToolFilter filter, LlmConf
 
     auto clientShell = ActorShell(makeAddress);
     ReadyReply got;
-    static void onReady(ref Tuple!(ReadyReply*) ctx, ReadyReply r) {
-        *ctx[0] = r;
-    }
 
     auto chan = Channel!McpServerActor(serverShell.address, &clientShell);
-    chan.configure(filter, llmConf).capture(&got).then(&onReady);
+    chan.configure(filter, llmConf).then((ReadyReply r) { got = r; });
 
     foreach (_; 0 .. 8) {
         serverShell.process(Clock.currTime);
@@ -96,12 +92,9 @@ unittest {
 
     auto clientShell = ActorShell(makeAddress);
     ReadyReply got;
-    static void onReady(ref Tuple!(ReadyReply*) ctx, ReadyReply r) {
-        *ctx[0] = r;
-    }
 
     auto chan = Channel!McpServerActor(serverShell.address, &clientShell);
-    chan.configure(ToolFilter(), LlmConfig.init).capture(&got).then(&onReady);
+    chan.configure(ToolFilter(), LlmConfig.init).then((ReadyReply r) { got = r; });
 
     foreach (_; 0 .. 8) {
         serverShell.process(Clock.currTime);
@@ -429,13 +422,10 @@ unittest {
     LlmConfig llmConf;
 
     ReadyReply got;
-    static void onReady(ref Tuple!(ReadyReply*) ctx, ReadyReply r) {
-        *ctx[0] = r;
-    }
 
     auto clientShell = ActorShell(makeAddress);
     auto chan = Channel!McpServerActor(serverShell.address, &clientShell);
-    chan.configure(ToolFilter(), llmConf).capture(&got).then(&onReady);
+    chan.configure(ToolFilter(), llmConf).then((ReadyReply r) { got = r; });
     foreach (_; 0 .. 8) {
         serverShell.process(Clock.currTime);
         clientShell.process(Clock.currTime);
