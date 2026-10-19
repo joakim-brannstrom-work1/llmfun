@@ -164,7 +164,7 @@ unittest {
 
     import my.actor.common : ExitReason;
     import my.actor.mailbox : makeAddress;
-    import my.actor.msg : capture, infTimeout, sendExit;
+    import my.actor.msg : capture, infTimeout, sendExit, then;
     import my.actor.registration : implActor;
 
     interface IDing {
@@ -333,6 +333,22 @@ unittest {
         foreach (_; 0 .. 4)
             actorV.process(Clock.currTime);
         assert(t == 21, "zero-arg request/reply dispatched");
+
+        // a delegate handler needs no capture at all
+        int t2 = -1;
+        then(chan.total(), (int v) { t2 = v; });
+        foreach (_; 0 .. 4)
+            actorV.process(Clock.currTime);
+        assert(t2 == 21, "a capturing delegate handler is invoked");
+
+        // a delegate handler still receives a captured context when one is given
+        int t3 = -1;
+        chan.total().capture(&t3).then((ref Tuple!(int*) ctx, int v) {
+            *ctx[0] = v;
+        });
+        foreach (_; 0 .. 4)
+            actorV.process(Clock.currTime);
+        assert(t3 == 21, "a delegate handler also receives the captured context");
 
         sendExit(addr.weakRef, ExitReason.userShutdown); // shutdown = system message
         int guardV;

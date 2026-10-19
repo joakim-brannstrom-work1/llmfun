@@ -167,20 +167,44 @@ This is the preferred replacement for the pattern of re-arming a
 
 ## Requests and replies
 
-`chan.method(args)` on a non-void message returns a request chain:
+`chan.method(args)` on a non-void message returns a request chain. The reply
+handler may be a function, a function pointer, or a delegate:
 
 ```d
 import std.typecons : Tuple;
 
+// a shared function with per-request state: the captured pointer arrives as
+// the handler's leading (ref) parameter
+static void onTotal(ref Tuple!(int*) ctx, int v) {
+    *ctx[0] = v;
+}
+// a function without per-request state
+static void logTotal(int v) { /* ... */ }
+
 int sum = -1;
+chan.total().then(&logTotal);                  // function
+chan.total().then((int v) { sum = v; });       // delegate: captures what it uses
+chan.total().capture(&sum).then(&onTotal);     // function + captured context
 chan.total().capture(&sum).then((ref Tuple!(int*) ctx, int v) { *ctx[0] = v; });
 ```
 
-`capture` avoids the closure; without it, `.then((int v) { ... })` may capture.
+`capture` is how a shared function gets per-request state: the captured
+pointers arrive as the handler's first parameter, a tuple taken by `ref`, so
+the handler writes through them. Without a context parameter
+(`then((int v) { ... })`) the caller's locals are captured by the delegate
+itself.
+
 The handler runs later, on the requesting actor's context. Requests have a
 timeout — the channel's default is `SysTime.max` (`infTimeout()`); pass
 `timeout(...)` to bound it. A timeout is reported through the error path
 (`onError` with `SystemError.requestTimeout`).
+
+A delegate that closes over the caller's locals is GC-allocated, and the
+request chain keeps it alive until the reply arrives or the request times out.
+It must not be a delegate bound to a stack object (`&stackStruct.method`):
+nothing keeps that object alive, and no compiler check catches it here (DIP1000
+would, but it is not enabled). Functions and function pointers have no such
+question.
 
 A handler may defer its reply: returning `RequestResult!(T)` that holds a
 `Promise!T` answers the requester when the promise is delivered — see the
