@@ -523,12 +523,12 @@ class TextUserInterfaceActor : TUICommands {
             String_Free(err);
             return;
         }
-        logger.infof("TUI backend active: %s", backendKindName(tuiBackendActive(state)));
+        logger.infof("UI backend active: %s", backendKindName(tuiBackendActive(state)));
         auto n = tuiBackendNote();
         note = .toString(n);
         String_Free(n);
         if (!note.empty)
-            logger.info("TUI backend note: ", note);
+            logger.info("UI backend note: ", note);
         ui.setUiAsStdLogger;
         if (!note.empty)
             ui.setStatusText(note);
