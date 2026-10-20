@@ -1944,3 +1944,52 @@ unittest {
     // exercised E2E, where real tools take different times.
     logger.info("per-call tool times: ", d0, " / ", d1);
 }
+
+// Regression: agent-internal compressions (the requestCompression tool and the
+// automatic threshold path in runToCompletion) fired checkpoints with an empty
+// session id - setCompressionCheckpointSessionId was only ever called by
+// AgentApp.doCompress, after its own early-return gate - so the dialogue
+// indexer refused every such checkpoint and no per-session dialogue database
+// was ever created on disk. Agent.compress now stamps the id from the tool
+// context itself.
+unittest {
+    import std.array : replicate;
+    import std.file : write;
+    import std.format : format;
+    import std.path : buildPath;
+
+    import llm.chat : Role;
+    import llm.rag.dialogue_index : CompressionCheckpoint;
+    import llm.test_util : testArea;
+
+    auto tmpDir = testArea("agent_checkpoint_sid");
+    scope (exit)
+        tmpDir.cleanup;
+    write(buildPath(tmpDir, "SUMMARY.md"), "Summarize text.");
+    writeDefaultNudgeFiles(tmpDir);
+
+    auto llmConf = makeAgentTestConfig(tmpDir);
+    const sid = "20240101-120000-abcd";
+    llmConf.activeChatSessionId = sid;
+
+    auto agent = new CannedProcessAgent("checkpointsid", llmConf);
+    string[] seenSids;
+    agent.addCompressionCheckpointListener((const CompressionCheckpoint cp) {
+        seenSids ~= cp.sessionId;
+    });
+
+    // Seven messages: long enough to compress (length > 1 + KeepLast), with
+    // one candidate that far exceeds TokenBudget, so the forced compression
+    // evicts it. The summarizer requests fail fast (the test config never
+    // dials out), and a checkpoint still fires for that failed-chunks eviction.
+    agent.chat.add(Message(Role.user, true, "question", null));
+    foreach (i; 0 .. 6)
+        agent.chat.add(Message(Role.assistant, false, "x".replicate(20_000), null));
+
+    auto res = agent.compress(force: true);
+    assert(res.compressed, "forced compression must run");
+
+    assert(seenSids.length == 1, "exactly one checkpoint for a compression that evicts");
+    assert(seenSids[0] == sid,
+            format("checkpoint must carry the owning session id, got '%s'", seenSids[0]));
+}

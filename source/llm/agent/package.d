@@ -475,6 +475,17 @@ class Agent : IBasicAgent {
             toolCtx.clearAgentCompressionRequest;
             compressNudgeSent = false;
         }
+
+        // Stamp the owning session into any checkpoint this compression
+        // fires. The agent-internal compress paths (the requestCompression
+        // tool, the automatic threshold compression in runToCompletion) never
+        // went through AgentApp.doCompress, the only place that used to set
+        // the id, so their checkpoints carried an empty session id and the
+        // dialogue indexer refused every one of them - no session database
+        // was ever created. The tool context knows the owning session for
+        // the whole process lifetime, and pooled agents carry it in their
+        // own conf, so stamping here covers every compress path.
+        summary.setCheckpointSessionId(toolCtx.currentSessionId());
         // Prune scan: the intact pre-compression chat is the
         // usage corpus. Runs after the early-return gate, before summary.compress
         // rewrites the chat; summary text and assistant prose never count as usage.
@@ -534,7 +545,10 @@ Continue your work from where you left off.";
         return toolCtx;
     }
 
-    /// Set the session id stamped into each checkpoint event. Call sites that know the owning session (doCompress: activeSession.id) set it before compressing; pool callbacks set their own or leave "". The dialogue indexer refuses checkpoints with an empty or invalid sessionId.
+    // Set the session id stamped into each checkpoint event. Call sites that
+    // know the owning session (doCompress: activeSession.id) set it before
+    // compressing; pool callbacks set their own or leave "". The dialogue
+    // indexer refuses checkpoints with an empty or invalid sessionId.
     void setCompressionCheckpointSessionId(string sessionId) {
         summary.setCheckpointSessionId(sessionId);
     }
