@@ -520,7 +520,11 @@ Continue your work from where you left off.";
         return result;
     }
 
-    /// Register a listener for compression checkpoints. The seam is multicast: interested subsystems (currently the dialogue indexer) subscribe independently. A listener fires exactly once per compression that actually evicts verbatim content, and a throwing listener never breaks compression.
+    // Register a listener for compression checkpoints. The seam is multicast:
+    // interested subsystems (currently the dialogue indexer) subscribe
+    // independently. A listener fires exactly once per compression that
+    // actually evicts verbatim content, and a throwing listener never breaks
+    // compression.
     void addCompressionCheckpointListener(SummaryAgent.CheckpointListener listener) {
         summary.addCheckpointListener(listener);
     }
