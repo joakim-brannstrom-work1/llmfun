@@ -351,3 +351,54 @@ unittest {
     assert(abs(ravg.avg - 2.0) < 0.00001, ravg.avg.to!string);
     assert(ravg.measures.length == 10);
 }
+
+/// Convert a D tool name to its snake_case model-facing form.
+///
+/// Identity rule: a name with no uppercase ASCII letters is returned
+/// unchanged (already snake_case, kebab-case, empty; MCP external names
+/// pass through untouched).
+///
+/// Conversion (at least one uppercase ASCII letter): letters are
+/// lowercased and '_' is inserted
+/// - at every [lower|digit] -> [upper] transition (fooBar -> foo_bar),
+/// - inside a run of >= 2 uppercase letters, before the last uppercase
+///   when it is followed by a lowercase (listRAGDatabases ->
+///   list_rag_databases),
+/// - but never before a trailing uppercase run (md5RAG -> md5_rag),
+/// - and never at [upper] -> [digit] (HTTP2 -> http2).
+/// Existing '_' and '$' pass through verbatim (not collapsed). Boundaries
+/// are defined over ASCII classes only; non-ASCII bytes pass through
+/// verbatim (no boundary is inserted around them). The output charset has
+/// no uppercase, so a second application hits the identity rule
+/// (idempotent by construction).
+string toSnakeCase(string name) @safe pure nothrow {
+    import std.ascii : isUpper, isLower, isDigit, toLower;
+
+    bool hasUpper;
+    foreach (c; name) {
+        if (c.isUpper) {
+            hasUpper = true;
+            break;
+        }
+    }
+    if (!hasUpper)
+        return name;
+
+    string rval;
+    rval.reserve(name.length);
+    foreach (size_t i, char c; name) {
+        if (!c.isUpper) {
+            rval ~= c;
+            continue;
+        }
+        if (i > 0) {
+            immutable char prev = name[i - 1];
+            if (prev.isLower || prev.isDigit)
+                rval ~= "_";
+            else if (prev.isUpper && i + 1 < name.length && name[i + 1].isLower)
+                rval ~= "_";
+        }
+        rval ~= c.toLower;
+    }
+    return rval;
+}

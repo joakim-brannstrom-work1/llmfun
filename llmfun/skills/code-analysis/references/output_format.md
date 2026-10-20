@@ -36,13 +36,13 @@ Use this template when producing the analysis report at `plan/code_analysis.md`.
 
 ## File Integrity
 
-This section enables incremental analysis on subsequent runs. Compute `md5HashFile` for each source file and record the hash here.
+This section enables incremental analysis on subsequent runs. Compute `md5_hash_file` for each source file and record the hash here.
 
 | File | MD5 Hash |
 |------|----------|
 | [path] | [md5hex] |
 
-**Note**: On re-analysis, compare current `md5HashFile` results against this table to identify new, modified, and deleted files. Only re-analyze sections affected by changes.
+**Note**: On re-analysis, compare current `md5_hash_file` results against this table to identify new, modified, and deleted files. Only re-analyze sections affected by changes.
 
 ## Key Components
 

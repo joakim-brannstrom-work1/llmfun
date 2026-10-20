@@ -46,6 +46,7 @@ struct RegParam {
 
 struct RegFunction {
     string name;
+    string nameSnakeCase;
     string desc;
     RegParam[] params;
     ExecuteFuncResult function(Context, JSONValue) callback;
@@ -87,20 +88,26 @@ void addFunction(RegFunction f) {
             logger.warningf("Duplicate tool function '%s' registered, ignoring", f.name);
             return;
         }
+        if (!f.nameSnakeCase.empty
+            && registeredFunc.canFind!(fd => fd.nameSnakeCase == f.nameSnakeCase)) {
+            logger.warningf("Duplicate tool function (snake) '%s' registered, ignoring",
+                f.nameSnakeCase);
+            return;
+        }
         registeredFunc ~= cast(shared) f;
     });
 }
 
 // Filter the JSON tool descriptions array using ReFilter. Only tools whose name matches the filter are returned.
-JSONValue filterToolDescriptions(JSONValue allTools, ReFilter filter_) {
-    import std.algorithm : filter;
-
-    return JSONValue(allTools.array.filter!(a => filter_.match(a["function"]["name"].str)).array);
+// A filter matching nothing must render an empty list: an empty filtered
+// array is null, and descAllFunctions must not treat that as "use all".
+JSONValue filterToolDescriptions(RegFunction[] funcs, ReFilter filter_) {
+    return descAllFunctions(funcs.filter!(a => filter_.match(a.name)).array);
 }
 
 private ExecuteFuncResult executeFunc(Context ctx, string name, JSONValue args) nothrow {
     try {
-        foreach (func; getFunctions.filter!(a => a.name == name)) {
+        foreach (func; getFunctions.filter!(a => a.nameSnakeCase == name)) {
             auto rval = func.callback(ctx, args);
             logger.tracef("call %s with args %s -> %s", name, args, rval.msg);
             return rval;
@@ -118,24 +125,25 @@ private ExecuteFuncResult executeFunc(Context ctx, string name, JSONValue args) 
 // If the tool name does not match the filter, returns an error.
 ExecuteFuncResult executeFunc(Context ctx, string name, JSONValue args, ReFilter filter_) nothrow {
     try {
-        if (!filter_.match(name))
-            return ExecuteFuncResult(
-                    "error: tool '" ~ name ~ "' is not available to this agent", false);
+        foreach (func; getFunctions.filter!(a => a.nameSnakeCase == name)
+                .filter!(a => filter_.match(a.name))) {
+            return executeFunc(ctx, name, args);
+        }
     } catch (Exception e) {
         return ExecuteFuncResult("error: tool '" ~ name ~ "' is not available to this agent", false);
     }
-    return executeFunc(ctx, name, args);
+    return ExecuteFuncResult("error: tool '" ~ name ~ "' is not available to this agent", false);
 }
 
 // Returns: JSON following the OpenAI format
-JSONValue descAllFunctions() @safe {
+JSONValue descAllFunctions(RegFunction[] funcs) @safe {
     import std.algorithm : map, filter;
     import std.array : array, empty;
 
     JSONValue[] rval;
-    foreach (func; getFunctions) {
+    foreach (func; funcs) {
         JSONValue jfunc;
-        jfunc["name"] = func.name;
+        jfunc["name"] = func.nameSnakeCase;
         jfunc["description"] = func.desc;
 
         auto jparams = JSONValue.emptyObject;
@@ -172,6 +180,7 @@ JSONValue descAllFunctions() @safe {
 mixin template RegisterLlmFunctions() {
     shared static this() {
         import llm.tool_call : addFunction, RegFunction, Function, toParams, initParams;
+        import llm.utility : toSnakeCase;
         import std.array : empty;
         import std.json : JSONValue;
         import std.logger;
@@ -204,7 +213,8 @@ mixin template RegisterLlmFunctions() {
                             return ExecuteFuncResult(msg: params.errorMsg, success: false);
                         }
 
-                        addFunction(RegFunction(name: moduleMemberName, desc: funcDesc,
+                        addFunction(RegFunction(name: moduleMemberName,
+                                nameSnakeCase: toSnakeCase(moduleMemberName), desc: funcDesc,
                                 params: toParams!ParamsT, callback: &funcCallback));
                     }
                 }

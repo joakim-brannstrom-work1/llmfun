@@ -313,7 +313,7 @@ unittest {
     call["id"] = "call_1";
     call["type"] = "function";
     JSONValue fn;
-    fn["name"] = "taskDone";
+    fn["name"] = "task_done";
     fn["arguments"] = "{}";
     call["function"] = fn;
 
@@ -321,7 +321,7 @@ unittest {
     sd["taskDoneAnswer"] = JSONValue("The answer is 4.");
 
     app.agent_.chat.add(ToolMessage(null, JSONValue([call]), JSONValue.init, sd));
-    app.agent_.chat.add(ToolResponse("4", "call_1", "taskDone", true));
+    app.agent_.chat.add(ToolResponse("4", "call_1", "task_done", true));
 
     ProcessResult turn;
     turn.status = ProcessResult.Status.ok;
@@ -424,7 +424,7 @@ unittest {
     call["id"] = "call_1";
     call["type"] = "function";
     JSONValue fn;
-    fn["name"] = "taskDone";
+    fn["name"] = "task_done";
     fn["arguments"] = "{}";
     call["function"] = fn;
 
@@ -432,7 +432,7 @@ unittest {
     sd["taskDoneAnswer"] = JSONValue("The answer is 4.");
 
     app.agent_.chat.add(ToolMessage(null, JSONValue([call]), JSONValue.init, sd));
-    app.agent_.chat.add(ToolResponse("4", "call_1", "taskDone", true));
+    app.agent_.chat.add(ToolResponse("4", "call_1", "task_done", true));
 
     ProcessResult r;
     r.status = ProcessResult.Status.ok;
@@ -1642,27 +1642,28 @@ unittest {
     auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
 
     // 1. Predicate: the four arms, plus the two non-displayable Message cases
-    assert(isDisplayable(Chat.MessageT(Message(Role.assistant, false, "a", null))));
-    assert(isDisplayable(Chat.MessageT(Message(Role.user, true, "query", null))));
-    assert(!isDisplayable(Chat.MessageT(Message(Role.user, false, "nudge", null))));
-    assert(!isDisplayable(Chat.MessageT(Message(Role.system, false, "sys", null))));
+    assert(isDisplayable(Chat.MessageT(Message(Role.assistant, false, "a", null)), cfg));
+    assert(isDisplayable(Chat.MessageT(Message(Role.user, true, "query", null)), cfg));
+    assert(!isDisplayable(Chat.MessageT(Message(Role.user, false, "nudge", null)), cfg));
+    assert(!isDisplayable(Chat.MessageT(Message(Role.system, false, "sys", null)), cfg));
     JSONValue call;
     call["id"] = "c1";
     call["type"] = "function";
     JSONValue fn;
-    fn["name"] = "querySemantic";
+    fn["name"] = "query_semantic";
     fn["arguments"] = "{}";
     call["function"] = fn;
-    assert(isDisplayable(Chat.MessageT(ToolMessage(null, JSONValue([call])))));
-    assert(isDisplayable(Chat.MessageT(ToolResponse("ok", "c1", "querySemantic", true))));
-    assert(!isDisplayable(Chat.MessageT(ToolResponse("done", "c2", "taskDone", true))));
-    assert(isDisplayable(Chat.MessageT(VisionMessage("see", "data:image/png;base64,x"))));
+    assert(isDisplayable(Chat.MessageT(ToolMessage(null, JSONValue([call]))), cfg));
+    assert(isDisplayable(Chat.MessageT(ToolResponse("ok", "c1", "query_semantic", true)), cfg));
+    assert(!isDisplayable(Chat.MessageT(ToolResponse("done", "c2", "task_done", true)), cfg));
+    assert(!isDisplayable(Chat.MessageT(ToolResponse("out", "c3", "pipeline_output", true)), cfg));
+    assert(isDisplayable(Chat.MessageT(VisionMessage("see", "data:image/png;base64,x")), cfg));
     assert(displayableCount([
         Chat.MessageT(Message(Role.system, false, "s", null)),
         Chat.MessageT(Message(Role.user, false, "n", null)),
         Chat.MessageT(Message(Role.user, true, "q", null)),
         Chat.MessageT(Message(Role.assistant, false, "a", null))
-    ]) == 2);
+    ], cfg) == 2);
 
     // 2. Live batch: offset + position; hidden result and nudge consume none
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
@@ -1682,9 +1683,9 @@ unittest {
     a3.setProcessTime(MessageTime(432.dur!"msecs"));
     auto tm = ToolMessage("thinking", JSONValue([call]));
     tm.setProcessTime(MessageTime(120.dur!"msecs"));
-    auto tr = ToolResponse("ok", "c1", "querySemantic", true);
+    auto tr = ToolResponse("ok", "c1", "query_semantic", true);
     tr.setProcessTime(MessageTime(42.dur!"msecs"));
-    auto trh = ToolResponse("done", "c2", "taskDone", true); // hidden
+    auto trh = ToolResponse("done", "c2", "task_done", true); // hidden
     auto nudge = Message(Role.user, false, "keep going", null);
 
     // Mirror the production flow: the agent appends the turn's messages to
@@ -1820,7 +1821,7 @@ unittest {
     assert(msgs[3].match!((Message m) {
             return m.isUserQuery && m.content == "hello";
         }, (_) => false), "the query is the last persisted entry");
-    assert(displayableCount(msgs) == 3, "the echo NR equals the persisted ordinal");
+    assert(displayableCount(msgs, cfg) == 3, "the echo NR equals the persisted ordinal");
 
     // Slash-consumed query: no persistent echo (query is consumed before the
     // loop; the unknown-command notice is a display-only nr=0 line).
@@ -1891,12 +1892,12 @@ unittest {
     call["id"] = "c1";
     call["type"] = "function";
     JSONValue fn;
-    fn["name"] = "querySemantic";
+    fn["name"] = "query_semantic";
     fn["arguments"] = "{}";
     call["function"] = fn;
     auto tm = ToolMessage("thinking", JSONValue([call]));
     tm.setProcessTime(MessageTime(120.dur!"msecs"));
-    auto tr = ToolResponse("ok", "c1", "querySemantic", true);
+    auto tr = ToolResponse("ok", "c1", "query_semantic", true);
     tr.setProcessTime(MessageTime(42.dur!"msecs"));
     app.agent_.chat.add(q);
     app.agent_.chat.add(a3);
@@ -1923,7 +1924,7 @@ unittest {
     foreach (i, m; fileMsgs) {
         if ("tool_calls" in m)
             tmIdx = i;
-        else if (m["role"].str == "tool" && m["name"].str == "querySemantic")
+        else if (m["role"].str == "tool" && m["name"].str == "query_semantic")
             trIdx = i;
         else if (m["role"].str == "assistant"
                 && m["content"].type == JSONType.string && m["content"].str == "hello back")

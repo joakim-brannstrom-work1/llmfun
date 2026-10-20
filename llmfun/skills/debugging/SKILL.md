@@ -28,7 +28,7 @@ Use this skill when:
   evidence, hypotheses eliminated or confirmed, root cause, fix steps applied)
   to the state file `debug_notes.md` — never keep findings only in context.
   On the 80% nudge do not finish the phase first: write down what you have NOW
-  and call `requestCompression` immediately (handoff template:
+  and call `request_compression` immediately (handoff template:
   `references/workflow.md`) — self-requested mid-task beats forced ~90%. Also
   at boundaries; resume from the re-injected handoff + `debug_notes.md`
   (no handoff → re-read the file).

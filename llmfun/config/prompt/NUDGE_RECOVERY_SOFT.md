@@ -6,8 +6,8 @@ Do not assume any pending question was answered.
 
 If you still have unfinished work or need another tool call, continue now.
 
-Otherwise call taskDone:
+Otherwise call task_done:
 - If you need user input: answer = the exact question you just asked.
 - If you are finished: answer = your final answer.
 
-Do not include anything else in taskDone.answer.
+Do not include anything else in task_done.answer.

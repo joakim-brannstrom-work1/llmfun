@@ -18,7 +18,7 @@ struct TaskDoneParams {
     string answer;
 }
 
-@Function("Call `taskDone` **only** when you have fully completed the user's request")
+@Function("Call `task_done` **only** when you have fully completed the user's request")
 ExecuteFuncResult taskDone(Context baseCtx, TaskDoneParams params) nothrow {
     mixin(baseContextToSpecific!CompletionContext);
 
@@ -34,6 +34,6 @@ ExecuteFuncResult taskDone(Context baseCtx, TaskDoneParams params) nothrow {
             .collectException;
     }
     return ExecuteFuncResult(
-            "error: the agent framework is broken, a severe bug has occured. Inform the user that taskDone is broken.",
+            "error: the agent framework is broken, a severe bug has occured. Inform the user that task_done is broken.",
             success: true);
 }

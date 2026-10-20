@@ -15,7 +15,7 @@
 /// worker's drain (bounded drain deadline).
 module llm.rag.reasoning_index;
 
-import std.algorithm : canFind, map, max, min;
+import std.algorithm : canFind, map, max, min, filter;
 import std.algorithm.searching : endsWith, startsWith;
 import std.array : join, split;
 import std.conv : to, text;
@@ -45,19 +45,31 @@ import llm.rag.dialogue_worker : RiJob;
 import llm.rag.rag : Topic;
 import llm.session.types : SessionId, isValidId;
 import llm.tool_call : Context;
-import llm.utility : summarizeToolCalls, summarizeToolResponse;
+import llm.utility : summarizeToolCalls, summarizeToolResponse, toSnakeCase;
 
 // Per-entry caps (consumer = summarizer).
 immutable size_t ThinkingMaxChars = 2000;
 immutable size_t ToolCallsMaxChars = 500;
 immutable size_t ToolResponseMaxChars = 1000;
+
 // Answer reserve = SummaryAgent.AnswerSize.
 immutable int AnswerReserve = 8192;
 immutable string OmissionMarkerFmt = "[%s older trace entries omitted for size]";
+
 // Retrieval-artifact guard: never re-enter a trace.
 immutable string[2] RetrievalToolNames = [
     "queryDialogueHistory", "queryReasoningHistory"
 ];
+
+// The guard predicate over a tool name seen on the chat axis. Pre-
+// conversion history records D names, post-conversion history records
+// snake names, so both axes match.
+private bool isRetrievalToolName(string toolName) @safe pure nothrow {
+    foreach (d; RetrievalToolNames[].filter!(a => toolName == a || toolName == toSnakeCase(a))) {
+        return true;
+    }
+    return false;
+}
 
 // Built-in default prompt (fallback; kept in sync with the shipped prompt file).
 immutable string defaultReasoningPrompt = `
@@ -166,7 +178,8 @@ class ReasoningIndex {
             auto trace = traceOf(cp.evictedSummarized ~ cp.evictedInPlace) ~ traceOf(
                     cp.evictedPurged);
             // Filters: drop turnIdOf(entry) == 0; drop isSummaryMarker;
-            // drop ToolResponse m with m.toolName in RetrievalToolNames.
+            // drop ToolResponse m whose toolName is a retrieval tool (either
+            // axis; isRetrievalToolName).
             Chat.MessageT[] filtered;
             foreach (entry; trace) {
                 if (turnIdOf(entry) == 0)
@@ -174,7 +187,7 @@ class ReasoningIndex {
                 if (isSummaryMarker(entry))
                     continue;
                 if (entry.match!((const Message _) => false, (const ToolMessage _) => false,
-                        (const ToolResponse m) => canFind(RetrievalToolNames[], m.toolName),
+                        (const ToolResponse m) => isRetrievalToolName(m.toolName),
                         (const VisionMessage _) => false))
                     continue;
                 filtered ~= entry;
@@ -570,6 +583,17 @@ version (unittest) {
 
 }
 
+@("isRetrievalToolName: matches retrieval tools on both axes, ordinary tools never")
+unittest {
+    assert(isRetrievalToolName("queryDialogueHistory"));
+    assert(isRetrievalToolName("queryReasoningHistory"));
+    assert(isRetrievalToolName("query_dialogue_history"));
+    assert(isRetrievalToolName("query_reasoning_history"));
+    assert(!isRetrievalToolName("readFile"));
+    assert(!isRetrievalToolName("read_file"));
+    assert(!isRetrievalToolName(""));
+}
+
 // renderTrace tests
 unittest {
     // Message with thinking → single thinking line, exact expected shape.
@@ -744,7 +768,7 @@ unittest {
             "cap must keep the shape prefix");
 }
 
-// onCheckpoint filter + idup tests
+@("onCheckpoint filter + idup tests")
 unittest {
     // Valid sid: artifacts (retrieval ToolResponse), unstamped (turnId==0)
     // and summary-marker entries are DROPPED; the payload is idup'd and the
@@ -806,6 +830,53 @@ unittest {
             "traceText must be an idup'd copy, not an alias");
     assert(capStore.job.traceText == expected,
             "traceText must carry exactly the included lines, got: " ~ capStore.job.traceText);
+}
+
+unittest {
+    auto s = setupTest("reasoning_on_checkpoint_retrieval_guard_test");
+    scope (exit)
+        teardownTest(s);
+
+    auto sys = makeSystem;
+    scope (exit)
+        sys.shutdown();
+    auto sup = scopedActor;
+    RiJobCapture capStore;
+    auto cap = sys.spawn!RiJobCaptureActor(cast(shared(RiJobCapture)*)&capStore, sup.address());
+
+    auto ri = new ReasoningIndex(s.tmpDir, SummaryModelConfig(contextSize: 16384), cap.weakRef);
+    string sid = "20240101-120000-ab03";
+
+    auto good = Message(Role.assistant, false, "", "guard thinking survives");
+    good.turnId = 2;
+
+    // Retrieval artifacts in both eras: every one must be dropped.
+    auto snake1 = ToolResponse("snake dialogue payload", "call_s1",
+            "query_dialogue_history", true);
+    snake1.turnId = 3;
+    auto snake2 = ToolResponse("snake reasoning payload", "call_s2",
+            "query_reasoning_history", true);
+    snake2.turnId = 4;
+    auto camel = ToolResponse("camel dialogue payload", "call_c1", "queryDialogueHistory", true);
+    camel.turnId = 5;
+
+    auto cp = CompressionCheckpoint(timestamp: Clock.currTime, sessionId: sid,
+            evictedSummarized: [
+                Chat.MessageT(good), Chat.MessageT(snake1),
+                Chat.MessageT(snake2), Chat.MessageT(camel)
+    ], evictedPurged: null, evictedInPlace: null, turnStart: 2, turnEnd: 5,
+            summaryText: "", originalLength: 4, newLength: 0, newContextSize: 0);
+    ri.onCheckpoint(cp);
+
+    assert(sup.receiveTimeout(2.dur!"seconds", (string s) {
+            assert(s == "cap-ack");
+        }), "capture actor must ack");
+    assert(capStore.got, "RiJob must be sent for the surviving entry");
+    // Range spans only the included lines (single survivor at t2).
+    assert(capStore.job.turnStart == 2 && capStore.job.turnEnd == 2);
+    string expected = "[t2 assistant thinking] guard thinking survives";
+    assert(capStore.job.traceText == expected,
+            "all retrieval-artifact eras must be excluded, got: " ~ capStore.job.traceText);
 }
 
 unittest {

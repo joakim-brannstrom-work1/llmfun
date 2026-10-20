@@ -10,7 +10,7 @@
 ## Making Changes
 
 1. Modify source code in `llmfun/source/`.
-2. Build with `executeCommand(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "build"])`
+2. Build with `execute_command(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "build"])`
    (dub must run inside the repo — see "Common Error Patterns").
 3. Check exit code: 0 = success, non-zero = errors.
 4. If errors occur, read the error output, identify the problematic file and line, then fix.
@@ -20,32 +20,32 @@
 
 ### Full Project Build
 ```
-executeCommand(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "build"])
+execute_command(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "build"])
 ```
 Builds the entire llmfun project. `dub build` defaults to the `application`
 configuration (main app, remote API only).
 
 ### Specific Configurations
 ```
-executeCommand(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "build", "--config=application-with-local-model"])
-executeCommand(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "build", "--config=llmfun_test"])
+execute_command(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "build", "--config=application-with-local-model"])
+execute_command(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "build", "--config=llmfun_test"])
 ```
 
 ### Run Tests
 ```
-executeCommand(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "test"])
+execute_command(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "test"])
 ```
 Runs the inline unit tests.
 
 ### Single File Compilation
 ```
-executeCommand(environmentTag="llmfun", command=["cd", "llmfun", "&&", "ldc2", "path/to/file.d"])
+execute_command(environmentTag="llmfun", command=["cd", "llmfun", "&&", "ldc2", "path/to/file.d"])
 ```
 For simple single-file D compilation without project dependencies.
 
-## executeCommand Argument Semantics
+## execute_command Argument Semantics
 
-`executeCommand` joins the `command` array elements with spaces and runs the result
+`execute_command` joins the `command` array elements with spaces and runs the result
 through a shell. Consequences:
 
 - `command=["cd", "llmfun", "&&", "dub", "build"]` works (joined: `cd llmfun && dub build`).
@@ -67,7 +67,7 @@ The scripts in `scripts/` wrap the verified commands and auto-locate the repo
 
 Example:
 ```
-executeCommand(environmentTag="llmfun", command=["bash", "/workarea/skills/llmfun-self-improve/scripts/build.sh"])
+execute_command(environmentTag="llmfun", command=["bash", "/workarea/skills/llmfun-self-improve/scripts/build.sh"])
 ```
 
 The scripts may lose their executable bit when the skill is copied into the
@@ -84,9 +84,9 @@ If the scripts cannot locate the repo, fall back to the explicit
 The git repo root is `llmfun/` (= `/workarea/llmfun` in the container):
 
 ```
-executeCommand(environmentTag="llmfun", command=["cd", "llmfun", "&&", "git", "status"])
-executeCommand(environmentTag="llmfun", command=["cd", "llmfun", "&&", "git", "diff"])
-executeCommand(environmentTag="llmfun", command=["cd", "llmfun", "&&", "git", "log", "--oneline", "-10"])
+execute_command(environmentTag="llmfun", command=["cd", "llmfun", "&&", "git", "status"])
+execute_command(environmentTag="llmfun", command=["cd", "llmfun", "&&", "git", "diff"])
+execute_command(environmentTag="llmfun", command=["cd", "llmfun", "&&", "git", "log", "--oneline", "-10"])
 ```
 
 Read-only git commands are always safe. NEVER commit or push without explicit
@@ -104,7 +104,7 @@ After making changes:
 ## Common Error Patterns
 
 - **"No valid root package found"**: You ran dub outside the repo. Prefix the command with `cd llmfun &&` or use the helper scripts.
-- **"Environment 'X' not found"**: Use the configured environment tag. Run `listEnvironments()` to see the available entries.
+- **"Environment 'X' not found"**: Use the configured environment tag. Run `list_environments()` to see the available entries.
 - **Import errors**: Check that module names match the pattern `import llm.module_name;`
 - **Path errors**: Use `my.path.Path` for file paths
 - **Logger errors**: Use `logger = std.logger` aliased import

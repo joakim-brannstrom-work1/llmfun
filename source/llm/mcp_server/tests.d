@@ -161,12 +161,66 @@ unittest {
     server.handleMessage(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`);
 
     auto resp = server.handleMessage(
-            `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"anytool","arguments":{}}}`);
+            `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query_semantic","arguments":{}}}`);
     assert(resp !is null);
 
     auto parsed = parseJSON(resp);
     assert(parsed["error"]["code"].integer == JsonRpcErrorCode.MethodNotFound);
     assert(parsed["error"]["message"].str.startsWith("Method not found:"));
+}
+
+@("tools/call resolves the snake name to the registry entry before the D-name filter")
+unittest {
+    import std.algorithm : startsWith;
+    import std.json : parseJSON;
+    import std.string : indexOf;
+
+    // Whitelist exactly one tool by its D name (config axis): the filter
+    // matches D names only, never the snake name.
+    auto server = new MCPServer(ReFilter(["^querySemantic$"], []));
+    server.handleMessage(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`);
+
+    // 1. Call the whitelisted tool by its SNAKE name: the entry resolves
+    //    (nameSnakeCase == "query_semantic") and the filter matches the D
+    //    name "querySemantic" -- the call executes (no false MethodNotFound).
+    //    With a null Context the tool itself reports an error in content, but
+    //    the JSON-RPC response is a success: dispatch reached the callback.
+    auto resp = server.handleMessage(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query_semantic","arguments":{"vectorQuery":"dual-axis probe"}}}`);
+    assert(resp !is null);
+    auto parsed = parseJSON(resp);
+    assert(parsed["id"].integer == 2);
+    assert("error" !in parsed, "whitelisted snake call must not be rejected");
+    assert(parsed["result"]["isError"].boolean == true,
+            "null Context: the tool itself reports an error");
+    auto content = parsed["result"]["content"].array[0]["text"].str;
+    assert(indexOf(content, "context do not support") >= 0,
+            "dispatch must reach the querySemantic callback: " ~ content);
+
+    // 2. Call a non-whitelisted tool by its SNAKE name: the entry resolves
+    //    (D name "queryTextSearch") and the filter rejects it ->
+    //    MethodNotFound (same not-found response, no existence leak).
+    resp = server.handleMessage(
+            `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"query_text_search","arguments":{}}}`);
+    parsed = parseJSON(resp);
+    assert(parsed["error"]["code"].integer == JsonRpcErrorCode.MethodNotFound);
+    assert(parsed["error"]["message"].str.startsWith("Method not found:"));
+
+    // 3. Call by an unknown name: no registry entry -> MethodNotFound
+    //    (unchanged not-found response).
+    resp = server.handleMessage(
+            `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"__nonexistent_tool__","arguments":{}}}`);
+    parsed = parseJSON(resp);
+    assert(parsed["error"]["code"].integer == JsonRpcErrorCode.MethodNotFound);
+    assert(parsed["error"]["message"].str.startsWith("Method not found:"));
+
+    // 4. Dual-axis: a client that cached a pre-conversion tools/list can
+    //    still call with the D name "querySemantic" until it re-lists.
+    resp = server.handleMessage(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"querySemantic","arguments":{"vectorQuery":"dual-axis probe"}}}`);
+    parsed = parseJSON(resp);
+    assert("error" !in parsed, "D-name call to a whitelisted tool must not be rejected");
+    content = parsed["result"]["content"].array[0]["text"].str;
+    assert(indexOf(content, "context do not support") >= 0,
+            "dispatch must reach the querySemantic callback: " ~ content);
 }
 
 @("Integration: ping returns empty object result")
@@ -307,8 +361,11 @@ unittest {
     auto server = new MCPServer(ReFilter.init);
     server.handleMessage(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`);
 
+    // Name resolution precedes arguments validation (an unknown name
+    // is MethodNotFound before args are inspected), so use a resolvable tool
+    // name to exercise the arguments-object check.
     auto resp = server.handleMessage(
-            `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"anytool","arguments":"notanobject"}}`);
+            `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query_semantic","arguments":"notanobject"}}`);
     assert(resp !is null);
 
     auto parsed = parseJSON(resp);
@@ -338,8 +395,9 @@ unittest {
     assert(filtTools == 0, "Exclude-all filter should return zero tools");
 }
 
-@("Integration: tools/call with non-existent tool returns isError true")
+@("Integration: tools/call with non-existent tool returns MethodNotFound")
 unittest {
+    import std.algorithm : startsWith;
     import std.json : parseJSON;
 
     auto server = new MCPServer(ReFilter.init);
@@ -350,9 +408,11 @@ unittest {
     assert(resp !is null);
 
     auto parsed = parseJSON(resp);
-    // Tool not found should return isError: true in the content.
-    assert(parsed["result"]["isError"].boolean == true, "non-existent tool should fail");
-    assert(parsed["result"]["content"].type == JSONType.array);
+    // Unknown names resolve to no registry entry and share the
+    // filtered-out not-found response (previously a success response with
+    // isError: true in the content).
+    assert(parsed["error"]["code"].integer == JsonRpcErrorCode.MethodNotFound);
+    assert(parsed["error"]["message"].str.startsWith("Method not found:"));
 }
 
 @("Integration: notifications/initialized before initialize returns null (no error)")

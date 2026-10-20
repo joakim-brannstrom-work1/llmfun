@@ -93,7 +93,7 @@ Loop rules:
 - **Confirmed → exit to Phase 3.** Multiple confirmed causes or a fix that
   reveals the next bug: "one bug at a time" — start a new `## Bug N:` section
   and re-enter the loop there.
-- Each round is a natural `requestCompression` boundary (see the compression
+- Each round is a natural `request_compression` boundary (see the compression
   checkpoint below).
 
 ### Phase 3: Formulate Fix Task
@@ -134,9 +134,9 @@ Report the bug fix using the output format template in `output-format.md`,
 assembled from the state file; mention the `debug_notes.md` path in the
 report's Notes.
 
-## Compression checkpoint (`requestCompression`)
+## Compression checkpoint (`request_compression`)
 
-`requestCompression` is the debugging session's active checkpoint: it compresses
+`request_compression` is the debugging session's active checkpoint: it compresses
 on your terms and re-injects your message-to-self afterwards — unlike the
 forced compression at ~90%, which summarizes without your control and can
 garble in-context evidence.
@@ -144,14 +144,14 @@ garble in-context evidence.
 - Trigger points:
   - **80% `[SYSTEM NUDGE - NOT USER INPUT]`**: act NOW — do not finish the
     current phase first. Write down what you have NOW (`debug_notes.md` up to
-    here + current-step notes) and call `requestCompression` immediately —
+    here + current-step notes) and call `request_compression` immediately —
     a self-requested compression mid-fix is always better than the forced
     one at ~90%, which summarizes without your control.
   - At any natural debugging boundary in a long session (after a phase,
     after a failed repro attempt, after a hypothesis is eliminated) — even
     below 80%: update the state file and checkpoint, so the nudge-time
     write stays small.
-- Never call `requestCompression` with unsaved state — write `debug_notes.md`
+- Never call `request_compression` with unsaved state — write `debug_notes.md`
   first; the handoff carries only the summary.
 - Write the message-to-self as a briefing for a new instance with no memory of
   the session:

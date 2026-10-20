@@ -82,7 +82,6 @@ struct ListEnvironmentsParams {
     }
 }
 
-/// Parameters for the executeCommand tool.
 struct ExecuteCommandParams {
     @ParamDescription("Environment tag to use for execution")
     string environmentTag;
@@ -96,12 +95,7 @@ struct ExecuteCommandParams {
     string sessionId;
 }
 
-/// Execute a command in the specified environment. Resolves the environment tag,
-/// instantiates the appropriate RunnerBackend (ContainerRunner or HostRunner),
-/// executes the command, and returns the result as JSON.
-/// Supports optional environmentTag,
-/// empty command validation, and future sessionId placeholder.
-@Function("Execute a command in an execution environment. Returns JSON with exitCode, stdout, and stderr. Use environmentTag to select the environment (call listEnvironments() to see available options)") ExecuteFuncResult executeCommand(
+@Function("Execute a command in an execution environment. Returns JSON with exitCode, stdout, and stderr. Use environmentTag to select the environment (call list_environments() to see available options)") ExecuteFuncResult executeCommand(
         Context baseCtx, ExecuteCommandParams params) nothrow {
     import std.datetime.stopwatch : StopWatch, AutoStart;
 

@@ -32,6 +32,7 @@ import llm.tool_call : RegisterLlmFunctions, Context, ExecuteFuncResult, Functio
     RegFunction, RegParam, ParamDescription, ParamOptional, baseContextToSpecific;
 import llm.tool_call.broker : BrokerState, activateTag, inGroup, toolDescription;
 import llm.metric.monitor : MetricMonitor, brokerEvent;
+import llm.utility : toSnakeCase;
 
 mixin RegisterLlmFunctions!();
 
@@ -40,11 +41,6 @@ mixin RegisterLlmFunctions!();
 /// line pointing at the toolSearch meta-tool (the intended
 /// overflow path).
 enum MaxTagsInDiscoveryDesc = 20;
-
-struct ListToolTagsParams {
-    @ParamDescription("Group to load. Omit to list all groups with descriptions.")
-    @ParamOptional string tag;
-}
 
 /// Group names of the visible pool: every group of the resolved config with
 /// at least one visible pool member (membership per inGroup), in config-AA
@@ -63,7 +59,7 @@ private string[] visibleGroupNames(RegFunction[] pool, const ToolBrokerConfig re
 
 /// The config group descriptions (name - description), described groups only:
 /// an undescribed (or empty-description) group is omitted - it stays
-/// activatable but is not advertised (D3).
+/// activatable but is not advertised.
 private string[string] groupDescriptions(const ToolBrokerConfig resolved) @safe {
     string[string] rval;
     foreach (name, g; resolved.groups)
@@ -107,7 +103,7 @@ private string renderTagList(string[] tags, string[string] descriptions) @safe {
 }
 
 /// A group is known (activatable in principle) iff it has a configured
-/// description (D3). An undescribed group stays activatable - it is just not
+/// description. An undescribed group stays activatable - it is just not
 /// advertised and not "known" to the metric events.
 private bool isKnownGroup(string group, const ToolBrokerConfig resolved) @safe {
     auto g = group in resolved.groups;
@@ -125,19 +121,10 @@ private string unknownGroupMsg(string group, RegFunction[] pool,
             group, list);
 }
 
-/// Composes the discovery tool's own description (the tools-array build
-/// calls this): the base text plus the configured group vocabulary with
-/// descriptions, ordered by activation frequency then name, capped at
-/// MaxTagsInDiscoveryDesc with an overflow line pointing at toolSearch.
-/// Only DESCRIBED groups are advertised - an undescribed group stays
-/// activatable but is not advertised here (D3). Visibility note: this static
-/// description advertises every DESCRIBED group regardless of pool membership
-/// (the signature has no pool), while the listToolTags list-mode shows only
-/// pool-visible groups - parity with the pre-change tag-map behavior.
-/// An empty vocabulary leaves the base text unchanged (no dangling "Tags:"
-/// header).
-/// Side-effect-free (AA and sort reads only); not marked pure (ldc2 purity
-/// inference is unreliable on AA lookups, see llmfun_const_purity_gotchas).
+/// Composes the discovery tool's own description: the base text plus the
+/// configured group vocabulary with descriptions, ordered by activation
+/// frequency then name, capped at MaxTagsInDiscoveryDesc with an overflow line
+/// pointing at toolSearch.
 string composeDiscoveryDesc(string baseText, ToolBrokerConfig resolved, BrokerState st) @safe {
     auto descriptions = groupDescriptions(resolved);
     auto groups = sortedTagNames(descriptions.byKey.array, st);
@@ -170,6 +157,11 @@ private void emitDiscoveryEvents(MetricMonitor mon, string agentName, string tag
     }
 }
 
+struct ListToolTagsParams {
+    @ParamDescription("Group to load. Omit to list all groups with descriptions.")
+    @ParamOptional string tag;
+}
+
 @Function("List available tool groups with descriptions. Call this first to "
         ~ "discover tools, then the tools become visible for immediate use.")
 ExecuteFuncResult listToolTags(Context baseCtx, ListToolTagsParams params) {
@@ -177,8 +169,8 @@ ExecuteFuncResult listToolTags(Context baseCtx, ListToolTagsParams params) {
 
     mixin(baseContextToSpecific!AgentContext);
 
-    // Kill switch: with the broker disabled every registered tool
-    // is always visible, so discovery would only add confusion.
+    // with the broker disabled every registered tool is always visible, so
+    // discovery would only add confusion.
     if (!ctx.brokerEnabled) {
         return ExecuteFuncResult("error: the tool broker is disabled "
                 ~ "(toolBroker.enabled: false) - every registered tool is " ~ "always visible (alwaysOn); discovery is inert",
@@ -195,9 +187,8 @@ ExecuteFuncResult listToolTags(Context baseCtx, ListToolTagsParams params) {
                 ctx.broker), groupDescriptions(ctx.brokerConf)), true);
     }
 
-    // Activation (the harness-side loadToolTag step): a KNOWN group - a
-    // config-described group - activates its visible tools; an unknown group
-    // errors instructively. No state change on error.
+    // a KNOWN group - a config-described group - activates its visible tools;
+    // an unknown group errors instructively. No state change on error.
     auto members = ctx.pool.filter!(f => inGroup(ctx.brokerConf, f, params.tag)).array;
 
     if (members.empty) {
@@ -212,18 +203,13 @@ ExecuteFuncResult listToolTags(Context baseCtx, ListToolTagsParams params) {
     }
 
     activateTag(ctx.broker, ctx.pool, params.tag, ctx.brokerConf);
-    // Metrics: tag_activation (toolsActivated = the group's visible pool
-    // size) + tag_discovery (known = the group has a description).
     emitDiscoveryEvents(ctx.getMetricMonitor(), ctx.agentName, params.tag,
             isKnownGroup(params.tag, ctx.brokerConf), cast(long) members.length);
-    // The activation change point: the owning Agent rebuilds the
-    // model-facing tools array through ctx.rebuildTools, so the activated
-    // tools are in the next request's tools key.
     if (ctx.rebuildTools !is null)
         ctx.rebuildTools();
 
-    return ExecuteFuncResult(i"Loaded tools for group $(params.tag): $(members.map!(a => a.name))".text,
-            true);
+    return ExecuteFuncResult(i"Loaded tools for group $(params.tag): $(
+            members.map!(a => a.nameSnakeCase))".text, true);
 }
 
 version (unittest) {
@@ -244,9 +230,11 @@ version (unittest) {
         return ctx;
     }
 
-    /// A visible pool tool with the given name and tags.
+    /// A visible pool tool with the given name and tags. nameSnakeCase is
+    /// populated the way UDA registration does it (toSnakeCase of the D
+    /// name): the model-facing "Loaded tools" reply asserts on it.
     private RegFunction discoveryTool(string name, string[] tags) @safe pure nothrow {
-        return RegFunction(name: name, desc: "desc of " ~ name, params: [
+        return RegFunction(name: name, nameSnakeCase: toSnakeCase(name), desc: "desc of " ~ name, params: [
             RegParam("path", "string", "File to read", true, "")
         ], callback: null, tags: tags);
     }
@@ -326,6 +314,29 @@ unittest {
     auto again = listToolTags(ctx, ListToolTagsParams());
     assert(again.msg.canFind("workarea (workarea file tools)"));
     assert(again.msg.countUntil("workarea") < again.msg.countUntil("unrelated"));
+}
+
+unittest {
+    // "Loaded tools" names the activated tools on the MODEL-FACING (snake)
+    // axis: a mixed fixture (one D name already snake, one camelCase) asserts
+    // the exact message - the camel D name "MixedCase" is advertised as its
+    // snake form "mixed_case".
+    auto ctx = discoveryContext();
+    ctx.brokerConf.groups["mixed"] = GroupConfig(null, [
+        "plain_tool", "MixedCase"
+    ]);
+    ctx.pool = [
+        discoveryTool("plain_tool", ["mixed"]),
+        discoveryTool("MixedCase", ["mixed"])
+    ];
+    ctx.brokerEnabled = true;
+    ctx.brokerConf.enabled = true;
+
+    auto rval = listToolTags(ctx, ListToolTagsParams("mixed"));
+    assert(rval.success);
+    assert(rval.msg == "Loaded tools for group mixed: [\"plain_tool\", \"mixed_case\"]", rval.msg);
+    assert(rval.msg.canFind("plain_tool"));
+    assert(rval.msg.canFind("mixed_case"));
 }
 
 unittest {

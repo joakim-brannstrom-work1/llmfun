@@ -26,42 +26,42 @@ Structured protocol for editing files safely and correctly.
 
 ## Universal Editing Workflow
 
-1. **Read** the current state with `readFile`.
+1. **Read** the current state with `read_file`.
 2. **Choose the right tool** (see Tool Selection below):
-   - `writeFile` — new files or complete rewrites
-   - `editFile` — targeted edits (line numbers, markers, or code blocks)
-   - `applyDiff` — multi-line changes via unified diff
+   - `write_file` — new files or complete rewrites
+   - `edit_file` — targeted edits (line numbers, markers, or code blocks)
+   - `apply_diff` — multi-line changes via unified diff
 3. **Optional: Dry-run** — use `dryRun=true` to preview before applying.
-   Available for: `editFile`, `applyDiff`. (`writeFile` has no dry-run option.)
+   Available for: `edit_file`, `apply_diff`. (`write_file` has no dry-run option.)
 4. **Apply** the edit.
 5. **Verify immediately**: run executables, re-read others. If wrong, go to step 1.
 
 ## Tool Selection Decision Tree
 
 File new?
-  → YES: writeFile
+  → YES: write_file
   → NO: Continue...
 
 Know a unique marker (single or multi-line)?
-  → YES: editFile(marker) [+ count if replacing a block]
+  → YES: edit_file(marker) [+ count if replacing a block]
   → NO: Continue...
 
 Know the exact code block?
-  → YES: editFile(searchContent)
+  → YES: edit_file(searchContent)
   → NO: Continue...
 
 Know exact line numbers?
-  → YES: editFile(startLine, count)
+  → YES: edit_file(startLine, count)
          ⚠ Re-read the file between successive byLine edits — line numbers shift!
   → NO: Continue...
 
 Have a pre-computed unified diff?
-  → YES: applyDiff
+  → YES: apply_diff
   → NO: Re-read file, find a marker or code block, try again.
 
 ## Quick Tool Reference
 
-### editFile — Unified file editing
+### edit_file — Unified file editing
 
 - **Targeting** (exactly one required): `byLine` (startLine+count), `byMarker` (substring, single or multi-line up to 20 lines), `byContent` (code block).
 - **Modes**: `replace`, `remove`, `append`, `insert_before`, `insert_after` (=append alias).
@@ -71,14 +71,14 @@ Have a pre-computed unified diff?
 - **Returns**: JSON with `ok`, `matchedAt`, `matchedLines`, `linesChanged`, `operations`, `lineShift`, `autoCountUsed`/`note` (when auto-count active). On failure: `error` + `diagnostic`.
 - **Full details**: `references/tool-reference.md`
 
-### applyDiff — Unified diff patch
+### apply_diff — Unified diff patch
 
 - **Parameters**: `path`, `diff` (unified diff), `dryRun` (default false), `fuzzy` (default true).
 - Hunk header counts are advisory. Fuzzy matching uses trimmed equality.
 - **Returns**: JSON with `ok`, `hunksApplied`, `linesChanged`, `warnings`.
 - **Full details**: `references/tool-reference.md`
 
-### writeFile — Write or create files
+### write_file — Write or create files
 
 Creates file with parent directories. Replaces entire content if file exists — never use for partial edits.
 

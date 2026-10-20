@@ -47,12 +47,12 @@ llmfun/
 
 If your identity is **llmfun**:
 - The file tools (read/write/edit/grep/list) use paths relative to `./`; the source code is under `./llmfun`.
-- `executeCommand` runs in `/workarea`; the absolute source path is `/workarea/llmfun`.
+- `execute_command` runs in `/workarea`; the absolute source path is `/workarea/llmfun`.
 - Paths in this file are repo-relative: a module path such as `rag/database.d` lives under `source/llm/`.
 
 ## Commands
 
-**Container:** use the image `llmfun/app:latest` for `executeCommand`. Pass the whole command line as ONE string in a single-element array: `executeCommand(environmentTag="llmfun", command=["cd llmfun && dub build --config=application"])`.
+**Container:** use the image `llmfun/app:latest` for `execute_command`. Pass the whole command line as ONE string in a single-element array: `execute_command(environmentTag="llmfun", command=["cd llmfun && dub build --config=application"])`.
 
 ```bash
 dub test                                          # Unit tests (primary gate)
@@ -148,7 +148,7 @@ dub build --config=llmfun_util                    # Manual test utility (runs no
 - `DialogueIndex` (`rag/dialogue_index.d`) is owned by the agent thread and drives a worker actor on its own thread (`rag/dialogue_worker.d`); the worker owns its own embedder and exchanges value messages only.
 - Episodes go into per-session SQLite WAL databases under `dialogueDir` (default `llmfun/data/dialogue`), one `<sessionId>.db`, as Topic sources named `d_<sess>__t<turnStart>_<turnEnd>__<epochMillis>` (`encodeTopicName`/`decodeTopicName`).
 - Dedup identity is topic + content; a turn split across two checkpoints merges (existing episode text + the new piece under the same topic). FTS is rebuilt synchronously after every job that committed chunks.
-- Turn metadata is always derived by decoding topic names, never from worker memory. `queryDialogueHistory` takes `maxTurnAge`: 0/negative = no filtering, positive N keeps `turnEnd >= maxTurn - N`.
+- Turn metadata is always derived by decoding topic names, never from worker memory. `query_dialogue_history` takes `maxTurnAge`: 0/negative = no filtering, positive N keeps `turnEnd >= maxTurn - N`.
 - Indexing is asynchronous (~2-3 s lag, stated in the tool description). When the agent should query is prompted from `llmfun/config/prompt/AGENT.md`, not from a code constant.
 - `llmfun rag --dialogue` reports over the session databases read-only and dispatches before `createRag`; a session whose read-only open fails is skipped with a warning.
 - Reasoning counterpart: `ReasoningIndex` (`rag/reasoning_index.d`). Docs: `doc/dialogue_search.md`, `doc/reasoning_search.md`.
@@ -163,14 +163,14 @@ dub build --config=llmfun_util                    # Manual test utility (runs no
 ### Tools and the tool broker
 
 - A tool is a function taking a `Context` and a params struct, marked with the `@Function("description")` UDA and collected by the `RegisterLlmFunctions!()` mixin in `tool_call/package.d`.
-- Group membership is configuration, not code: `toolBroker.groups` maps a group name to `{description, tools}`, `hiddenTags` lists groups that start hidden, `alwaysOn` forces tools or whole groups visible, `neverHideTools` (default `["taskDone"]`) bypasses the tool filter, `enabled` is the kill switch.
-- A tool in no group is always on. Hidden group members become visible when the model activates the group via `listToolTags`; activation is sticky and pruned at compression points. `toolSearch` discovers tools by keyword.
-- `tool_call/io/` is the file-tool package (`readFile`, `writeFile`, `editFile`, `applyDiff`, `grepFiles`, ...). Docs: `doc/tool_broker.md`.
+- Group membership is configuration, not code: `toolBroker.groups` maps a group name to `{description, tools}`, `hiddenTags` lists groups that start hidden, `alwaysOn` forces tools or whole groups visible, `neverHideTools` (default: the task-completion tool; config-file values use D-axis registry names, see `config/example.yaml`) bypasses the tool filter, `enabled` is the kill switch.
+- A tool in no group is always on. Hidden group members become visible when the model activates the group via `list_tool_tags`; activation is sticky and pruned at compression points. `tool_search` discovers tools by keyword.
+- `tool_call/io/` is the file-tool package (`read_file`, `write_file`, `edit_file`, `apply_diff`, `grep_files`, ...). Docs: `doc/tool_broker.md`.
 
 ### Memory tiers
 
 - Memories are Markdown files in every configured `memoryArea` dir (default resolution: `llmfun/data/memory` plus the XDG data dir), under the subdirs `short/`, `long/`, `archive/`.
-- Writes always land in `short/` (rewriting an existing `long/` memory requires including its stored content). `getMemoryTopics` lists `short/` only; `long/` is RAG-indexed; `archive/` is unreachable.
+- Writes always land in `short/` (rewriting an existing `long/` memory requires including its stored content). `get_memory_topics` lists `short/` only; `long/` is RAG-indexed; `archive/` is unreachable.
 - `MemoryTierActor` (`memory_tier.d`) runs one pass at startup and on every `tierPassIntervalHours` tick (0 = startup only): create any missing tier dirs, flat-layout upgrade, reconcile disk vs RAG, promote aged `short/` entries (default 7 d) to `long/`, demote aged `long/` entries (default 100 d) to `archive/`.
 - Every phase is diff-based, so a crash window heals on the next pass; failures are logged and skipped. Tier dirs are created by that pass, so a missing structure heals on the next agent start.
 - Agent-facing rules: `llmfun/skills/llmfun-memory/SKILL.md`.

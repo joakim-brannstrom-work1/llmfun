@@ -24,8 +24,8 @@ configuring dub projects (dub.sdl or dub.json), or diagnosing build issues.
 ## Rules
 
 - **Always use dub**: Build and test through dub, not manual compilation.
-- **Use executeImage**: Use `executeCommand` with a D language environment to run dub commands.
-  Example: `executeCommand(environmentTag="dlang2:latest", command=["cd", "<project-dir>", "&&", "dub", "build"])`
+- **Use executeImage**: Use `execute_command` with a D language environment to run dub commands.
+  Example: `execute_command(environmentTag="dlang2:latest", command=["cd", "<project-dir>", "&&", "dub", "build"])`
 - **Check dub config first**: Read `dub.sdl` or `dub.json` before building to understand project structure.
 - **Verify build output**: Check the `targetPath` directory (default: `./`) for compiled artifacts.
 
@@ -85,7 +85,7 @@ Full details in `references/code-conventions.md`. Key rules:
 1. **Identify the project**: Locate the `dub.sdl` or `dub.json` file.
 2. **Read the configuration**: Understand project name, type, dependencies, and target path.
 3. **Choose the command**: Use `build` to compile, `test` to run tests.
-4. **Execute with dub**: Use `executeCommand` with a D language container environment and dub command (see Rules).
+4. **Execute with dub**: Use `execute_command` with a D language container environment and dub command (see Rules).
 5. **Verify results**: Check output for errors or test results.
 
 ## Utility Scripts

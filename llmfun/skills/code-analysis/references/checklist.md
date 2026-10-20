@@ -4,7 +4,7 @@ Before finalizing the analysis report, verify all applicable items:
 
 ## Scope & Planning
 - [ ] Analysis scope is clearly defined (target, purpose, depth level)
-- [ ] If incremental: Old report read and changes detected via `md5HashFile`
+- [ ] If incremental: Old report read and changes detected via `md5_hash_file`
 - [ ] If incremental: Only changed sections re-analyzed
 
 ## Codebase Understanding
@@ -40,4 +40,4 @@ Before finalizing the analysis report, verify all applicable items:
 ## Output & Delivery
 - [ ] File integrity section updated with current MD5 hashes
 - [ ] Output saved to `plan/code_analysis.md`
-- [ ] Analysis loaded into RAG via `loadFileToRAG`
+- [ ] Analysis loaded into RAG via `load_file_to_rag`

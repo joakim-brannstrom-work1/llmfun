@@ -35,11 +35,12 @@ string[] hiddenNeverHideTools(RegFunction[] registry, ReFilter toolFilter, strin
             && !toolFilter.match(a)).array;
 }
 
+// TODO: this is duplicated functionality as in package.d. Refactor
 /// Renders one RegFunction as a tools-array entry: the existing
 /// descAllFunctions() shape ({"type":"function","function":{...}}).
 JSONValue toolDescription(const RegFunction f) @safe pure {
     JSONValue jfunc;
-    jfunc["name"] = f.name;
+    jfunc["name"] = f.nameSnakeCase;
     jfunc["description"] = f.desc;
 
     auto jparams = JSONValue.emptyObject;
@@ -70,7 +71,7 @@ JSONValue toolDescription(const RegFunction f) @safe pure {
     return jwrap;
 }
 
-/// Group membership (D9): the union of (a) the `tools` list of the resolved
+/// Group membership: the union of (a) the `tools` list of the resolved
 /// config's group and (b) the tool's runtime RegFunction.tags naming the
 /// group - only MCP registration writes runtime tags. A runtime tag that
 /// names no defined group contributes nothing.
@@ -83,7 +84,7 @@ bool inGroup(const ToolBrokerConfig resolved, const RegFunction f, string group)
 
 /// The groups a tool belongs to (membership per inGroup): the config groups
 /// listing the tool first, then the tool's runtime tags that name a defined
-/// group (D9). Deduplicated; order not significant (config AA iteration order
+/// group. Deduplicated; order not significant (config AA iteration order
 /// is unspecified - the only consumer, isVisible, is order-independent).
 string[] groupsOf(const ToolBrokerConfig resolved, const RegFunction f) @safe pure {
     string[] rval;
@@ -96,17 +97,17 @@ string[] groupsOf(const ToolBrokerConfig resolved, const RegFunction f) @safe pu
     return rval;
 }
 
-/// Visibility predicate (design section 6) over the resolved config; the
+/// Visibility predicate over the resolved config; the
 /// pool is the registry tools surviving the global toolFilter plus
 /// neverHideTools (the caller's concern):
 ///  - the kill switch (enabled: false) leaves everything visible - all
 ///    tools are treated as ungrouped (alwaysOn);
-///  - a tool in no group is alwaysOn (matches today's untagged default, D4);
-///  - a group name in alwaysOn un-hides the whole membership (D4); a tool
+///  - a tool in no group is alwaysOn (matches today's untagged default);
+///  - a group name in alwaysOn un-hides the whole membership; a tool
 ///    name in alwaysOn un-hides the tool itself;
 ///  - otherwise hidden iff the tool is a member of a hidden group (a group
 ///    in the effective hiddenTags array). Omitted or empty hiddenTags hides
-///    nothing (D7 - no "unset means hide everything" materialization).
+///    nothing - no "unset means hide everything" materialization.
 bool isVisible(const ToolBrokerConfig resolved, const RegFunction f) @safe pure {
     if (!resolved.enabled)
         return true;
@@ -146,13 +147,13 @@ JSONValue[] selectTools(RegFunction[] pool, string[] activated,
     foreach (f; pool.filter!(rf => alwaysOn.canFind!(n => n == rf.name)
             || neverHide.canFind!(n => n == rf.name))) {
         rval ~= toolDescription(f);
-        seen ~= f.name;
+        seen ~= f.nameSnakeCase;
     }
 
     foreach (name; activated.filter!(n => !seen.canFind!(s => s == n))) {
-        foreach (f; pool.filter!(rf => rf.name == name)) {
+        foreach (f; pool.filter!(rf => rf.nameSnakeCase == name)) {
             rval ~= toolDescription(f);
-            seen ~= f.name;
+            seen ~= f.nameSnakeCase;
         }
     }
     return rval;
@@ -165,7 +166,7 @@ JSONValue[] selectTools(RegFunction[] pool, string[] activated,
 /// seam's. Inert under the kill switch (enabled: false): no state mutation,
 /// no count bump - the broker is disabled and discovery errors before it
 /// could reach this seam. The activation count feeds the discovery-tool
-/// presentation cap (frequency then name) and is keyed by group name (D12).
+/// presentation cap (frequency then name) and is keyed by group name.
 void activateTag(ref BrokerState st, RegFunction[] pool, string group,
         const ToolBrokerConfig resolved) @safe pure {
     if (!resolved.enabled)
@@ -173,8 +174,8 @@ void activateTag(ref BrokerState st, RegFunction[] pool, string group,
     bool anyTool;
     foreach (f; pool.filter!(rf => inGroup(resolved, rf, group))) {
         anyTool = true;
-        if (!st.activated.canFind!(n => n == f.name)) {
-            st.activated ~= f.name;
+        if (!st.activated.canFind!(n => n == f.nameSnakeCase)) {
+            st.activated ~= f.nameSnakeCase;
         }
     }
     if (anyTool) {
@@ -183,27 +184,20 @@ void activateTag(ref BrokerState st, RegFunction[] pool, string group,
 }
 
 /// Per-tool activation seam; loadToolTag is the per-tag
-/// variant. Unknown tool names no-op; activation is sticky (dedup).
+/// variant. The pool lookup matches on either axis (D name or snake
+/// name); the state stores snake names. Unknown tool names no-op;
+/// activation is sticky (dedup).
 void activateTool(ref BrokerState st, RegFunction[] pool, string toolName) @safe pure {
-    foreach (f; pool.filter!(rf => rf.name == toolName)
-            .filter!(f => !st.activated.canFind!(n => n == f.name))) {
-        st.activated ~= f.name;
+    foreach (f; pool.filter!(rf => rf.name == toolName || rf.nameSnakeCase == toolName)
+            .filter!(f => !st.activated.canFind!(n => n == f.nameSnakeCase))) {
+        st.activated ~= f.nameSnakeCase;
     }
 }
 
 /// Compression-time prune scan: returns the activated (non-alwaysOn)
-/// tool names with no tool CALL in the intact pre-compression chat. Usage is
-/// structured ToolMessage.toolCalls names only -- summary text and assistant
-/// prose never count -- and the ENTIRE chat is scanned (kept messages included,
-/// conservative). Deviations from the task's verbatim contract, both recorded:
-/// "in Chat" became "scope Chat" (getMessages() is not const-qualified,
-/// chat.d:150, and the const getReasoningTrace() projection is filtered --
-/// the design mandates the whole-chat corpus), and "pure" is dropped
-/// (ToolMessage.hasTool transitively calls the delegate-taking getValue,
-/// utility.d:264, blocking purity inference; the scan is side-effect free).
-/// @system solely because ToolMessage.hasTool is @system (chat.d:879).
-string[] scanInactiveTools(const(BrokerState) st, scope Chat chat) @system {
-    bool usedByChat(string name) {
+/// tool names with no tool CALL in the intact pre-compression chat.
+string[] scanInactiveTools(BrokerState st, scope Chat chat, RegFunction[] pool) @safe {
+    bool usedByChat(string name) @safe {
         foreach (msg; chat.getMessages) {
             if (msg.match!((ToolMessage m) => m.hasTool(name), (_) => false)) {
                 return true;
@@ -213,7 +207,16 @@ string[] scanInactiveTools(const(BrokerState) st, scope Chat chat) @system {
     }
 
     return st.activated
-        .filter!(n => !usedByChat(n))
+        .filter!((n) {
+            string dName;
+            foreach (f; pool) {
+                if (f.nameSnakeCase == n) {
+                    dName = f.name;
+                    break;
+                }
+            }
+            return !usedByChat(n) && (dName.empty || !usedByChat(dName));
+        })
         .map!(a => a.idup)
         .array;
 }
@@ -225,16 +228,16 @@ void applyPrune(ref BrokerState st, const(string[]) inactive) @safe pure {
     st.activated = st.activated.filter!(n => !inactive.canFind(n)).array;
 }
 
-/// Seed-side usage scan: the inverse corpus of scanInactiveTools -- the
-/// structured tool-call names the chat contains, in chronological message
-/// order, first-occurrence deduplicated. Same corpus rule as
-/// scanInactiveTools: structured ToolMessage calls only -- the toolCalls
-/// extraction mirrors ToolMessage.hasTool (chat.d:880-890); summary text and
-/// assistant prose never count. Refused calls count as uses (the refusal
-/// travels as the tool response to a recorded structured call, so the
-/// request-side ToolMessage exists either way -- the scan must not try to
-/// tell them apart). The applier (Agent.seedBrokerFromChat, task 2) owns
-/// all filtering and state mutation.
+/** The inverse corpus of scanInactiveTools.
+ *
+ * The structured tool-call names the chat contains, in chronological message
+ *  order, first-occurrence deduplicated. Same corpus rule as
+ *  scanInactiveTools: structured ToolMessage calls only -- the toolCalls
+ *  extraction mirrors ToolMessage.hasTool; summary text and assistant prose
+ *  never count. Refused calls count as uses (the refusal travels as the tool
+ *  response to a recorded structured call, so the request-side ToolMessage
+ *  exists either way -- the scan must not try to tell them apart).
+ */
 string[] scanUsedTools(scope Chat chat) @system {
     import llm.utility : getValue;
 
@@ -255,10 +258,15 @@ string[] scanUsedTools(scope Chat chat) @system {
 }
 
 version (unittest) {
+    import llm.utility : toSnakeCase;
+
     /// Registry entry fixture; the callback is never invoked by these tests.
+    /// nameSnakeCase is populated the way the real registry populates it
+    /// (toSnakeCase of the D name) so selectTools emission is exercised
+    /// end to end.
     private RegFunction fixtureTool(string name, string[] tags) @safe pure nothrow {
-        return RegFunction(name: name, desc: "desc of " ~ name, params: [],
-                callback: null, tags: tags);
+        return RegFunction(name: name, nameSnakeCase: toSnakeCase(name), desc: "desc of " ~ name,
+                params: [], callback: null, tags: tags);
     }
 
     /// Resolved-config fixture for the selectTools tests: two groups whose
@@ -334,6 +342,20 @@ unittest {
     assert(names == ["t1", "t2"], names.to!string);
 }
 
+@("selectTools: dedup across axes, an activated alwaysOn tool (camel D name in "
+        ~ "config, snake in state) appears once in the head")
+unittest {
+    import std.algorithm : map;
+    import std.array : array;
+    import std.conv : to;
+
+    auto pool = [fixtureTool("Always1", []), fixtureTool("Mid2", ["workarea"])];
+    auto resolved = hiddenGroupsConfig();
+    auto names = selectTools(pool, ["always1"], [], alwaysOnTools(resolved, pool)).map!(
+            e => e["function"]["name"].str).array;
+    assert(names == ["always1"], names.to!string);
+}
+
 @("selectTools: byte-identical for identical inputs")
 unittest {
     import std.json : JSONValue;
@@ -394,7 +416,8 @@ unittest {
     auto chat = chatWith([["t1"], [], ["t3"]]);
     chat.add(ToolMessage("summary mentions t2", JSONValue("not an array")));
 
-    auto inactive = scanInactiveTools(st, chat);
+    auto pool = [fixtureTool("t1", []), fixtureTool("t2", [])];
+    auto inactive = scanInactiveTools(st, chat, pool);
     assert(inactive == ["t2"], inactive.to!string);
 }
 
@@ -403,7 +426,8 @@ unittest {
     import std.array : empty;
 
     auto chat = chatWith([["t1"]]);
-    assert(scanInactiveTools(BrokerState(), chat).empty);
+    auto pool = [fixtureTool("t1", [])];
+    assert(scanInactiveTools(BrokerState(), chat, pool).empty);
 }
 
 @("scanUsedTools: calls count, prose mentions do not, refused calls "
@@ -503,7 +527,7 @@ unittest {
 
     // A member of a hidden group is hidden; the group name in alwaysOn
     // un-hides the whole membership; the tool name un-hides the tool itself
-    // (tool names OR group names in one array, D4).
+    // (tool names OR group names in one array).
     assert(!isVisible(resolved, grouped), "member of a hidden group");
     resolved.alwaysOn ~= "workarea";
     assert(isVisible(resolved, grouped), "group name in alwaysOn un-hides");

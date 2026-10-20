@@ -1,10 +1,10 @@
-/// queryReasoningHistory tool: searches the per-session reasoning index for
-/// structured records of the agent's past strategic thinking (abandoned
-/// approaches, binding decisions, open uncertainties) produced at compression
-/// checkpoints. Same validation/result conventions as the dialogue tool:
-/// "error:"-prefixed strings are failures; no-history/no-matches are
-/// successful graceful results. Each rendered match carries the static
-/// annotation: past thought, not ground truth.
+// searches the per-session reasoning index for structured records of the
+// agent's past strategic thinking (abandoned approaches, binding decisions,
+// open uncertainties) produced at compression checkpoints. Same
+// validation/result conventions as the dialogue tool: "error:"-prefixed
+// strings are failures; no-history/no-matches are successful graceful results.
+// Each rendered match carries the static annotation: past thought, not ground
+// truth.
 module llm.tool_call.reasoning;
 
 import std.conv : text;
@@ -20,7 +20,6 @@ import llm.tool_call.rag : RAGContext;
 
 mixin RegisterLlmFunctions!();
 
-/// Parameters for the queryReasoningHistory tool.
 struct QueryReasoningHistoryParams {
     @ParamDescription("Exact terms (FTS5-style) that appear in a reasoning "
             ~ "record - a decision, an abandoned approach, or a tool name. "
@@ -49,7 +48,7 @@ struct QueryReasoningHistoryParams {
         ~ "decisions from compressed context. Use ONLY when the user asks "
         ~ "why a past decision was made, or when you have tried multiple "
         ~ "approaches and suspect you are stuck repeating one. Not for "
-        ~ "verbatim quotes - use queryDialogueHistory") ExecuteFuncResult queryReasoningHistory(
+        ~ "verbatim quotes - use query_dialogue_history") ExecuteFuncResult queryReasoningHistory(
         Context baseCtx, QueryReasoningHistoryParams params) {
     import llm.rag.database : cleanFts5;
 

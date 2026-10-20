@@ -20,7 +20,7 @@ Validate the name against naming rules:
 
 ## Step 2: Create Directory and Write SKILL.md
 
-Use `writeFile` to create `llmfun/skills/skill-name/SKILL.md`. This automatically
+Use `write_file` to create `llmfun/skills/skill-name/SKILL.md`. This automatically
 creates parent directories.
 
 ### Frontmatter
@@ -87,7 +87,7 @@ List all supporting files in `references/`.
 
 ## Step 3: Create Subdirectories and Supporting Files
 
-Create supporting files using `writeFile`:
+Create supporting files using `write_file`:
 
 ### Most Common File: `references/workflow.md`
 

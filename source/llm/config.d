@@ -307,6 +307,9 @@ struct LlmConfig {
 
     NudgeConfig nudges;
 
+    string taskDoneTool = "taskDone";
+    string[] hiddenTools = ["taskDone", "pipelineOutput"];
+
     invariant {
         assert(maxManifestSkills > 0, i"maxManifestSkills must be positive, got $(maxManifestSkills)"
                 .text);
@@ -530,6 +533,69 @@ struct LlmConfig {
     Path[] skillPaths() @safe {
         return skillPathsUser ~ skillPathsSystem;
     }
+
+    /** Check if the tool is the tool that mark a query loop as done.
+     * Params:
+     *  name: name of the tool the llm is using, can be camelCase or snake_case
+     */
+    bool isTaskDone(string name) {
+        import llm.utility : toSnakeCase;
+
+        static string toolName;
+        static string toolSnakeCase;
+        if (toolSnakeCase.empty || toolName != taskDoneTool) {
+            toolName = taskDoneTool;
+            toolSnakeCase = taskDoneTool.toSnakeCase;
+        }
+        return name == taskDoneTool || name == toolSnakeCase;
+    }
+
+    /** Check if the tool should be hidden in the UI.
+     * Params:
+     *  name: name of the tool the llm is using, can be camelCase or snake_case
+     */
+    bool isHiddenTool(string name) {
+        import std.algorithm : canFind;
+        import llm.utility : toSnakeCase;
+
+        static string[] toolNames;
+        static string[] toolsSnakeCase;
+        if (toolsSnakeCase.empty || toolNames != hiddenTools) {
+            toolNames = hiddenTools;
+            toolsSnakeCase = hiddenTools.map!(a => a.toSnakeCase).array;
+        }
+        return hiddenTools.canFind(name) || toolsSnakeCase.canFind(name);
+    }
+}
+
+@("taskDoneNames resolves the dual-axis taskDone identity from the registry")
+unittest {
+    LlmConfig conf;
+
+    assert(conf.isTaskDone("taskDone"),
+            "isTaskDone must match both name axes of the configured tool");
+    assert(conf.isTaskDone("task_done"),
+            "isTaskDone must match both name axes of the configured tool");
+    assert(conf.isHiddenTool("taskDone"));
+    assert(conf.isHiddenTool("task_done"));
+    assert(conf.isHiddenTool("pipelineOutput"));
+    assert(conf.isHiddenTool("pipeline_output"));
+
+    // A second config with custom values must resolve against its own
+    // fields, not against any other LlmConfig instance in the process.
+    LlmConfig custom;
+    custom.taskDoneTool = "customDone";
+    custom.hiddenTools = ["customHidden"];
+    assert(custom.isTaskDone("customDone"));
+    assert(custom.isTaskDone("custom_done"));
+    assert(!custom.isTaskDone("taskDone"),
+            "custom config must not match the default tool's D axis");
+    assert(!custom.isTaskDone("task_done"),
+            "custom config must not match the default tool's snake axis");
+    assert(custom.isHiddenTool("customHidden"));
+    assert(custom.isHiddenTool("custom_hidden"));
+    assert(!custom.isHiddenTool("taskDone"));
+    assert(!custom.isHiddenTool("task_done"));
 }
 
 /// Tier subdirectories under each memoryArea dir.

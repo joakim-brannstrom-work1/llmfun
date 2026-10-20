@@ -28,15 +28,15 @@ Clarify: **target** (full codebase / module / feature files), **purpose** (featu
 #### Incremental Analysis (if `plan/code_analysis.md` exists)
 
 1. Read old report; extract "File Integrity" MD5 hashes.
-2. Scan current files with `listDirectory` (`recursive=1`).
-3. Detect new, deleted, and modified files via `md5HashFile`.
+2. Scan current files with `list_directory` (`recursive=1`).
+3. Detect new, deleted, and modified files via `md5_hash_file`.
 4. Only re-analyze affected sections; carry forward unchanged content.
 
 #### Large Codebase Strategy
 
 1. Start with entry points, follow critical paths (2-3 user stories).
 2. Read build config first. Sample strategically (first 20 lines).
-3. Use `countLinesInFile` and `md5HashFile` to prioritize.
+3. Use `count_lines_in_file` and `md5_hash_file` to prioritize.
 
 ### 1-5. Core Analysis
 
@@ -63,8 +63,8 @@ Clarify: **target** (full codebase / module / feature files), **purpose** (featu
 
 1. Check all items in `references/checklist.md`.
 2. Write report to `plan/code_analysis.md`.
-3. Call `loadFileToRAG("plan/code_analysis.md")`.
-4. If in pipeline, call `pipelineOutput` with key findings.
+3. Call `load_file_to_rag("plan/code_analysis.md")`.
+4. If in pipeline, call `pipeline_output` with key findings.
 
 ## Output Format
 

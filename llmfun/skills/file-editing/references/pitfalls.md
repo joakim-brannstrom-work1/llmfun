@@ -2,10 +2,10 @@
 
 ## Common Mistakes
 
-### Using writeFile on existing files
-`writeFile` replaces the entire file. If you only need to change a few lines, use `editFile` instead. Accidental `writeFile` on an existing file destroys all content not included in the new content.
+### Using write_file on existing files
+`write_file` replaces the entire file. If you only need to change a few lines, use `edit_file` instead. Accidental `write_file` on an existing file destroys all content not included in the new content.
 
-### Skipping readFile before applyDiff
+### Skipping read_file before apply_diff
 Context lines in a diff must match the file (fuzzy by default). If the file has changed since you last read it, your diff will fail. **Always read first.**
 
 ### Forgetting to verify after edit
@@ -15,7 +15,7 @@ An edit may look correct in your diff but fail at the tool level. Always verify:
 - Config files: re-read and check syntax
 
 ### Successive byLine edits corrupt files silently
-When making multiple byLine edits from a single readFile, the first edit shifts line numbers — subsequent edits target wrong content without any error. **Always re-read the file between byLine edits**, or better: **use byMarker or byContent** which search for content, not line numbers. If you must use byLine for successive edits, use the `verifyContent` parameter as a safety guard.
+When making multiple byLine edits from a single read_file, the first edit shifts line numbers — subsequent edits target wrong content without any error. **Always re-read the file between byLine edits**, or better: **use byMarker or byContent** which search for content, not line numbers. If you must use byLine for successive edits, use the `verifyContent` parameter as a safety guard.
 
 ## byMarker + Multi-line Content (Auto-Count)
 
@@ -25,7 +25,7 @@ When using `byMarker` targeting with `replace` mode and multi-line content, the 
 ### If you want ONLY the marker line replaced
 Set `count=1` explicitly when using multi-line content with `byMarker`:
 ```
-editFile(path="file.txt", mode="replace", marker="the line", count=1,
+edit_file(path="file.txt", mode="replace", marker="the line", count=1,
          content="replacement line 1\nreplacement line 2")
 ```
 This replaces only 1 line (the marker line) with your multi-line content.
@@ -67,7 +67,7 @@ After replacing one occurrence, search resumes from the line after the replaceme
 ### matchIndex and replaceAll conflict
 `replaceAll=true` with `matchIndex > 1` returns an error. Use either `replaceAll=true` (all occurrences) or `matchIndex=N` (single occurrence), not both.
 
-## applyDiff Behavior
+## apply_diff Behavior
 
 ### Hunk header counts are advisory
 The `@@ -oldStart,oldCount +newStart,newCount @@` counts are advisory. The tool counts actual body lines and uses those. Mismatches produce warnings (not errors) in the `warnings` array.
@@ -81,7 +81,7 @@ Only the matching is fuzzy — the file content written is always the `+` lines 
 ### Multi-hunk diffs preserve content between hunks
 When applying multiple hunks, lines between hunks are preserved. Each hunk is applied independently.
 
-### applyDiff no longer has strictCounts parameter
+### apply_diff no longer has strictCounts parameter
 Hunk counts are always advisory; use `fuzzy` to control context matching strictness.
 
 ## Mode-Specific Gotchas
@@ -157,7 +157,7 @@ By default only the **first** matching block is replaced. Pass `matchIndex=N` (1
 ### Use scope for large files when you know the approximate location
 Pass `scopeStart`/`scopeEnd` (1-based, inclusive) to restrict the byMarker/byContent search:
 ```json
-editFile(path="big.c", mode="replace", marker="target",
+edit_file(path="big.c", mode="replace", marker="target",
          scopeStart=120, scopeEnd=180, content="new")
 ```
 Either or both bounds may be given. `scopeStart` alone searches from that line to EOF; `scopeEnd` alone searches from line 1 to that line.

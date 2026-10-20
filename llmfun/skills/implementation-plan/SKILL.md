@@ -42,7 +42,7 @@ Use this skill when:
   (build/test, regression, stop-and-re-plan guard, anchor verification,
   decision letters); overflow into companion files (e.g. `plan/anchors.md`).
 - **Dependency order**: Order tasks so foundations come before dependents.
-- **Externalize continuously**: Context may be compressed. Write notes to `plan/requirements_notes.md` + `plan/codebase_notes.md`, draft tasks to `plan/task_NN.md` at once. On the 80% nudge do not finish the phase first: write what you have NOW, call `requestCompression` (handoff: workflow.md). Resume from the handoff + `plan/` notes (no handoff → re-read).
+- **Externalize continuously**: Context may be compressed. Write notes to `plan/requirements_notes.md` + `plan/codebase_notes.md`, draft tasks to `plan/task_NN.md` at once. On the 80% nudge do not finish the phase first: write what you have NOW, call `request_compression` (handoff: workflow.md). Resume from the handoff + `plan/` notes (no handoff → re-read).
 
 ## Workflow
 

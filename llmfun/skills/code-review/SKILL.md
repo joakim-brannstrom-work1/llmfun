@@ -35,7 +35,7 @@ its design/spec/plan.
 **Externalize continuously**: After every workflow step, write its output to
 the state file `review_notes.md` — never keep findings only in context. On the
 80% nudge do not finish the step first: write down what you have NOW and call
-`requestCompression` immediately (template: workflow.md) — self-requested
+`request_compression` immediately (template: workflow.md) — self-requested
 mid-review beats forced ~90%. Also at boundaries. After compression, resume
 from the re-injected handoff + `review_notes.md` and the specs — if
 compression hit without your handoff, re-read `review_notes.md` to recover.

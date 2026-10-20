@@ -920,7 +920,7 @@ struct ToolMessage {
     }
 
     /// Removes all tool calls matching the given name. Returns count removed.
-    size_t removeTool(string toolName) @system {
+    size_t removeTool(string toolName) @trusted {
         if (toolCalls.type != JSONType.array)
             return 0;
 
@@ -932,7 +932,7 @@ struct ToolMessage {
     }
 
     /// Returns true if any tool call matches the given name.
-    bool hasTool(string toolName) @system const {
+    bool hasTool(string toolName) @trusted const {
         if (toolCalls.type != JSONType.array)
             return false;
         foreach (call; toolCalls.array
@@ -1038,25 +1038,6 @@ enum Role {
     tool
 }
 
-// Check if a ToolMessage should be hidden from user output
-bool isHiddenToolCall(JSONValue toolCalls) {
-    if (toolCalls.type != JSONType.array || toolCalls.array.empty)
-        return false;
-    foreach (call; toolCalls.array) {
-        if ("function" !in call)
-            continue;
-        auto name = call["function"]["name"].str;
-        if (hiddenToolNames.canFind(name))
-            return true;
-    }
-    return false;
-}
-
-// Check if a ToolResponse should be hidden from user output
-bool isHiddenToolResponse(string toolName) {
-    return hiddenToolNames.canFind(toolName);
-}
-
 private:
 
 /// Replaces invalid UTF-8 sequences in s with U+FFFD (in place).
@@ -1075,9 +1056,6 @@ bool sanitizeField(ref string s) @safe {
         return true;
     }
 }
-
-// Tools that should not be displayed to the user
-enum hiddenToolNames = ["taskDone"];
 
 size_t[Role] RoleLength;
 
@@ -1773,7 +1751,7 @@ unittest {
 unittest {
     auto chat = Chat();
     chat.addUserQuery("q");
-    // A stream can yield reasoning without text: agent:499-501 adds the
+    // A stream can yield reasoning without text: the agent adds the
     // Message when content or reasoning is non-empty, so this shape is live.
     chat.add(Message(Role.assistant, userQuery: false, content: null, thinking: "reasoning without a text response"));
 

@@ -1,4 +1,4 @@
-# editFile — Unified file editing
+# edit_file — Unified file editing
 
 The single editing tool. Supports three targeting methods and five edit modes.
 
@@ -49,7 +49,7 @@ When you know roughly where the target is, pass `scopeStart`/`scopeEnd` (1-based
 inclusive) to restrict the byMarker/byContent search:
 
 ```json
-editFile(path="big.c", mode="replace", marker="target",
+edit_file(path="big.c", mode="replace", marker="target",
          scopeStart=120, scopeEnd=180, content="new")
 ```
 
@@ -87,7 +87,7 @@ When `dryRun=true`, also includes `"preview"` (the full modified file content).
 - The diagnostic includes closest-match details when a marker or code block is not found.
 - Read the `diagnostic` field to understand why the search failed and adjust your search.
 
-## applyDiff — Unified diff patch application
+## apply_diff — Unified diff patch application
 
 Apply a pre-computed unified diff patch to a file.
 
@@ -113,7 +113,7 @@ Apply a pre-computed unified diff patch to a file.
 Warnings list count mismatches (e.g., `"Hunk 1: declared 7 old lines, body has 8"`).
 When `dryRun=true`, also includes `"preview"`.
 
-## writeFile — Write or create files
+## write_file — Write or create files
 
 - Creates the file (including parent directories) if it doesn't exist.
 - **Replaces entire content** if file exists — use only for new files or complete rewrites.

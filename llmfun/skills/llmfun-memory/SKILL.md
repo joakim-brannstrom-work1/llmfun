@@ -45,32 +45,32 @@ Every memory entry MUST follow this structure:
 See `references/workflow.md` for detailed steps.
 
 1. **Identify Need** — Recognize new learning that should be stored.
-2. **Retrieve** — `getMemoryTopics` lists short-term (`short/`, default 7 days)
+2. **Retrieve** — `get_memory_topics` lists short-term (`short/`, default 7 days)
    topics only; long-term (`long/`, default 100 days) topics are RAG-indexed —
-   discover via RAG search (`queryBestMatch`/`querySemantic`).
-   `readMemory` reads either tier.
+   discover via RAG search (`query_best_match`/`query_semantic`).
+   `read_memory` reads either tier.
 3. **Compare** — Analyze old vs new — identify gaps, redundancies,
    contradictions.
 4. **Decide** — Update existing topic OR create new topic (use criteria in
    references).
 5. **Format** — Structure content per the mandatory format above.
-6. **Store** — Call `writeMemory`. On an existing long-term topic the first write
+6. **Store** — Call `write_memory`. On an existing long-term topic the first write
    FAILS unless its content already includes the stored content (then it IS the
    replace/merge write and lands in `short/`); it returns the stored content and
    nothing is written. Otherwise the second write (stored content included)
    decides replace vs merge and lands in `short/`. Promotion/demotion happen
    automatically in the background.
-7. **Cleanup** — Call `removeMemory` for obsolete topics; it works on both tiers;
+7. **Cleanup** — Call `remove_memory` for obsolete topics; it works on both tiers;
    archived (`archive/`) ones are unreachable (reported as nonexistent).
 
 ## Common Mistakes
 
-- **Overwriting without reviewing**: Always read existing memory with `readMemory`
-  first; on an existing long-term topic the first `writeMemory` typically FAILS
+- **Overwriting without reviewing**: Always read existing memory with `read_memory`
+  first; on an existing long-term topic the first `write_memory` typically FAILS
   (it succeeds only if its content already embeds the stored content) and returns
   the stored content — write it again fully (replace) or stored + additions
   (merge). The failed write is not saved.
-- **Creating duplicates**: Check `getMemoryTopics` and RAG search first
+- **Creating duplicates**: Check `get_memory_topics` and RAG search first
 - **Storing raw data**: Memory should hold lessons, not just facts
 - **Inconsistent formatting**: Follow the mandatory format — no deviations
 - **Too verbose**: Keep entries concise and scannable

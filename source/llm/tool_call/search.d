@@ -135,6 +135,7 @@ ExecuteFuncResult toolSearch(Context baseCtx, ToolSearchParams params) {
 version (unittest) {
     import llm.agent.context : AgentContext;
     import llm.config : LlmConfig;
+    import llm.utility : toSnakeCase;
 
     /// Minimal AgentContext for search tests (mirrors discovery.d's
     /// discoveryContext): a real LlmConfig, no RAG; the pool and broker state
@@ -146,7 +147,7 @@ version (unittest) {
 
     /// A visible pool tool with the given name, description and tags.
     private RegFunction searchTool(string name, string desc, string[] tags) @safe pure nothrow {
-        return RegFunction(name: name, desc: desc, params: [
+        return RegFunction(name: name, nameSnakeCase: toSnakeCase(name), desc: desc, params: [
             RegParam("path", "string", "File to read", true, "")
         ], callback: null, tags: tags);
     }

@@ -146,7 +146,7 @@ struct QuerySemanticParams {
 }
 
 @Function(
-        "Search the RAG using semantic queries. Use listRAGDatabases to discover available database names") ExecuteFuncResult querySemantic(
+        "Search the RAG using semantic queries. Use list_rag_databases to discover available database names") ExecuteFuncResult querySemantic(
         Context baseCtx, QuerySemanticParams params) {
     mixin(baseContextToSpecific!RAGContext);
     return queryFunc(ctx, params);
@@ -187,8 +187,7 @@ struct QueryBestMatchParams {
     @ParamOptional string database = "*";
 }
 
-@Function(
-        "Search RAG using combined semantic and FTS5 full-text. Use `listRAGDatabases` to discover available database names") ExecuteFuncResult queryBestMatch(
+@Function("Search RAG using combined semantic and FTS5 full-text. Use `list_rag_databases` to discover available database names") ExecuteFuncResult queryBestMatch(
         Context baseCtx, QueryBestMatchParams params) {
     mixin(baseContextToSpecific!RAGContext);
     auto res = queryFunc(ctx, params);
@@ -375,7 +374,7 @@ struct QueryReadFileParams {
     @ParamOptional bool appendLoc = true;
 }
 
-@Function("Read a specific line from a file in the RAG index. Resolves bare file names. Use readRAGSource to read a whole document") ExecuteFuncResult queryReadFile(
+@Function("Read a specific line from a file in the RAG index. Resolves bare file names. Use read_rag_source to read a whole document") ExecuteFuncResult queryReadFile(
         Context baseCtx, QueryReadFileParams params) {
     mixin(baseContextToSpecific!RAGContext);
 
@@ -438,7 +437,7 @@ struct ListRAGSourcesParams {
     @ParamOptional long limit = 50;
 }
 
-@Function("List documents (sources) indexed in the RAG: file paths, topics and URLs with chunk counts. Use this to resolve the exact stored path of a document, then read it with readRAGSource") ExecuteFuncResult listRAGSources(
+@Function("List documents (sources) indexed in the RAG: file paths, topics and URLs with chunk counts. Use this to resolve the exact stored path of a document, then read it with read_rag_source") ExecuteFuncResult listRAGSources(
         Context baseCtx, ListRAGSourcesParams params) {
     mixin(baseContextToSpecific!RAGContext);
 

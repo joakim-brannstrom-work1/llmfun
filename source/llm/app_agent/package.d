@@ -268,7 +268,7 @@ struct AgentApp {
 
     private void processChatMessage(Chat.MessageT m, size_t nr, bool printUser) {
         m.match!((Message a) {
-            const bool show = isDisplayable(m) && (a.role != Role.user || printUser);
+            const bool show = isDisplayable(m, llmConf) && (a.role != Role.user || printUser);
             if (show) {
                 auto msgType = a.role == Role.user ? TuiChatMessageType_User
                     : TuiChatMessageType_Assistant;
@@ -287,7 +287,7 @@ struct AgentApp {
                 this.sendPersistedFinalAnswer(a.getFinalAnswer(), nr, a.processTime());
             }
         }, (ToolResponse a) {
-            if (isDisplayable(m)) {
+            if (isDisplayable(m, llmConf)) {
                 this.sendPersistedChatMessage("tool result %s: %-s %s",
                     TuiChatMessageType_ToolResponse, nr, a.processTime(),
                     a.success ? "✅" : "❌", a.toolName, summarizeToolResponse(a, 1000));
@@ -307,10 +307,10 @@ struct AgentApp {
         // echoed with exactly its ordinal (runAgent, after the turn-start
         // doCompress); printUser: false keeps it out of the live display.
         auto history = agent_.chat.getMessages();
-        const size_t offset = displayableCount(history[0 .. $ - result.chat.length]);
+        const size_t offset = displayableCount(history[0 .. $ - result.chat.length], llmConf);
         size_t pos = 0;
         foreach (m; result.chat) {
-            if (isDisplayable(m)) {
+            if (isDisplayable(m, llmConf)) {
                 pos++;
                 this.processChatMessage(m, offset + pos, printUser: false);
             } else {
@@ -408,7 +408,7 @@ struct AgentApp {
 
         size_t pos = 0;
         foreach (m; agent_.chat.getMessages()) {
-            if (isDisplayable(m)) {
+            if (isDisplayable(m, llmConf)) {
                 pos++;
                 this.processChatMessage(m, pos, printUser: true);
             } else {
@@ -789,7 +789,7 @@ struct AgentApp {
             // and has no chat line for the prompt today.
             if (!query.empty && uiMsg.isActive())
                 this.sendPersistedChatMessage(query, TuiChatMessageType_User,
-                        displayableCount(agent_.chat.getMessages()),
+                        displayableCount(agent_.chat.getMessages(), llmConf),
                         MessageTime(NoProcessingTime()));
             auto result = agent_.runToCompletion(&this.processResult,
                     compressCallback: &this.progressCallback, interrupt: () {
@@ -902,18 +902,18 @@ struct AgentDone {
     int code;
 }
 
-package bool isDisplayable(Chat.MessageT m) {
+package bool isDisplayable(Chat.MessageT m, LlmConfig conf) {
     return m.match!((Message a) {
         return !a.role.among(Role.user, Role.system) || a.isUserQuery;
     }, (ToolMessage a) { return true; }, (ToolResponse a) {
-        return !isHiddenToolResponse(a.toolName);
+        return !conf.isHiddenTool(a.toolName);
     }, (VisionMessage a) { return true; });
 }
 
-package size_t displayableCount(Chat.MessageT[] msgs) {
+package size_t displayableCount(Chat.MessageT[] msgs, LlmConfig conf) {
     size_t n;
     foreach (ref msg; msgs) {
-        if (isDisplayable(msg))
+        if (isDisplayable(msg, conf))
             n++;
     }
     return n;
@@ -1030,7 +1030,7 @@ class AppAgentActor {
         // TODO: this same code is copy/pasted. Refactor it into a function
         size_t pos = 0;
         foreach (m; app.agent_.chat.getMessages()) {
-            if (isDisplayable(m)) {
+            if (isDisplayable(m, app.llmConf)) {
                 pos++;
                 app.processChatMessage(m, pos, printUser: true);
             } else {

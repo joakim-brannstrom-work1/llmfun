@@ -130,7 +130,7 @@ execution time:
   task file restates only the anchors it uses.
 - Anchors go stale as earlier tasks in the same plan shift lines. The
   overview's Standing Executor Rules tell the executor: verify anchor
-  content before each edit (readFile, compare against the expected text);
+  content before each edit (read_file, compare against the expected text);
   if stale, re-anchor by content (grep) and proceed — never guess line
   numbers.
 
@@ -164,7 +164,7 @@ it before every task):**
 - Stop-and-re-plan guard: if a task's actual work exceeds its read set or
   size budget, the executor stops and reports it for a Phase 6 re-plan —
   never pushes through an overgrown task.
-- Anchors: verify anchor content before each edit (readFile); if stale,
+- Anchors: verify anchor content before each edit (read_file); if stale,
   re-anchor by content (grep) — never guess line numbers.
 - Decision letters: one-line definitions (D6, F10, N3, …) so no task file
   needs the design doc.
@@ -209,22 +209,22 @@ hard gate, not a guideline):
 - **Explain dependencies**: Note why tasks are ordered as they are.
 - **Invite review**: Ask the user if the plan makes sense before execution.
 
-## Compression checkpoint (`requestCompression`)
+## Compression checkpoint (`request_compression`)
 
-`requestCompression` is the plan's active checkpoint: it compresses on your
+`request_compression` is the plan's active checkpoint: it compresses on your
 terms and re-injects your message-to-self afterwards — unlike forced
 compression at ~90%, which summarizes without your control.
 
 - Trigger points:
   - **80% `[SYSTEM NUDGE - NOT USER INPUT]`**: act NOW — do not finish the
     current phase or task draft first. Write down what you have NOW (notes
-    files + current-task state) and call `requestCompression` immediately —
+    files + current-task state) and call `request_compression` immediately —
     a self-requested compression mid-task is always better than the forced
     one at ~90%, which summarizes without your control.
   - At any natural planning boundary (after each phase, after each task
     draft) — even below 80%: update the files and checkpoint, so the
     nudge-time write stays small.
-- Never call `requestCompression` with unsaved state — write the notes
+- Never call `request_compression` with unsaved state — write the notes
   files first; the handoff carries only the summary.
 - Write the message-to-self as a briefing for a new instance with no memory
   of the session:

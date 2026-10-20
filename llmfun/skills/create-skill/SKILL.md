@@ -84,7 +84,7 @@ skill-name/
 See `references/workflow.md` for detailed steps.
 
 1. **Determine name** — validate against naming rules
-2. **Create directory** and write SKILL.md with `writeFile`
+2. **Create directory** and write SKILL.md with `write_file`
 3. **Create subdirectories** and supporting files
 4. **Verify** — re-read SKILL.md, check byte size, check for errors
 5. **Report** — summarize what was created with full path

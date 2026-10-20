@@ -74,11 +74,10 @@ int listTools(UserConfig uconf, UserConfig.Mcp conf, LlmConfig llmConf) nothrow 
     import std.json : JSONType;
     import std.stdio : writeln;
 
-    import llm.tool_call : descAllFunctions, filterToolDescriptions;
+    import llm.tool_call : getFunctions, filterToolDescriptions;
 
     try {
-        auto allTools = descAllFunctions();
-        auto filtered = filterToolDescriptions(allTools, llmConf.toolFilter.to);
+        auto filtered = filterToolDescriptions(getFunctions, llmConf.toolFilter.to);
 
         if (filtered.array.length == 0) {
             logger.errorf("No tools match the filter (include: %s, , exclude: %s)",

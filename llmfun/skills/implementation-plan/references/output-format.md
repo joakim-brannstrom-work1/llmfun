@@ -31,7 +31,7 @@ overview first, so no restatement in task footers is needed.]
   passing.
 - Stop-and-re-plan: if a task's actual work exceeds its read set or size
   budget, stop and report for a re-plan — never push through.
-- Anchors: verify anchor content before each edit (readFile); if stale,
+- Anchors: verify anchor content before each edit (read_file); if stale,
   re-anchor by content (grep) — never guess line numbers.
 - Decisions: `D6: …`, `F10: …` — one-line definitions.
 - Open issues: [design-vs-code conflicts and the conservative

@@ -42,8 +42,8 @@ Use this skill when:
 ## Build System
 
 - DUB build system. Config: `llmfun/dub.sdl`.
-- Build: `executeCommand(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "build"])`
-- Test: `executeCommand(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "test"])`
+- Build: `execute_command(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "build"])`
+- Test: `execute_command(environmentTag="llmfun", command=["cd", "llmfun", "&&", "dub", "test"])`
 - `dub build` defaults to config `application`. Other configs:
   `--config=application-with-local-model`, `--config=llmfun_test`.
 
@@ -59,11 +59,11 @@ After the skill is loaded the scripts are at `skills/llmfun-self-improve/scripts
 
 Invoke scripts with `bash` or `sh` (exec bit may be lost when copied):
 `command=["bash", ".../scripts/build.sh"]`. See `references/build-guide.md`
-for `executeCommand` argument semantics and command forms.
+for `execute_command` argument semantics and command forms.
 
 Example:
 ```
-executeCommand(environmentTag="llmfun", command=["bash", "/workarea/skills/llmfun-self-improve/scripts/build.sh"])
+execute_command(environmentTag="llmfun", command=["bash", "/workarea/skills/llmfun-self-improve/scripts/build.sh"])
 ```
 
 ## Git Workflow

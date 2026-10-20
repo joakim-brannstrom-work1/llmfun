@@ -181,7 +181,7 @@ struct RemoveMemoryParams {
 struct GetMemoryTopicsParams {
 }
 
-@Function("Retrieve all short-term memory topics with summaries for each topic. Use the RAG to retrieve long-term memories (queryBestMatch/querySemantic)")
+@Function("Retrieve all short-term memory topics with summaries for each topic. Use the RAG to retrieve long-term memories (query_best_match/query_semantic)")
 ExecuteFuncResult getMemoryTopics(Context baseCtx, GetMemoryTopicsParams params) {
     mixin(baseContextToSpecific!MemoryContext);
     auto topics = ctx.getMemoryFileTopics;

@@ -17,10 +17,11 @@
 module llm.mcp_server;
 
 import logger = std.logger;
-import std.algorithm : map;
+import std.algorithm : find;
 import std.array : array;
 import std.datetime : Clock, dur;
 import std.json : JSONType, JSONValue;
+import std.range : empty, front;
 
 import my.filter : ReFilter;
 import my.path : Path;
@@ -39,9 +40,13 @@ import llm.mcp_server.transport : EOFException, StdioTransport, Transport;
 import llm.mcp_server.types;
 import llm.rag.rag : RAG;
 import llm.skill : SkillManager, makeSkillManager;
-import llm.tool_call : Context, descAllFunctions, executeFunc, filterToolDescriptions;
+import llm.tool_call : Context, executeFunc, getFunctions;
 
-/// MCP server that exposes @Function-registered tools over JSON-RPC 2.0. Takes a ReFilter at construction to control which tools are visible to MCP clients. Uses descAllFunctions() and executeFunc() from llm.tool_call. This class is a pure request/response handler -- the event loop lives in the McpServerActor actor, which owns the transport.
+// MCP server that exposes @Function-registered tools over JSON-RPC 2.0. Takes
+// a ReFilter at construction to control which tools are visible to MCP
+// clients. Uses descAllFunctions() and executeFunc() from llm.tool_call. This
+// class is a pure request/response handler -- the event loop lives in the
+// McpServerActor actor, which owns the transport.
 class MCPServer {
 private:
     ReFilter filter_;
@@ -49,13 +54,16 @@ private:
     bool initialized_;
 
 public:
-    /// Construct server with tool filter and optional execution context. A null context works for stateless tools (most tools don't dereference Context).
+    // Construct server with tool filter and optional execution context. A null
+    // context works for stateless tools (most tools don't dereference
+    // Context).
     this(ReFilter filter, Context ctx = null) {
         this.filter_ = filter;
         this.ctx = ctx;
     }
 
-    /// Parse a JSON-RPC message and return the serialized response string, or null for notifications (no response required).
+    // Parse a JSON-RPC message and return the serialized response string, or
+    // null for notifications (no response required).
     string handleMessage(string message) {
         if (message is null || message.length == 0)
             return null;
@@ -137,11 +145,10 @@ private:
 
     /// Handle tools/list -- return filtered tool descriptions in MCP format.
     JsonRpcResponse handleToolsList(JsonRpcRequest request) {
-        // descAllFunctions() returns JSONValue(JSONValue[]) -- guaranteed array.
-        auto allTools = descAllFunctions();
-        auto filtered = filterToolDescriptions(allTools, filter_);
+        import llm.tool_call : filterToolDescriptions;
 
-        // Convert OpenAI-format tool descriptions to MCP ToolDefinition format.
+        auto filtered = filterToolDescriptions(getFunctions(), filter_);
+
         JSONValue[] mcpTools;
         foreach (toolEntry; filtered.array) {
             // Each entry has {"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}
@@ -166,11 +173,11 @@ private:
                 return createInvalidParamsResponse(request.id, "'name' must be a string");
             auto name = request.params["name"].str;
 
-            // ReFilter rejection: return MethodNotFound to avoid leaking tool existence.
-            if (!filter_.match(name))
+            auto entry = getFunctions().find!(f => f.nameSnakeCase == name || f.name == name);
+            if (entry.empty || !filter_.match(entry.front.name))
                 return createMethodNotFoundResponse(request.id, name);
 
-            // params["arguments"] is already a parsed JSONValue object. Pass it directly to executeFunc() -- do NOT stringify and re-parse.
+            // params["arguments"] is already a parsed JSONValue object. Do NOT stringify and re-parse.
             JSONValue args;
             if ("arguments" in request.params) {
                 args = request.params["arguments"];
@@ -181,8 +188,7 @@ private:
                 args = JSONValue.emptyObject;
             }
 
-            // Execute the tool with null Context (stateless tools don't dereference it).
-            auto result = executeFunc(ctx, name, args);
+            auto result = executeFunc(ctx, entry.front.nameSnakeCase, args);
 
             // Wrap result in MCP ToolResult content format.
             ToolResult toolResult;
@@ -426,13 +432,7 @@ private:
     /// Stop path shared by eof() and shutdown(): close the transport and
     /// destroy RAG, set the exit cell (1 stopped ok / 2 stopped with error)
     /// right before sendExit so main's pump loop observes a fully cleaned-up
-    /// stop, then self-exit. NO onExit
-    /// hook: declaring one would REPLACE the default exit handler, which is
-    /// the only forceShutdown death path - with a user onExit hook the actor
-    /// survives sendExit(userShutdown) (the TrappedExit semantics verified in
-    /// my/actor/registration.d:476-503). With no onExit hook the default exit
-    /// handler force-shuts the actor down: a real death (the mylib-sanctioned
-    /// self-exit pattern, README "one-shot task actors").
+    /// stop, then self-exit
     void stop(bool hadError = false) {
         if (stopping_)
             return;
@@ -454,11 +454,6 @@ private:
     }
 }
 
-/// Reader tick cadence: the pollTick self-rescheduling delay. The practical
-/// cadence is ~10-20 ms, not exactly 10 ms (the worker inactiveLimit sleep),
-/// which the pump loops tolerate.
-private enum TickInterval = 10.dur!"msecs";
-
 /// Reader-side actor: forwards complete JSON-RPC frames from the transport to
 /// the server actor, one per pollTick (a self-rescheduling tick on the
 /// shared pool - between ticks neither actor occupies a pool worker). Spawned
@@ -474,6 +469,8 @@ private enum TickInterval = 10.dur!"msecs";
 /// Transport methods.
 class StdioReaderActor {
     private {
+        enum TickInterval = 10.dur!"msecs";
+
         /// Weak address of the server actor: a dynSend/dynDelayedSend to a
         /// dead server is a structural no-op (WeakAddress.lock.get == null).
         WeakAddress server_;

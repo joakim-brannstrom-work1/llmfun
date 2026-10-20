@@ -180,7 +180,7 @@ class Agent : IBasicAgent {
     /// Rebuilds the model-facing tools array from the current pool and the
     /// effective (hook-adjusted, per-model) broker config
     private void rebuildModelTools() @trusted {
-        import llm.tool_call : descAllFunctions, filterToolDescriptions;
+        import llm.tool_call : descAllFunctions, filterToolDescriptions, getFunctions;
         import llm.tool_call.broker : selectTools;
         import llm.tool_call.discovery : composeDiscoveryDesc;
 
@@ -196,7 +196,7 @@ class Agent : IBasicAgent {
             // the pool, the only possible difference being a neverHide tool
             // excluded by toolFilter (in the pool only; warned at
             // construction)
-            tools = filterToolDescriptions(descAllFunctions(), toolFilter).array;
+            tools = filterToolDescriptions(getFunctions(), toolFilter).array;
             toolCtx.rebuildTools = null;
         }
     }
@@ -240,7 +240,7 @@ class Agent : IBasicAgent {
         if (toolCtx.rebuildTools !is null)
             toolCtx.rebuildTools();
         else
-            tools = filterToolDescriptions(descAllFunctions(), toolFilter).array;
+            tools = filterToolDescriptions(getFunctions(), toolFilter).array;
     }
 
     Message[] getUserQueries() @safe nothrow {
@@ -489,7 +489,7 @@ class Agent : IBasicAgent {
         // Prune scan: the intact pre-compression chat is the
         // usage corpus. Runs after the early-return gate, before summary.compress
         // rewrites the chat; summary text and assistant prose never count as usage.
-        string[] inactive = scanInactiveTools(toolCtx.broker, chat);
+        string[] inactive = scanInactiveTools(toolCtx.broker, chat, toolCtx.pool);
         long oldContextSize = prevStat.context;
         auto result = summary.compress(chat, callback, null);
         prevStat.startContext = result.newContextSize;
@@ -762,7 +762,7 @@ Continue your work from where you left off.";
         auto used = () @trusted { return scanUsedTools(chat); }();
 
         foreach (name; used) {
-            auto matches = toolCtx.pool.filter!(f => f.name == name);
+            auto matches = toolCtx.pool.filter!(f => f.name == name || f.nameSnakeCase == name);
             if (matches.empty)
                 continue;
             auto f = matches.front;
@@ -853,9 +853,9 @@ private:
             string result;
             try {
                 if (toolCtx.brokerEnabled
-                        && toolCtx.pool.canFind!(f => f.name == call.name)
+                        && toolCtx.pool.canFind!(f => f.nameSnakeCase == call.name)
                         && !tools.canFind!(t => t["function"]["name"].str == call.name)) {
-                    result = ("error: tool '" ~ call.name ~ "' is not visible to this agent in the current session (visibility resets when chat history is loaded or the session changes); discover tools with `listToolTags`, then make them visible with `loadToolTag`.")
+                    result = ("error: tool '" ~ call.name ~ "' is not visible to this agent in the current session (visibility resets when chat history is loaded or the session changes); discover available tool groups with `list_tool_tags`, then call `list_tool_tags` with the group name to activate it.")
                         .sanitizeUtf8;
                     success = false;
 
@@ -886,7 +886,7 @@ private:
             }
 
             JSONValue sd = JSONValue.init;
-            if (call.name == "taskDone" && taskDone_ && !taskDoneMessage_.empty) {
+            if (conf.isTaskDone(call.name) && taskDone_ && !taskDoneMessage_.empty) {
                 sd["taskDoneAnswer"] = JSONValue(taskDoneMessage_);
             }
             auto tm = ToolMessage(thinking, JSONValue([call.toJson]), JSONValue.init, sd);
@@ -1212,20 +1212,28 @@ struct StreamResponse {
     }
 }
 
-/// Swaps the `listToolTags` discovery entry's description in the tools array
-/// for the composed one: the UDA base text plus the resolved config's
-/// described groups, ordered by activation frequency then name
-/// (composeDiscoveryDesc). A no-op when toolFilter excluded the discovery
-/// tool from the array. Undescribed groups are not advertised by design,
-/// so there is no empty-description warning here.
+/// Swaps the discovery meta-tool's description in the tools array for the
+/// composed one: the UDA base text plus the resolved config's described
+/// groups, ordered by activation frequency then name
+/// (composeDiscoveryDesc). A no-op when the discovery tool is absent from
+/// the array (a toolFilter can exclude it, in which case there is nothing
+/// to compose). Undescribed groups are not advertised by design, so there
+/// is no empty-description warning here.
 private void composeDiscoveryDescription(ref JSONValue[] tools,
         ToolBrokerConfig resolved, BrokerState st) @safe {
-    import std.algorithm : countUntil;
+    import std.algorithm : countUntil, find;
+    import llm.tool_call : getFunctions;
     import llm.tool_call.discovery : composeDiscoveryDesc;
 
-    auto idx = tools.countUntil!(e => e["function"]["name"].str == "listToolTags");
-    if (idx < 0)
-        return; // listToolTags filtered out by toolFilter - nothing to compose
+    // The discovery meta-tool's model-facing name comes from the registry
+    // (snake axis); a toolFilter can exclude it, in which case there is
+    // nothing to compose and the array is left unchanged.
+    auto meta = getFunctions().find!(f => f.name == "listToolTags");
+    if (meta.empty)
+        return;
+    auto idx = tools.countUntil!(e => e["function"]["name"].str == meta.front.nameSnakeCase);
+    if (idx >= tools.length)
+        return; // real guard: the entry is absent from the array
 
     tools[idx]["function"]["description"] = composeDiscoveryDesc(
             tools[idx]["function"]["description"].str, resolved, st);

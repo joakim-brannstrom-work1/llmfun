@@ -47,7 +47,7 @@ code. Pseudocode is acceptable if it clarifies the design or specification.
 - **Write the plan to a file**: Always save the task list and inform the user.
 - **Externalize + checkpoint**: Write each phase's output to
   `plan/design_notes.md`. On the 80% nudge, do not finish the phase first:
-  write down what you have NOW and call `requestCompression` immediately
+  write down what you have NOW and call `request_compression` immediately
   (handoff template: workflow.md) — self-requested mid-task beats forced
   ~90%. Resume from the handoff + `plan/design_notes.md` (no handoff →
   re-read it).

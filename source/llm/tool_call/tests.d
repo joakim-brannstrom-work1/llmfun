@@ -8,7 +8,7 @@ import std.json : JSONValue, parseJSON;
 import llm.tool_call : Context, ExecuteFuncResult, Function, ParamOptional, initParams, toParams;
 
 /// Sample params struct used by the initParams unit tests (was private in llm/tool_call/package.d; moved here since only these tests use it).
-private struct TestCmdParams {
+struct TestCmdParams {
     string[] command;
     @ParamOptional string cwd;
 }
@@ -47,10 +47,8 @@ unittest {
     assert(strParams.errorMsg.canFind("string[]"), strParams.errorMsg);
 }
 
-// --- RegFunction runtime tags default empty ---
-
 /// Empty params struct for the tags fixtures (nothing to decode).
-private struct TagsFixtureParams {
+struct TagsFixtureParams {
 }
 
 /// Fixture with a bare @Function UDA (the UDA has no tags channel); registered
@@ -74,9 +72,10 @@ unittest {
     import std.traits : getUDAs;
 
     import llm.tool_call : RegFunction, addFunction, getFunctions, toParams;
+    import llm.utility : toSnakeCase;
 
     enum uda = getUDAs!(tagsUdaFixture, Function)[0];
-    addFunction(RegFunction(name: "tags_uda_fixture_tool", desc: uda.desc,
+    addFunction(RegFunction(name: "tags_uda_fixture_tool", nameSnakeCase: toSnakeCase("tags_uda_fixture_tool"), desc: uda.desc,
             params: toParams!TagsFixtureParams, callback: &tagsFixtureRawCallback));
     auto hits = getFunctions.filter!(f => f.name == "tags_uda_fixture_tool").array;
     assert(hits.length == 1);
@@ -91,13 +90,79 @@ unittest {
     import std.traits : getUDAs;
 
     import llm.tool_call : RegFunction, addFunction, getFunctions, toParams;
+    import llm.utility : toSnakeCase;
 
     enum uda = getUDAs!(tagsUdaFixture, Function)[0];
-    addFunction(RegFunction(name: "tags_dup_probe", desc: uda.desc, params: toParams!TagsFixtureParams,
-            callback: &tagsFixtureRawCallback, tags: ["first"]));
-    addFunction(RegFunction(name: "tags_dup_probe", desc: "other", params: toParams!TagsFixtureParams,
+    addFunction(RegFunction(name: "tags_dup_probe", nameSnakeCase: toSnakeCase("tags_dup_probe"), desc: uda.desc,
+            params: toParams!TagsFixtureParams, callback: &tagsFixtureRawCallback, tags: [
+                "first"
+    ]));
+    addFunction(RegFunction(name: "tags_dup_probe", nameSnakeCase: toSnakeCase("tags_dup_probe"), desc: "other", params: toParams!TagsFixtureParams,
             callback: &tagsFixtureRawCallback, tags: ["second"]));
     auto hits = getFunctions.filter!(f => f.name == "tags_dup_probe").array;
     assert(hits.length == 1, "duplicate addFunction must be ignored");
     assert(hits[0].tags == ["first"], text(hits[0].tags));
+}
+
+unittest {
+    // Snake-collision registration warns and ignores: the D names differ but
+    // the snake (model-facing, dispatch) names collide - first registration
+    // wins. Unique task2_ prefix: the global registry is shared module state
+    // across the test binary (same deliberate-leak convention as the tags
+    // fixtures above).
+    import std.algorithm : filter;
+    import std.array : array;
+
+    import llm.tool_call : RegFunction, addFunction, getFunctions, toParams;
+
+    addFunction(RegFunction(name: "task2_queryBestMatch", desc: "task2 snake probe", nameSnakeCase: "task2_query_best_match",
+            params: toParams!TagsFixtureParams, callback: &tagsFixtureRawCallback));
+    addFunction(RegFunction(name: "task2_query_Best_Match", desc: "task2 snake probe 2", nameSnakeCase: "task2_query_best_match",
+            params: toParams!TagsFixtureParams, callback: &tagsFixtureRawCallback));
+    auto hits = getFunctions.filter!(f => f.nameSnakeCase == "task2_query_best_match").array;
+    assert(hits.length == 1, "snake-collision addFunction must be ignored");
+    assert(hits[0].name == "task2_queryBestMatch");
+}
+
+@("toSnakeCase contract vectors")
+unittest {
+    import std.algorithm : filter;
+    import std.array : array;
+
+    import llm.tool_call : getFunctions;
+    import llm.utility : toSnakeCase;
+
+    // The 19 required vectors, verbatim from the task spec: 16 conversions
+    // + the identity set {already_snake, my-tool, ""}.
+    string[][] vectors = [
+        ["taskDone", "task_done"], ["queryBestMatch", "query_best_match"],
+        ["listRAGDatabases", "list_rag_databases"],
+        ["removeTopicFromRAG", "remove_topic_from_rag"],
+        ["pipelineOutput", "pipeline_output"], [
+            "listToolTags", "list_tool_tags"
+        ], ["loadImageApi", "load_image_api"], ["md5HashFile", "md5_hash_file"],
+        ["base64Encode", "base64_encode"], ["md5Hash", "md5_hash"],
+        ["already_snake", "already_snake"], ["my-tool", "my-tool"],
+        ["mixed_Bar", "mixed_bar"], ["Foo", "foo"], ["ABC", "abc"], [
+            "aBc", "a_bc"
+        ], ["foo2Bar", "foo2_bar"], ["HTTP2", "http2"], ["", ""],
+    ];
+    foreach (v; vectors)
+        assert(toSnakeCase(v[0]) == v[1], v[0] ~ " -> " ~ toSnakeCase(v[0]) ~ " (want " ~ v[1] ~ ")");
+
+    // Idempotency over the whole table: the output charset has no uppercase,
+    // so a second application hits the identity rule.
+    foreach (v; vectors) {
+        const once = toSnakeCase(v[0]);
+        assert(toSnakeCase(once) == once, once ~ " is not idempotent");
+    }
+
+    // Registry spot-check: the mixin-registered tools in the test binary
+    // carry the converted nameSnakeCase (conversion live, not stub identity).
+    auto tdone = getFunctions.filter!(f => f.name == "taskDone").array;
+    assert(tdone.length == 1, "taskDone missing from the test-binary registry");
+    assert(tdone[0].nameSnakeCase == "task_done", tdone[0].nameSnakeCase);
+    auto pout = getFunctions.filter!(f => f.name == "pipelineOutput").array;
+    assert(pout.length == 1, "pipelineOutput missing from the test-binary registry");
+    assert(pout[0].nameSnakeCase == "pipeline_output", pout[0].nameSnakeCase);
 }

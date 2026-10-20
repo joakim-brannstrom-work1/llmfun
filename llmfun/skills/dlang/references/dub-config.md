@@ -10,9 +10,9 @@ A dub project is a directory containing either:
 
 Build by executing `dub build` in the project directory. This reads the configuration and compiles all source files.
 
-## Using executeCommand
+## Using execute_command
 
-The `executeCommand` tool runs commands in a configured execution environment. Use a D language container image.
+The `execute_command` tool runs commands in a configured execution environment. Use a D language container image.
 
 **Parameters:**
 - `environmentTag`: Environment tag with a D toolchain image (e.g., "dlang")
@@ -20,8 +20,8 @@ The `executeCommand` tool runs commands in a configured execution environment. U
 
 **Example usage:**
 ```
-executeCommand(environmentTag="dlang2:latest", command=["cd", "<project-dir>", "&&", "dub", "build"])
-executeCommand(environmentTag="dlang2:latest", command=["cd", "<project-dir>", "&&", "dub", "test"])
+execute_command(environmentTag="dlang2:latest", command=["cd", "<project-dir>", "&&", "dub", "build"])
+execute_command(environmentTag="dlang2:latest", command=["cd", "<project-dir>", "&&", "dub", "test"])
 ```
 
 The build target "syntax" is excellent for checking the syntax of the code
@@ -29,7 +29,7 @@ without generating any object code. Prefer using it if you do not need to
 execute the tests.
 
 ```
-executeCommand(environmentTag="dlang2:latest", command=["cd", "<project-dir>", "&&", "dub", "build", "-b", "syntax"])
+execute_command(environmentTag="dlang2:latest", command=["cd", "<project-dir>", "&&", "dub", "build", "-b", "syntax"])
 ```
 
 ## Minimal dub.sdl

@@ -73,21 +73,21 @@ next phase.
 
 Report design tasks using the output format template in `output-format.md`.
 
-## Compression checkpoint (`requestCompression`)
+## Compression checkpoint (`request_compression`)
 
-`requestCompression` is the design's active checkpoint: it compresses on
+`request_compression` is the design's active checkpoint: it compresses on
 your terms and re-injects your message-to-self afterwards — unlike forced
 compression at ~90%, which summarizes without your control.
 
 - Trigger points:
   - **80% `[SYSTEM NUDGE - NOT USER INPUT]`**: act NOW — do not finish the
     current phase first. Write down what you have NOW (`plan/design_notes.md`
-    up to here + current-phase notes) and call `requestCompression`
+    up to here + current-phase notes) and call `request_compression`
     immediately — a self-requested compression mid-task is always better
     than the forced one at ~90%, which summarizes without your control.
   - At every phase boundary in a long design — even below 80%: update the
     notes file and checkpoint, so the nudge-time write stays small.
-- Never call `requestCompression` with unsaved state — write the notes file
+- Never call `request_compression` with unsaved state — write the notes file
   first; the handoff carries only the summary.
 - Write the message-to-self as a briefing for a new instance with no memory
   of the session:

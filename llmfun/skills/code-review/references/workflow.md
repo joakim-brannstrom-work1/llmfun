@@ -118,9 +118,9 @@ Sections (update the relevant section after every step):
    re-read whole files.
 4. Continue from the first unchecked step; keep updating the file.
 
-## Compression checkpoint (`requestCompression`)
+## Compression checkpoint (`request_compression`)
 
-`requestCompression` is the review's active checkpoint: it compresses on
+`request_compression` is the review's active checkpoint: it compresses on
 your terms and re-injects your message-to-self afterwards — unlike the
 forced compression at ~90%, which summarizes without your control and can
 garble in-context evidence.
@@ -128,14 +128,14 @@ garble in-context evidence.
 - Trigger points:
   - **80% `[SYSTEM NUDGE - NOT USER INPUT]`**: act NOW — do not finish the
     current step or file first. Write down what you have NOW (`review_notes.md`
-    up to here + current-step findings) and call `requestCompression`
+    up to here + current-step findings) and call `request_compression`
     immediately — a self-requested compression mid-analysis is always
     better than the forced one at ~90%, which summarizes without your
     control.
   - At any natural review boundary in a long review (after a step, after
     each file) — even below 80%: update the state file and checkpoint, so
     the nudge-time write stays small.
-- Never call `requestCompression` with unsaved state — write
+- Never call `request_compression` with unsaved state — write
   `review_notes.md` first; the handoff carries only the summary.
 - Write the message-to-self as a briefing for a new instance with no memory
   of the session:

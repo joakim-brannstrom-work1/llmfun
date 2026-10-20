@@ -18,11 +18,11 @@ Do NOT store:
 
 ## Step 2: Retrieve
 
-- Call `getMemoryTopics` to list SHORT-TERM topics with summaries and
+- Call `get_memory_topics` to list SHORT-TERM topics with summaries and
   last-modified times. Long-term topics are NOT listed — they live in `long/`
   and are RAG-indexed, so discover them via RAG search
-  (`queryBestMatch`/`querySemantic`).
-- For any relevant topic, call `readMemory` to fetch its content. It reads a
+  (`query_best_match`/`query_semantic`).
+- For any relevant topic, call `read_memory` to fetch its content. It reads a
   topic by name from either tier (`short/` or `long/`).
 
 ## Step 3: Compare
@@ -94,7 +94,7 @@ Structure content per the mandatory format:
 
 ## Step 6: Store
 
-Call `writeMemory` with the formatted content.
+Call `write_memory` with the formatted content.
 
 Writes to new or short-term (`short/`) topics succeed immediately. An existing
 LONG-TERM topic takes a two-write flow:
@@ -120,7 +120,7 @@ LONG-TERM topic takes a two-write flow:
 - Ensure related information has been moved or merged
 - Consider if the topic might be needed in future sessions
 
-Call `removeMemory` for obsolete topics. It works on both tiers (`short/` and
+Call `remove_memory` for obsolete topics. It works on both tiers (`short/` and
 `long/`); archived (`archive/`) topics are unreachable and reported as
 nonexistent.
 
@@ -138,7 +138,7 @@ Every memory topic falls into one of two categories:
 ### Signs a Memory is Reusable
 
 - Documents a language feature or quirk (e.g., D AA literal syntax, C++ inline static constexpr)
-- Describes tool behavior that affects how you work (e.g., editFile line-shift corruption)
+- Describes tool behavior that affects how you work (e.g., edit_file line-shift corruption)
 - Captures environment quirks (e.g., container shell joining, grep failures)
 - Contains a pattern or anti-pattern that applies to future work
 - Would be useful to someone new to the codebase or environment

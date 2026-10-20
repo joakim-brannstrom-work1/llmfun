@@ -1,20 +1,20 @@
-/// Runtime MCP tool registration: the MCP server ("MCP tools route
-/// through the broker", task 12) registers its tools into the global
+/// Runtime MCP tool registration: the MCP server routes its tools through
+/// the broker. It registers them into the global
 /// llm.tool_call registry at runtime, when a server connects - not at program
 /// start through the RegisterLlmFunctions mixin. Each configured MCP server
 /// carries optional config tags (UserConfig.Mcp.tags, llm/app_config.d); every
 /// tool registered from that server inherits them as RUNTIME tags on its
 /// RegFunction.
 ///
-/// Runtime tags are a FALLBACK membership source (D9): a runtime tag matching
+/// Runtime tags are a FALLBACK membership source: a runtime tag matching
 /// a configured group name puts the tool in that group (llm.tool_call.broker
 /// membership - inGroup/groupsOf/isVisible), alongside the group's config
 /// `tools` list. A runtime tag naming no defined group contributes nothing.
 /// Configuring where MCP tools are placed per server (per-server group
-/// assignment) is a later design task (design section 13) - out of scope here.
+/// assignment) is a later design task - out of scope here.
 ///
 /// The compile-time tag channel is gone: the @Function UDA no longer carries
-/// tags (task 2 removed the UDA's tags field), so this runtime path is the
+/// tags (the UDA's tags field was removed), so this runtime path is the
 /// only tags writer. The UDA-side registration path does NOT constrain this
 /// one: both call addFunction directly, so a server tag is accepted as-is
 /// (free-form - external servers' tags cannot be anticipated ahead of time,
@@ -45,13 +45,15 @@ import llm.tool_call : Context, ExecuteFuncResult, RegFunction, RegParam, addFun
 ///   serverTags = runtime tags inherited from the MCP server's config
 ///               (UserConfig.Mcp.tags); free-form - the known-tag enum check
 ///               does not apply to this runtime path. FALLBACK membership
-///               source (D9): a tag matching a configured group name puts the
+///               source: a tag matching a configured group name puts the
 ///               tool in that group; an unmatched tag leaves the tool alwaysOn
 ///               (in no group).
 void registerMcpTool(string name, string desc, RegParam[] params,
         ExecuteFuncResult function(Context, JSONValue) callback, string[] serverTags) {
-    addFunction(RegFunction(name: name, desc: desc, params: params, callback: callback,
-            tags: serverTags));
+    import llm.utility : toSnakeCase;
+
+    addFunction(RegFunction(name: name, nameSnakeCase: toSnakeCase(name), desc: desc,
+            params: params, callback: callback, tags: serverTags));
 }
 
 version (unittest) {
@@ -90,7 +92,7 @@ unittest {
     auto g = reg.filter!(f => f.name == grouped).array[0];
     auto l = reg.filter!(f => f.name == loose).array[0];
 
-    // D9 fallback membership: the runtime tag names the configured group, so
+    // Fallback membership: the runtime tag names the configured group, so
     // the tool is a member even though the group's config `tools` list is empty.
     assert(groupsOf(resolved, g).canFind("mcp_ext_t10_grp"), text(g.tags));
     assert(!isVisible(resolved, g), "a hidden-group member stays hidden");
