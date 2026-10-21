@@ -424,18 +424,14 @@ Describe the scenario: the input or condition and the expected result - "X when 
 
 Scenario-shaped:
 
-```d
-@("0/0 escalation ladder is rejected")
-@("empty file names are rejected only for enabled kinds")
-@("a valid enum member name selects that member; an invalid one keeps the default")
-```
+`@("0/0 escalation ladder is rejected")`
+`@("empty file names are rejected only for enabled kinds")`
+`@("a valid enum member name selects that member; an invalid one keeps the default")`
 
 Implementation-shaped (do not):
 
-```d
-@("validateConfig calls checkNudges first")
-@("parses the value through the Nullable branch")
-```
+`@("validateConfig calls checkNudges first")`
+`@("parses the value through the Nullable branch")`
 
 ## Agent Rules
 
