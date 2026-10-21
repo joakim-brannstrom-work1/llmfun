@@ -9,6 +9,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "imgui_internal.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -186,6 +187,15 @@ public:
         ImGui_ImplGlfw_NewFrame();
         ImGui_ImplOpenGL3_NewFrame();
         ImGui::NewFrame();
+        // Claim the Alt keys every frame: Dear ImGui's press-and-release-Alt
+        // nav-layer toggle (NavUpdateWindowing) cannot tell a plain Alt tap
+        // from AltGr - X11 reports no Ctrl for AltGr, so typing "@" with AltGr
+        // cleared the active text input and jumped focus to the menu layer.
+        // The app has no Alt chords, so owning the keys costs nothing.
+        static const ImGuiID altOwner = ImHashStr("llmfun-tui-alt-claim");
+        ImGui::SetKeyOwner(ImGuiMod_Alt, altOwner);
+        ImGui::SetKeyOwner(ImGuiKey_LeftAlt, altOwner);
+        ImGui::SetKeyOwner(ImGuiKey_RightAlt, altOwner);
     }
 
     void renderFrame() override {
