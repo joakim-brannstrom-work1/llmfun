@@ -318,11 +318,6 @@ struct TextUserInterface {
     }
 
     void render() {
-        import std.string : strip;
-
-        // None-safe C API: on a backend-less state (the headless test
-        // seam) the C frame calls no-op and tuiRender reports continue (1)
-        // — no screen/backend guard is needed here.
         tuiBackendNewFrame(tuiState);
 
         if (tuiRender(tuiState) == 0) {
@@ -416,7 +411,6 @@ void playNotification() {
 }
 
 class TextUserInterfaceActor : TUICommands {
-    import std.string : strip;
     import std.datetime : dur, Clock, Duration, SysTime;
     import llm.utility : stopAgent;
     import std.conv : to;
@@ -507,34 +501,34 @@ class TextUserInterfaceActor : TUICommands {
         ui.setIniFile(iniFile);
     }
 
-    // Backend attach, run from onSpawn on the actor's own thread: the window
-    // and the GL context are created (and the context made current) HERE,
-    // the thread that also drives the frames. On success the active backend
-    // and any fallback note are logged; the note also seeds the status line.
-    // The TuiLogger swap only makes sense with a UI that drains it: on a
-    // failed init nothing renders, so the normal console logger stays
-    // installed and the app's shutdown diagnostics are not swallowed.
-    private void attachBackend() {
-        initPending = false;
-        string note;
-        if (tuiInit(state, pendingMode) != 0) {
-            auto err = tuiLastError();
-            startupError = .toString(err); // module helper: Object.toString shadows it in a class
-            String_Free(err);
-            return;
-        }
-        logger.infof("UI backend active: %s", backendKindName(tuiBackendActive(state)));
-        auto n = tuiBackendNote();
-        note = .toString(n);
-        String_Free(n);
-        if (!note.empty)
-            logger.info("UI backend note: ", note);
-        ui.setUiAsStdLogger;
-        if (!note.empty)
-            ui.setStatusText(note);
-    }
-
     void onSpawn(ActorRef selfRef) {
+        void attachBackend() {
+            // the window and the GL context are created (and the context made
+            // current) HERE, the thread that also drives the frames. On success
+            // the active backend and any fallback note are logged; the note also
+            // seeds the status line. The TuiLogger swap only makes sense with a UI
+            // that drains it: on a failed init nothing renders, so the normal
+            // console logger stays installed and the app's shutdown diagnostics
+            // are not swallowed.
+            initPending = false;
+            string note;
+            if (tuiInit(state, pendingMode) != 0) {
+                auto err = tuiLastError();
+                startupError = .toString(err);
+                String_Free(err);
+                return;
+            }
+            logger.infof("UI backend active: %s", backendKindName(tuiBackendActive(state)));
+            auto n = tuiBackendNote();
+            note = .toString(n);
+            String_Free(n);
+            if (!note.empty)
+                logger.info("UI backend note: ", note);
+            ui.setUiAsStdLogger;
+            if (!note.empty)
+                ui.setStatusText(note);
+        }
+
         this.selfRef = selfRef;
         listener = typeof(listener)(listenerAddress, this.selfRef);
         // Production path: attach the backend HERE, on the actor's own
@@ -564,6 +558,8 @@ class TextUserInterfaceActor : TUICommands {
     // Must be called by every message handler except uiTerminate. Polls the
     // pending user query and at most one session action, then renders if due.
     private void postProcess() {
+        import std.string : strip;
+
         // it is only worth processing the rest of the method if render() has
         // been called because the rest of the function react on "input" that
         // is updated by render via imgui.
