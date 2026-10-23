@@ -421,7 +421,8 @@ class TextUserInterfaceActor : TUICommands {
         TypedAddress!TUIListener listenerAddress;
         Channel!TUIListener listener;
 
-        immutable UpdateInterval = 10.dur!"msecs";
+        immutable SlowUpdateInterval = 10.dur!"msecs";
+        immutable FastUpdateInterval = 2.dur!"msecs";
 
         // Guards uiTick(): a due tick entry may still be dispatched after
         // uiTerminate (cancelTick drops the pending one; an in-flight one
@@ -540,7 +541,7 @@ class TextUserInterfaceActor : TUICommands {
             listener.uiStartupFailed(startupError);
             return;
         }
-        selfRef.scheduleRepeating(UpdateInterval, "uiTick");
+        selfRef.scheduleRepeating(SlowUpdateInterval, "uiTick");
     }
 
     void onExit(ExitMsg _) {
@@ -565,7 +566,7 @@ class TextUserInterfaceActor : TUICommands {
         // is updated by render via imgui.
         if (Clock.currTime > nextUpdate) {
             ui.render();
-            nextUpdate = Clock.currTime + UpdateInterval;
+            nextUpdate = Clock.currTime + SlowUpdateInterval;
         } else {
             return;
         }
@@ -621,7 +622,7 @@ class TextUserInterfaceActor : TUICommands {
 
         if (ui.hasMoreEvents()) {
             dynSend(selfRef.address, "uiTick");
-            nextUpdate = Clock.currTime; // force an update
+            nextUpdate = Clock.currTime + FastUpdateInterval;
         }
     }
 
