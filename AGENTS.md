@@ -1,500 +1,258 @@
 # llmfun
 
-LLM agent harness - a CLI tool that orchestrates AI agents with tool calling, RAG, pipelines, metrics, skills, and a terminal UI. Supports both remote API and local llama.cpp model inference.
+LLM agent harness - a CLI tool that orchestrates AI agents with tool calling, RAG, pipelines, metrics, skills, and a terminal UI. Supports remote API and local llama.cpp inference.
 
 ## Tech Stack
 
 - **Language:** D (primary), C (vendor: sqlite3, sqlite3-vec, imtui), C++17 (cpp_tui, imgui_rich_md, llama.cpp)
-- **Build:** Dub (`dub.sdl`) + Makefiles for C/C++ components
+- **Build:** Dub (`dub.sdl`) + Makefiles for the C/C++ components
 - **Database:** SQLite3 with FTS5 and sqlite3-vec (vector search)
-- **Local Inference:** llama.cpp
-- **Terminal UI:** imtui (Dear ImGui for terminals) + custom C++ TUI library
-- **Key Libraries:** argparse, requests, dyaml, colorlog, mylib, miniorm
+- **Key libraries:** argparse, requests, dyaml, colorlog, mylib, miniorm, nusilly (test runner)
 
 ## Directory Layout
 
 ```
 llmfun/
-├── source/
-│   ├── app.d                      # Thin command dispatcher
-│   ├── utility_app.d              # Test utility entry point
-│   └── llm/                       # Main package
-│       ├── agent/                 # Agent package
-│       │   ├── package.d          # Core Agent class (module llm.agent)
-│       │   └── context.d          # Tool-execution context (AgentContext, VisionImage)
-│       ├── agent_pool.d           # Thread pool for agent execution
-│       ├── app_agent/             # Agent subcommand handler + TUI
-│       │   ├── package.d          # AgentApp + appMain (module llm.app_agent)
-│       │   ├── slash.d            # Slash command registry + plugin API
-│       │   ├── slash_core.d       # Core commands (/help, /quit, /stop, ...)
-│       │   ├── slash_session.d    # Session commands + /delete state machine
-│       │   ├── slash_model.d      # /model command
-│       │   ├── slash_pipeline.d   # /plan, /code commands
-│       │   ├── slash_skills.d     # /skills, /refresh-agent-md commands
-│       │   ├── ui.d               # UiMessenger + stream updaters
-│       │   └── tests.d            # Unit tests (golden help, built-ins)
-│       ├── app_rag.d              # RAG subcommand handler
-│       ├── app_mcp.d              # MCP server subcommand handler
-│       ├── app_tool_metrics.d     # Tool metrics subcommand handler
-│       ├── config.d               # Multi-layer configuration
-│       ├── chat.d                 # Chat history / message management
-│       ├── query.d                # HTTP client with retry, streaming
-│       ├── skill.d                # Skill management system
-│       ├── summary_agent.d        # Context compression / summarization
-│       ├── memory.d               # Memory consolidation orchestrator
-│       ├── session/               # Chat session persistence (SessionStore)
-│       ├── pipeline/              # Pipeline engine & DAG
-│       ├── rag/                   # RAG database and query logic
-│       ├── tool_call/             # Tool registration and implementations
-│       ├── mcp_server/            # MCP server (JSON-RPC 2.0 over stdio)
-│       ├── metric/                # Metrics aggregation and monitoring
-│       └── tui/                   # TUI D bindings
-├── common/                        # Shared embedder interface and config types
-├── local_model/                   # Local model inference via llama.cpp
-├── cpp_tui/                       # C++ TUI library with C API for D interop
-├── vendor/                        # Vendored C/C++ libraries
-├── config/                        # Runtime configuration templates
-└── doc/                           # Documentation (database, sessions, skills, TUI design)
+|-- source/
+|   |-- app.d                  # Thin command dispatcher
+|   |-- utility_app.d          # Manual test utility entry (dub config llmfun_util)
+|   `-- llm/
+|       |-- agent/             # Agent (package.d) + AgentContext (context.d)
+|       |-- app_agent/         # agent subcommand: AgentApp, TUI glue, slash commands
+|       |-- app_rag.d          # rag subcommand
+|       |-- app_mcp.d          # mcp subcommand
+|       |-- app_tool_metrics.d # tool_metrics subcommand
+|       |-- agent_pool.d       # Thread pool for agent execution
+|       |-- chat.d             # Chat history, turn ids, history projections
+|       |-- config.d           # Multi-layer configuration
+|       |-- memory_tier.d      # Memory tier lifecycle actor (short/long/archive)
+|       |-- query.d            # HTTP client with retry, streaming
+|       |-- skill.d            # Skill management (Agent Skills standard)
+|       |-- summary_agent.d    # Context compression / summarization
+|       |-- session/           # Chat session persistence (SessionStore)
+|       |-- pipeline/          # Pipeline engine and DAG
+|       |-- rag/               # RAG databases, dialogue + reasoning indexes
+|       |-- tool_call/         # Tool registry, broker, tools (io/ = file tools)
+|       |-- mcp_server/        # MCP server (JSON-RPC 2.0 over stdio)
+|       |-- metric/            # Metrics aggregation and monitoring
+|       `-- tui/               # TUI D bindings
+|-- common/                    # Shared embedder interface and config types
+|-- local_model/               # Local inference via llama.cpp
+|-- cpp_tui/                   # C++ TUI library with C API for D interop
+|-- vendor/                    # Vendored C/C++ libraries and mylib
+|-- config/                    # Example configs (example.yaml, execution_environments.yaml)
+|-- llmfun/                    # Nested project dir: config/prompt/ (AGENT.md, nudges), skills/, data/
+`-- doc/                       # Design docs (see References)
 ```
 
-If your identity is **llmfun** then:
-- the file tools (read/write/edit/grep/list) use paths relative to ./; the source code is located at "./llmfun".
-- when using the tool executeCommand the working directory is /workarea. The absolute path to the source code is /workarea/llmfun.
+If your identity is **llmfun**:
+- The file tools (read/write/edit/grep/list) use paths relative to `./`; the source code is under `./llmfun`.
+- `executeCommand` runs in `/workarea`; the absolute source path is `/workarea/llmfun`.
+- Paths in this file are repo-relative: a module path such as `rag/database.d` lives under `source/llm/`.
 
 ## Commands
 
-**Important**: The container image to use when running the tool `executeCommand` is `llmfun/app:latest`.
-
-Example of using `executeCommand`: `executeCommand(environmentTag="llmfun", command=["cd llmfun && dub build --config=application"])`
-- command is a string array; pass the whole command line as ONE string in a single element.
+**Container:** use the image `llmfun/app:latest` for `executeCommand`. Pass the whole command line as ONE string in a single-element array: `executeCommand(environmentTag="llmfun", command=["cd llmfun && dub build --config=application"])`.
 
 ```bash
-cd llmfun
-
-dub test                                    # Run all unit tests
-dub build --config=application              # Build main app (remote API only)
-dub build --config=application-with-local-model   # Build with llama.cpp support
-dub build --config=llmfun_util              # Build test utility (manual testing)
-./build/llmfun agent                        # Run interactive agent
-./build/llmfun rag add <path>               # Add file to RAG index
-./build/llmfun rag --dialogue               # Report per-session dialogue history databases (read-only)
-./build/llmfun rag query "question"         # Query RAG knowledge base
-./build/llmfun tool_metrics   # View tool metrics
-./build/llmfun mcp --stdio                                              # Run MCP server over stdio
-./build/llmfun mcp --list-tools                                         # List available MCP tools
+dub test                                          # Unit tests (primary gate)
+dub build --config=application                    # Main app (remote API only)
+dub build --config=application-with-local-model   # Main app + llama.cpp
+dub build --config=llmfun_util                    # Manual test utility (runs no tests)
+./build/llmfun agent                              # Interactive agent
+./build/llmfun rag add <path>                     # Add a file to the RAG index
+./build/llmfun rag query "question"               # Query the RAG
+./build/llmfun rag --dialogue                     # Read-only dialogue DB report
+./build/llmfun tool_metrics                       # View tool metrics
+./build/llmfun mcp --stdio                        # MCP server over stdio
+./build/llmfun mcp --list-tools                   # List available MCP tools
 ```
 
 ## Code Conventions
 
 ### Comments
 
-- **Use ddoc comments, NOT doxygen comments.** Ddoc forms: `/** ... */`, `///`, `/+ ... +/`.
-- **Module header:** Every module must start with a brief ddoc comment (1-3 lines) introducing the module and what it does, placed before the `module` declaration.
-- **Comments explain why, not what.** If the code is self-documenting, the comment is redundant.
-- **Concise:** 1-2 lines max. Break longer explanations into separate short comments.
-- **No hard-wrapping:** Do not wrap to a fixed column width. Let lines flow naturally.
-- **No mid-sentence breaks:** Each comment line should be a complete thought.
-- **Simple language:** Short words, short sentences.
-- **Write code first, then add comments** only where genuinely needed.
-- **Never add comments to copied code** that weren't there originally.
+- **Ddoc, not doxygen:** `///`, `/** */`, `/+ +/`.
+- **Module header:** every module starts with a 1-3 line ddoc comment before `module`.
+- **Explain why, not what.** Write the code first, add comments only where genuinely needed.
+- **Short:** one thought per line, 1-2 lines. No fixed-width wrapping, no mid-sentence line breaks.
+- **Good vs bad:** `// reset here, as we will release the slot below` explains why; `// Get the number of items and store it in count` restates the code. Task-specific comments ("this fixes the problem you mentioned") are meaningless to a future reader.
+- **Never add comments to copied code** that were not there originally.
 
-### String Handling
+### Strings and variables
 
-- **Prefer interpolated strings** over `std.format.format` / `formattedWrite`:
+- Prefer interpolated strings: `i"Found $(count) results".text`, not `format!"Found %s"`.
+- Prefer backtick strings when embedding `"` or `\`.
+- **Never initialize a `string` with `= ""`** - D auto-initializes.
+- Prefer an immediately invoked local function over a declared variable plus branches.
+- Zero-initialize floating point explicitly; D's default is NaN.
 
-  ```d
-  // Good
-  auto msg = i"Found $(count) results for $(query)".text;
+### Formatting
 
-  // Bad
-  auto msg = format!"Found %s results for %s"(count, query);
-  ```
+- K&R brace style (opening brace on the same line).
+- Local imports inside functions/structs where the symbols are not pervasive.
+- No magic numbers without named constants.
+- No wrapper functions for stdlib symbols - import locally at the point of use.
 
-- **Prefer backtick-strings** when embedding `"` or `\`:
+### Error handling
 
-  ```d
-  // Good
-  auto path = `foo "embed" bar`;
-
-  // Bad
-  auto path = "foo \"embed\" bar";
-  ```
-
-### Variable Initialization
-
-- **NEVER initialize `string` with `= ""`.** D auto-initializes all locals:
-
-  ```d
-  // Good
-  string name;
-
-  // Bad
-  string name = "";
-  ```
-
-- **Prefer local function initialization** over unnecessary variable declarations:
-
-  ```d
-  // Good
-  auto status = () {
-      if (isOk) return "ok";
-      if (isWarning) return "warn";
-      return "error";
-  }();
-
-  // Bad
-  string status;
-  if (isOk) status = "ok";
-  else if (isWarning) status = "warn";
-  else status = "error";
-  ```
-
-- **Floating point initialization** should be zero initialized. The default initialization in D is NaN.
-
-  ```d
-  auto x = new float[42]; // NaN
-  x[] = 0; // zero init
-  ```
-
-### Naming & Formatting
-
-- **K&R brace style** (opening brace on the same line)
-- **Local imports** inside functions/structs where symbols are not pervasive
-- **No magic numbers** without named constants
-- **No wrapper functions** for stdlib symbols - use local imports at point of use
-
-### Error Handling
-
-- **No empty catch blocks.** Always log or handle caught exceptions:
-
-  ```d
-  catch (Exception e) {
-      import std.logger : trace;
-      trace(e.msg);
-  }
-  ```
-
-- **Logging:** Use `std.logger` (not `stderr`) for diagnostic output.
-- **Silent catches for @safe:** When `.collectException` cannot be used (e.g., due to
-  `@safe` violations), wrap the throwing code in try/catch and nest another
-  try/catch around the logging call. The innermost catch may be empty - this is
-  the only place where an empty catch block is allowed:
-
-  ```d
-  try {
-      // code that may throw
-  } catch (Exception e) {
-      try {
-          import std.logger : trace;
-          trace(e.msg);
-      } catch (Exception innerE) {
-          // Empty inner catch allowed - keeps the parent @safe and nothrow
-      }
-  }
-  ```
-
-- **NEVER** catch an Error or Throwable exception.
+- **No empty catch blocks** - log or handle: `catch (Exception e) { logger.trace(e.msg); }`.
+- Use `std.logger` for diagnostics, never `stderr`.
+- **Never catch `Error` or `Throwable`.**
+- For `@safe nothrow` code that cannot use `.collectException`, wrap the throwing call in try/catch and nest another try/catch around the logging call; that empty inner catch is the only allowed exception to the rule above.
 
 ### Attributes
 
-- **@safe:** Mark functions `@safe` whenever possible. If the compiler rejects it,
-  fix the underlying issue rather than downgrading the safety level.
-
-  ```d
-  // Good - simple, obviously safe
-  bool isAgentMdTopic(string topic) @safe pure nothrow { ... }
-
-  // Bad - unmarked function that could be @safe
-  bool isAgentMdTopic(string topic) { ... }
-  ```
-
-- **@trusted:** Use only when `@safe` is not feasible. `@trusted` bridges `@safe`
-  and `@system` - it must verify all inputs and ensure operations are memory-safe
-  before exposing a `@safe` interface. Keep `@trusted` code minimal.
-
-- **@system:** The default safety level. Avoid unless dealing with low-level
-  operations (raw pointers, assembly, C interop). Never expose `@system`
-  through a `@safe` interface without `@trusted` wrapping.
-
-- **pure:** Add `pure` to functions that do not access or modify global/mutable
-  state beyond their parameters.
-
-- **nothrow:** Mark functions `nothrow` when they do not throw exceptions. Use it
-  to signal error-return patterns (returning `SumType`, error codes, etc.) and
-  let the compiler enforce the contract.
+- **@safe wherever possible.** If the compiler rejects it, fix the cause instead of downgrading.
+- **@trusted only to bridge** `@safe` and `@system`: verify the inputs and keep it minimal.
+- **@system** only for raw pointers, assembly, and C interop.
+- **pure** when the function reads or writes no global mutable state.
+- **nothrow** when the function cannot throw; prefer error-return types in such APIs.
 
 ### General
 
-- **ASCII only.** Avoid emdash, unicode arrows, or any non-ASCII characters. Use `-`, `->`, `x`, `...`.
-- **Do not split lines mid-sentence** or force lines to fit a fixed character width.
+- **ASCII only** in source, comments, and docs: no emdash, no unicode arrows. Use `-`, `->`, `x`, `...`.
 - **Prefer reusing existing infrastructure** over introducing new components.
 
 ## Architecture & Patterns
 
-### Entry Point
+### Entry point
 
-`app.d` is an ultra-thin dispatcher. It parses CLI args via `argparse` and routes to `appMain` overloads in `app_agent/package.d`, `app_rag.d`, `app_mcp.d`, and `app_tool_metrics.d`.
+`app.d` is an ultra-thin dispatcher: it parses CLI args via `argparse` and routes to `appMain` overloads in `app_agent/package.d`, `app_rag.d`, `app_mcp.d`, `app_tool_metrics.d`.
 
-### Agent System
+### Agent
 
-- `Agent` class in `agent/package.d` (module `llm.agent`) is the core. Handles vision, streaming, feedback, and stuck-loop detection. `AgentContext` in `agent/context.d` is the tool-execution context; it is decoupled from `Agent` and can be constructed standalone with injected RAG/metrics dependencies.
-- `AgentPool` manages concurrent agent execution via a thread pool.
-- Agents communicate through a `Chat` history with role-based messages.
+- `Agent` (`agent/package.d`, module `llm.agent`): vision, streaming, feedback, stuck-loop detection.
+- `AgentContext` (`agent/context.d`) is the tool-execution context: decoupled from `Agent` and constructible standalone with injected RAG/metrics dependencies.
+- `AgentPool` (`agent_pool.d`) runs agents concurrently on a thread pool; agents communicate through a `Chat` history with role-based messages.
 
-### Chat Sessions
+### Chat sessions
 
-- Multi-history chat storage: one JSON file per session under `<dataDir>/chat/<id>.json` with header `{title, createdAt, updatedAt, messages}`.
-- Chat-free by design: the module only speaks JSON. `app_agent/package.d` bridges `SessionFile.doc` to `agent_.chat.load()` / `agent_.chat.toSaveJson()`.
-- Naming rule: "session" already means app-launch in `config.d` (`sessionCount` drives memory consolidation). The chat-history concept uses `SessionStore` / `SessionMeta` / `SessionFile` only.
-- `SessionId` is a `NamedType!string` strong type (mylib): a session id is not interchangeable with titles, previews, or other strings. `state.json` still stores the plain string (`activeChatSessionId`); conversion happens at the config boundary.
-- Session id = filename (immutable), format `<YYYYMMDD-HHMMSS>-<4hex>`; regex validation at every store entry point prevents path traversal. Title lives in the header; rename edits the header only.
-- The store resolves its directory to an `AbsolutePath` (independent of the CWD); file paths are built as `AbsolutePath`.
-- Unknown header keys round-trip through `SessionMeta.extra`, so future per-session settings need no format migration.
-- Active session id is persisted in `state.json` as `activeChatSessionId` and reopened on startup. One-shot mode (`-p`) appends to the last active session.
-- System-prompt entries are stripped from `messages` before save; the prompt is re-set at startup.
-- Single writer (the agent thread); all writes are atomic (tmp file + rename).
+- One JSON file per session under `<dataDir>/chat/<id>.json`, header `{title, createdAt, updatedAt, messages}`. `SessionStore` (`session/`) speaks JSON only; `app_agent` bridges it to `agent_.chat`.
+- `SessionId` is a `NamedType!string`; `state.json` stores the plain string (`activeChatSessionId`). Session id == filename, immutable, `<YYYYMMDD-HHMMSS>-<4hex>`, regex-validated at every store entry point (path traversal). Title lives in the header; rename edits the header only.
+- Single writer (the agent thread), every write atomic (tmp file + rename). Unknown header keys round-trip through `SessionMeta.extra`.
+- System-prompt entries are stripped before save and re-set at startup. One-shot mode (`-p`) appends to the last active session.
 - Full documentation: `doc/sessions.md`.
 
-### Turn IDs and Compression Checkpoints
+### Turn ids and compression
 
-- Every chat-history entry carries a typed `turnId` (mixin `TurnIdMixin` in `llm/chat.d`); 0 = no turn. A turn is one user query plus everything produced while answering it.
-- Turn boundaries are decided inside `Chat.add` only: a user-query `Message` opens a new turn (allocating from the per-Chat counter `nextTurnId_`), every other insertion continues the current turn, and `setSystemPrompt` stamps 0. Call sites never allocate turns themselves; vision chats open a turn explicitly with `chat.beginNewTurn()`.
-- Counter state is per-Chat (`nextTurnId_` / `currentTurnId_`, no static/shared/atomic state). The high-water mark is persisted as the session-header key `next_turn_id`; on disk the stamp lives inside each message's `save_data["turn_id"]` (typed field in memory, `save_data` on disk - no new top-level message keys). Invariants (history sorted by `(turn_id, position)`, active-turn stamps > 0, counter never decreases, no ID reuse within a session - including across restarts, `clear()`/reload never recycle IDs) are pinned by unittests in `llm/chat.d`; legacy files are reconstructed on load (`reconstructTurnIds`).
-- Projections: `getDialogueHistory()` (Facts) and `getReasoningTrace()` (Trace) in `llm/chat.d`. Harness control traffic (user-role messages with `userQuery == false`) appears in neither projection.
-- Compression is observable: `SummaryAgent` multicasts a `CompressionCheckpoint` via `addCheckpointListener` exactly once per compression that actually evicts verbatim content, carrying the session id, the evicted message arrays, the evicted turn range, and the final context size. Listeners must not block (the compressing thread is usually the UI thread) and must not throw (throwing listeners are caught and logged).
+- Every history entry carries a `turnId` (mixin `TurnIdMixin`); 0 = no turn. A turn is one user query plus everything produced while answering it.
+- Only `Chat.add` decides boundaries: a user-query message opens a turn (allocating from `nextTurnId_`), every other insertion continues it, `setSystemPrompt` stamps 0. Vision chats open one explicitly with `beginNewTurn()`.
+- Counter state is per-Chat (no static/shared/atomic). The high-water mark persists as the header key `next_turn_id`; the per-message stamp lives in `save_data["turn_id"]`.
+- Invariants pinned by unittests in `llm/chat.d`: history sorted by `(turn_id, position)`, active-turn stamps > 0, counter never decreases, no id reuse within a session (also across restarts). Legacy files are reconstructed on load (`reconstructTurnIds`).
+- Projections: `getDialogueHistory()` (facts) and `getReasoningTrace()` (trace). Harness control traffic (user-role messages with `userQuery == false`) appears in neither.
+- Compression multicasts a `CompressionCheckpoint` once per compression that evicts verbatim content. Listeners must not block and must not throw.
 
-### Searchable Dialogue History
+### Searchable dialogue and reasoning history
 
-- `DialogueIndex` (`llm/rag/dialogue_index.d`) is owned by the agent thread; it spawns an actor worker (`llm/rag/dialogue_worker.d`) on its own thread. The worker owns its own embedder (never the shared agent embedder) and all communication is via value messages only.
-- Episodes are indexed into per-session SQLite WAL databases under `dialogueDir` (config key `dialogueDir`, default `llmfun/data/dialogue`): one `<sessionId>.db` per session, opened/created with the `openDatabase`/`addToDatabase` seam as Topic sources named `d_<sess>__t<turnStart>_<turnEnd>__<epochMillis>` (`encodeTopicName`/`decodeTopicName`; hyphens becomes underscores in the name).
-- Dialogue dedup identity is topic + content: the worker passes the episode
-  topic name as the `addToDatabase` dedup salt, so byte-identical exchanges in
-  two different turns are indexed separately under their own turn metadata,
-  while re-indexing the same topic+content stays a no-op. A turn split across
-  two compression checkpoints merges: the worker reconstructs the existing
-  episode text (`Database.sourceText`) and indexes `existingText + "\n" + new
-  piece` under the same topic name. The FTS index is rebuilt synchronously after
-  every job that committed chunks (no coalescing). Known no-fix: changing the
-  embedding model or dimensions makes the write path drop and recreate a
-  dialogue DB (all indexed history for that session is lost) - intentional,
-  the loss is the operator's responsibility.
-- Turn metadata is always derived by decoding the DB topic names, never from worker memory. The `queryDialogueHistory` tool (`llm/tool_call/dialogue.d`) takes `maxTurnAge`: 0/negative = no filtering, positive N keeps episodes with `turnEnd >= maxTurn - N` (`maxTurn` computed from the DB).
-- Indexing is asynchronous with a small lag (~2-3 s, documented in the tool description). Indexing itself is triggered in code at each compression checkpoint. The trigger rule - when the main agent should call `queryDialogueHistory` - lives in `config/prompt/AGENT.md` ("# Dialogue History Retrieval"), user-tunable, with no code-side constant.
-- Admin/reporting: `llmfun rag --dialogue` produces a read-only report over the session databases (per-session source count, indexed turn range, totals). It dispatches before `createRag` (no embedder/local model/primary RAG DB needed), probes each DB's `VersionTbl` for model/dimensions before the read-only open, and only considers valid session file names (path-traversal guard). A session whose read-only open fails (e.g. WAL recovery after an abnormal shutdown, or a read-only directory where `-shm` cannot be created) is skipped with a warning. No destructive `rag` subcommands.
+- `DialogueIndex` (`rag/dialogue_index.d`) is owned by the agent thread and drives a worker actor on its own thread (`rag/dialogue_worker.d`); the worker owns its own embedder and exchanges value messages only.
+- Episodes go into per-session SQLite WAL databases under `dialogueDir` (default `llmfun/data/dialogue`), one `<sessionId>.db`, as Topic sources named `d_<sess>__t<turnStart>_<turnEnd>__<epochMillis>` (`encodeTopicName`/`decodeTopicName`).
+- Dedup identity is topic + content; a turn split across two checkpoints merges (existing episode text + the new piece under the same topic). FTS is rebuilt synchronously after every job that committed chunks.
+- Turn metadata is always derived by decoding topic names, never from worker memory. `queryDialogueHistory` takes `maxTurnAge`: 0/negative = no filtering, positive N keeps `turnEnd >= maxTurn - N`.
+- Indexing is asynchronous (~2-3 s lag, stated in the tool description). When the agent should query is prompted from `llmfun/config/prompt/AGENT.md`, not from a code constant.
+- `llmfun rag --dialogue` reports over the session databases read-only and dispatches before `createRag`; a session whose read-only open fails is skipped with a warning.
+- Reasoning counterpart: `ReasoningIndex` (`rag/reasoning_index.d`). Docs: `doc/dialogue_search.md`, `doc/reasoning_search.md`.
 
-### Slash Commands
+### Slash commands
 
-- Delegate-based command registry (`app_agent/slash.d`): commands are registered `SlashCommand` structs with name, aliases, help lines, `SlashArgMode`, help `order`, and a handler `AgentStatus delegate(ref AgentApp, string)`.
-- Five group modules register the built-ins: `slash_core.d` (help/quit/stop/compact/debug), `slash_session.d` (sessions/switch/new/rename/delete/clear + the delete confirm state machine), `slash_model.d`, `slash_pipeline.d` (plan/code), `slash_skills.d`.
-- Help text is generated from the registry (order asc, registration index asc); a golden unit test in `tests.d` locks the generated help text.
-- Plugin API (public): `addStartupSlashCommand` (module-level hook, registered in `AgentApp`'s constructor), `AgentApp.registerSlashCommand`, `AgentApp.slashCommands()`, `AgentApp.sendChatMessage`, plus `SlashCommand`/`SlashArgMode`/`AgentStatus`. Package-private: the five group registrars and `AgentApp` internals.
-- Full documentation: `doc/slash_commands.md`.
+- Delegate registry (`app_agent/slash.d`): `SlashCommand` structs with name, aliases, help lines, `SlashArgMode`, help `order`, and an `AgentStatus delegate(ref AgentApp, string)` handler.
+- Built-ins are registered by group modules: `slash_core.d` (help/quit/stop/continue/compact/debug), `slash_session.d` (sessions/switch/new/rename/delete/clear + the delete confirm state machine), `slash_model.d`, `slash_pipeline.d` (plan/code), `slash_skills.d`.
+- Help text is generated from the registry (order asc, then registration index); a golden unittest in `tests.d` locks it.
+- Plugin API: `addStartupSlashCommand`, `AgentApp.registerSlashCommand`, `slashCommands()`, `sendChatMessage`, plus `SlashCommand`/`SlashArgMode`/`AgentStatus`. Docs: `doc/slash_commands.md`.
 
-### Tool Call System
+### Tools and the tool broker
 
-- Tools are registered via `@Function` attribute and `RegisterLlmFunctions!()` mixin in `tool_call/package.d`.
-- Each tool module implements functions that take a `Context` and a params struct.
-- Tools carry optional tags (`@Function(..., tags: ["workarea"])`): untagged tools
-  are always visible (alwaysOn); tagged tools are hidden until the model activates
-  their tag via `listToolTags` / `toolSearch` (the tool broker; sticky activation,
-  pruned only at compression points). The tag vocabulary is the `KnownToolTag`
-  enum (`tool_call/tags.d`) plus config `toolBroker.toolTagDescriptions`; kill
-  switch `toolBroker.enabled`. Full guide: `doc/tool_authoring.md`.
-- `tool_call/io.d` is the largest module - file system operations with advanced editing (searchAndReplace, applyDiff, editFileByMarker).
+- A tool is a function taking a `Context` and a params struct, marked with the `@Function("description")` UDA and collected by the `RegisterLlmFunctions!()` mixin in `tool_call/package.d`.
+- Group membership is configuration, not code: `toolBroker.groups` maps a group name to `{description, tools}`, `hiddenTags` lists groups that start hidden, `alwaysOn` forces tools or whole groups visible, `neverHideTools` (default `["taskDone"]`) bypasses the tool filter, `enabled` is the kill switch.
+- A tool in no group is always on. Hidden group members become visible when the model activates the group via `listToolTags`; activation is sticky and pruned at compression points. `toolSearch` discovers tools by keyword.
+- `tool_call/io/` is the file-tool package (`readFile`, `writeFile`, `editFile`, `applyDiff`, `grepFiles`, ...). Docs: `doc/tool_broker.md`.
 
-### Pipeline System
+### Memory tiers
 
-- DAG-based pipeline engine in `pipeline/package.d` with topological sorting in `pipeline/graph.d`.
-- Pipelines orchestrate multi-step agent workflows with node output propagation.
+- Memories are Markdown files in every configured `memoryArea` dir (default resolution: `llmfun/data/memory` plus the XDG data dir), under the subdirs `short/`, `long/`, `archive/`.
+- Writes always land in `short/` (rewriting an existing `long/` memory requires including its stored content). `getMemoryTopics` lists `short/` only; `long/` is RAG-indexed; `archive/` is unreachable.
+- `MemoryTierActor` (`memory_tier.d`) runs one pass at startup and on every `tierPassIntervalHours` tick (0 = startup only): create any missing tier dirs, flat-layout upgrade, reconcile disk vs RAG, promote aged `short/` entries (default 7 d) to `long/`, demote aged `long/` entries (default 100 d) to `archive/`.
+- Every phase is diff-based, so a crash window heals on the next pass; failures are logged and skipped. Tier dirs are created by that pass, so a missing structure heals on the next agent start.
+- Agent-facing rules: `llmfun/skills/llmfun-memory/SKILL.md`.
 
-### RAG System
+### Pipeline, RAG, skills
 
-- SQLite-backed with FTS5 full-text search and sqlite3-vec for vector similarity.
-- Schema version v6 in `rag/database.d`.
-- Embedder factory pattern: HTTP (OpenAI-compatible) and local (llama.cpp) backends.
-
-### Skill System
-
-- Implements Agent Skills open standard. Skills are directories with `SKILL.md`, `references/`, `scripts/`, `assets/`.
-- 13 built-in skills (create-skill, code-review, debugging, dlang, etc.).
-- Skills are loaded at runtime by copying into the sandbox workarea.
+- DAG pipeline engine in `pipeline/package.d` (topological sort in `pipeline/graph.d`); nodes propagate outputs to downstream nodes.
+- RAG: SQLite + FTS5 + sqlite3-vec, `SchemaVersion = 6` in `rag/database.d`; embedder factory with HTTP (OpenAI-compatible) and local (llama.cpp) backends.
+- Skills follow the Agent Skills standard: a directory with `SKILL.md` plus optional `references/`, `scripts/`, `assets/`. Built-ins live in `llmfun/skills/`; loading copies the skill into the sandbox workarea. Docs: `doc/skills.md`.
 
 ### Configuration
 
-- Multi-layer config in `config.d`: CLI args override file config, file config overrides defaults.
-- Two-layer loading: base config from `LLMFUN_SYSTEM_CONFIG` / system path, overlay from `--config` / `.llmfun.yaml` in CWD.
-- Security: CWD config skipped when workarea == CWD unless `--trusted-config` is used.
-- Supports `ToolLimits`, `RagConfig`, `SandboxConfig` with execution environments, skill paths, consolidation settings, and endpoint types (`llamaCpp`, `deepseek`).
-- Magic word substitution: `@{llmfun_workarea}` and `@{llmfun}` in container options.
+- Layers: CLI args > file config > defaults. Base config from `LLMFUN_SYSTEM_CONFIG` (or the XDG system path), overlay from `--config` or `.llmfun.yaml` in the CWD.
+- Security: the CWD config is skipped when the workarea equals the CWD unless `--trusted-config` is given.
+- Covers `ToolLimits`, `RagConfig`, `toolBroker`, `SandboxConfig` execution environments, skill/prompt paths, and endpoint types (`llamaCpp`, `deepseek`).
+- Magic words `@{llmfun}` (binary directory) and `@{llmfun_workarea}` (workarea path) are substituted in paths, env vars, and container options.
 
 ### TUI
 
-- C++ TUI library (`cpp_tui/`) provides Dear ImGui-based terminal UI with markdown rendering via the vendored `imgui_rich_md`.
-- D bindings in `tui/package.d` handle streaming and inter-thread message passing.
-- Exposed via pure C API (`tui_api.h` / `tui_api.cpp`) for D interop.
-- Session sidebar (`ChatTabSessionPanel`): session rows with active marker and ` [N]` count, a per-row `|...|` menu button opening a popup with `Rename`/`Delete` items, and a filter input in the panel header with fzf-style fuzzy subsequence matching + ranking against title + preview (`session_fuzzy.h`, pure). Busy handling: New and Delete are guard-and-skipped while busy, a pending session switch is deferred in a single last-click-wins slot, and the menu itself opens while busy (manual gating; the vendored ImGui 1.92.9b `BeginDisabled` exists but is not what's implemented). Esc/Enter/click selection with busy-defer, whole-word match highlighting, and the headless `test_session_filter_smoke` harness. Mutually exclusive with the pipeline panel (the pipeline wins the left slot whenever it has agents); `leftPanelWidth(state)` resolves the output offset. See `doc/tui_design.md` and `doc/sessions.md`.
-- Persistent chat messages render a decorated header `[NR] <summary> [TIME]`
-  (D side only, `tui/package.d`): NR is the message's 1-based ordinal among
-  the session's displayed persistent messages - derived, not stored, from
-  the persisted session file (replay-stable); TIME is the measured LLM-call
-  or tool-execution duration, rendered only when present
-  (`MessageTime` / `save_data.processMs`, formatted by mylib `my.time`);
-  display-only lines and the one-shot CLI are undecorated. No C/C++ change.
-  See `doc/tui_design.md` ("Message header decoration").
-- D can import `.c` as they are, no binding is required, no `extern(C)` is required. See the D specification for more details.
-- Max width (`TuiConfig` / YAML `tui.maxWidth`): caps the TUI's rendered
-  width in terminal columns (0 = unlimited, default; valid 0 or [40, 10000],
-  enforced in `validateConfig`). The C++ core clamps at the top of `tuiRender`
-  every frame (`TuiState.maxWidth`, `tuiSetMaxWidth`, `TUI_API_VERSION` 3);
-  the margin right of the cap is never written (terminal-managed). Standalone
-  `cpp_tui` executable: `LLMFUN_TUI_MAX_WIDTH` env var (no CLI flag). See
-  `doc/tui_design.md`.
+- C++ TUI (`cpp_tui/`) renders Dear ImGui in the terminal with markdown via the vendored `imgui_rich_md`; D bindings in `tui/package.d` handle streaming and inter-thread messages; the pure C API (`tui_api.h`/`tui_api.cpp`) is the D interop seam. D can import `.c` files directly - no bindings or `extern(C)` needed.
+- Session sidebar (`ChatTabSessionPanel`): rows with active marker and `[N]` count, a per-row menu (Rename/Delete), and an fzf-style fuzzy filter over title + preview. New/Delete are guard-and-skipped while busy; a pending session switch defers to a single last-click-wins slot. Mutually exclusive with the pipeline panel.
+- Persistent messages render a derived header `[NR] <summary> [TIME]` (D side only): NR is the 1-based ordinal among displayed persistent messages, TIME the measured LLM/tool duration (`save_data.processMs`, formatted by mylib `my.time`). Display-only lines and the one-shot CLI are undecorated.
+- Max width: `tui.maxWidth` (0 = unlimited, valid 0 or [40, 10000], enforced in `validateConfig`) is clamped in C++ every frame; `LLMFUN_TUI_MAX_WIDTH` for the standalone `cpp_tui` binary.
+- Details: `doc/tui_design.md`.
 
-### MCP Server
+### MCP server
 
-- Implements the Model Context Protocol (MCP) over stdio using JSON-RPC 2.0.
-- `mcp_server/` package: `types.d` (JSON-RPC types), `protocol.d` (parsing/serialization), `transport.d` (stdio transport), `package.d` (MCPServer class + actor).
-- Bridges MCP's JSON-RPC protocol to llmfun's existing tool infrastructure via `descAllFunctions()` and `executeFunc()`.
-- Uses `ReFilter` for tool visibility control (`--include`/`--exclude` CLI flags).
-- Runs as a `std.concurrency` actor: the main thread spawns `runMcpServer` and communicates via messages (`McpServerConfig`, `McpShutdown`, `McpStarted`, `McpStopped`, `McpFailed`).
-- No shared state between threads; termination signals (SIGINT/SIGTERM) are blocked and consumed by the main thread via `sigtimedwait`.
-- Stdio transport uses unbuffered POSIX reads to avoid the poll/FILE buffering race that causes stalls.
-- Supports MCP methods: `initialize`, `tools/list`, `tools/call`, `ping`, `resources/list` (empty), `prompts/list` (empty).
-- See `doc/mcp.md` for protocol details and usage examples.
+- MCP over stdio with JSON-RPC 2.0 (`mcp_server/`: `types.d`, `protocol.d`, `transport.d`, `package.d`), bridging to the tool registry via `descAllFunctions()` and `executeFunc()`.
+- Runs as a `std.concurrency` actor driven by value messages (`McpServerConfig`, `McpShutdown`, `McpStarted`, `McpStopped`, `McpFailed`); no shared state, and SIGINT/SIGTERM are blocked and consumed by the main thread.
+- Methods: `initialize`, `tools/list`, `tools/call`, `ping`, `resources/list`, `prompts/list`. Tool visibility via `ReFilter` (`--include`/`--exclude`). Docs: `doc/mcp.md`.
 
 ## Testing
 
-The unit test runner is **nusilly** (dub dependency, a fork of `silly`). It replaces the default unittest runner in `dub test`: every argument after `--` is passed to the test binary. Run `dub test -- -h` to see the options.
+The runner is **nusilly** (a `silly` fork); every argument after `--` is passed to the test binary.
 
-- **Run all unit tests**: `dub test` (no configuration parameter). This compiles and runs all inline `unittest` blocks across all modules. This is the primary test command.
-- **Build test utility**: `dub build --config=llmfun_util`. This configuration builds a separate test utility binary (`utility_app.d`) for manually testing implementation details. It does NOT run the unit test suite. Entry point: `source/utility_app.d`.
-- Inline unit tests exist in most modules (e.g., `rag/rag.d`, `llm/tool_call/io/tests.d`). New code should include inline `unittest` blocks.
+- `dub test` compiles and runs all inline `unittest` blocks. It is the primary gate: run it after changes to tested code.
+- A failing test exits non-zero (`Error Program exited with code 1`); a green run ends with `Summary: N passed, 0 failed in X ms`.
+- It takes about a minute (rebuild + run). Do not skip it to save time.
+- Tests run multithreaded (one worker per CPU); if a failure looks parallelism-dependent, re-run with `-t 1`.
+- New code includes inline `unittest` blocks.
 
-### Runtime
+Filtering (after `dub test --`): `-i <regexp>` include, `-e <regexp>` exclude (do not combine them; both match module and test names), `-t <n>` threads, `--fail-fast` (only an `Error`/`Throwable` stops the run, not an `AssertError`), `-v` verbose, `--no-colours`, `-h`.
 
-- `dub test` takes about 30 seconds wall clock: recompiling and relinking the test binary plus running the test suite. That is the normal cost of the regression gate; **do not avoid `dub test`** because it takes a while. Run it after changes to tested code and treat a green run as the acceptance gate.
-- A failing test makes `dub test` exit non-zero (`Error Program exited with code 1`); a green run ends with `Summary: N passed, 0 failed in X ms`.
-- Tests run multithreaded by default (one worker thread per CPU). If a failure looks dependent on parallel execution, re-run with `-t 1`.
+### Naming and experiments
 
-### Filtering options (passed after `dub test --`)
+A string UDA names a unittest (the first one wins); unnamed tests report as `<module> __unittest_L<line>_C<col>`.
 
-- `--no-colours` - disable colour output (automatically disabled when stdout is not a tty).
-- `-t <n>` / `--threads <n>` - number of worker threads; 0 = auto-detect (default).
-- `-i <regexp>` / `--include <regexp>` - run only the tests whose name matches the regular expression.
-- `-e <regexp>` / `--exclude <regexp>` - skip the tests whose name matches the regular expression.
-- `--fail-fast` - stop executing tests when a test fails. Note: only a failure that throws an `Error` or bare `Throwable` stops the run; a plain `assert` failure (AssertError) or a thrown `Exception` does not.
-- `-v` / `--verbose` - per-test durations, source locations, full stack traces.
-- `-h` / `--help` - print the options and exit without running tests.
+For a temporary experiment, add `@("my_experiment") unittest { ... }` to any module, run `dub test -- -i '.*my_experiment.*'`, then remove it. Module-wide: `dub test -- -i '.*llm\.rag.*'`.
 
-The `-i` / `-e` regular expressions (std.regex syntax, unanchored) are matched against the test's fully qualified name and its test name, so both module-wide and per-test filtering work:
+### Test descriptions
 
-```bash
-dub test -- -i '.*llm\.rag.*'        # all unittests in llm.rag modules
-dub test -- -i '.*my_experiment.*'   # the single named test "my_experiment"
-```
+Give every unittest an `@("...")` description - it is what `dub test` prints when the test fails.
 
-Do not use `-i` and `-e` at the same time (results are unexpected).
-
-### Naming tests and the experiment pattern
-
-A string user-defined attribute on a unittest names the test (with multiple string UDAs, the first wins). Unnamed unittests are reported as `<module> __unittest_L<line>_C<col>`; named ones as `<module> <name>`.
-
-A good way of experimenting with llmfun internal code is to add a temporary named `unittest` with the experimental code to any module (remove the `>`):
-
-```d
-> @("my_experiment")
-> unittest {
->     // experimental code
-> }
-```
-
-and then run only that test:
-
-```bash
-dub test -- -i '.*my_experiment.*'
-```
-
-Remove the temporary unittest when the experiment is done.
-
-### Writing test descriptions
-
-Give every unittest a string UDA description (`@("...")`). The description is what `dub test` prints for passing and failing tests, so it must let a reader tell which behavior failed without opening the source. An unnamed unittest is reported as `__unittest_L<line>_C<col>`, which says nothing at failure time.
-
-Describe the scenario: the input or condition and the expected result - "X when Y" or "condition; outcome". Do not describe the test's implementation (the functions or branches it goes through, how it obtains values): those change with refactors and tell the reader nothing when a test fails. When one test covers several cases, join them with a semicolon.
-
-Scenario-shaped:
+Describe the scenario (input or condition and expected outcome), not the implementation:
 
 `@("0/0 escalation ladder is rejected")`
 `@("empty file names are rejected only for enabled kinds")`
 `@("a valid enum member name selects that member; an invalid one keeps the default")`
 
-Implementation-shaped (do not):
-
-`@("validateConfig calls checkNudges first")`
-`@("parses the value through the Nullable branch")`
+Not: `@("validateConfig calls checkNudges first")` or `@("parses the value through the Nullable branch")`.
 
 ## Agent Rules
 
-- **Always verify facts** using RAG search or memory before asserting them. Internal knowledge is not sufficient for specific names, technical details, or version-specific information.
-- **Read relevant source files** before writing any code. Your changes must blend with the existing codebase.
-- **Run `dub build`** after making changes to verify compilation.
-- **Run `dub test`** after changes to tested code; do not skip it or replace it with partial checks.
+- **Always verify facts** with RAG search or memory before asserting them; internal knowledge is not enough for names, technical details, or version-specific information.
+- **Read the relevant source files** before writing code; changes must blend with the existing codebase.
+- **Run `dub build`** after changes to verify compilation.
+- **Run `dub test`** after changes to tested code; do not replace it with partial checks.
 - **Never write PR descriptions, commit messages, or reviewer responses** on behalf of the user.
-- **Never commit or push** without explicit human approval. If committing on behalf of the user, use `Assisted-by:` in the commit message, never `Co-authored-by:`.
+- **Never commit or push** without explicit human approval. When committing for the user, use `Assisted-by:`, never `Co-authored-by:`.
 - **Track known gaps** in `doc/todo.md`.
-
-### Code Comment Examples
-
-```d
-// GOOD (code is self-explanatory, no comment needed)
-
-auto count = items.length;
-
-
-// BAD (too verbose, restates what the code already says)
-
-// Get the number of items in the items array and store it in count
-auto count = items.length;
-```
-
-```d
-// GOOD (explains a non-obvious invariant)
-
-accept();
-bool hasClient = listen(idleInterval);
-if (hasClient) {
-    taskQueue.onIdle(); // also signal child disconnection
-}
-
-
-// BAD (too verbose, restates what the code already says)
-
-// Instead of blocking indefinitely on accept(), the server polls the listening
-// socket with idleInterval as a timeout. If no new client connects within that
-// interval, it fires taskQueue.onIdle() and loops back
-```
-
-```d
-// GOOD (generic, useful to any future reader)
-
-// reset here, as we will release the slot below
-nTokens = 0;
-// ... (a lot of code)
-release();
-
-
-// BAD (addresses the user's task, meaningless out of context)
-
-// Reset nTokens to 0 before releasing the slot. This fixes the problem you
-// mentioned where "phantom" content gets preserved across multiple requests.
-nTokens = 0;
-```
 
 ## References
 
-- `doc/database.md` - Database schema and RAG details
-- `doc/tool_authoring.md` - Tool authoring and the tool broker (tagging guide)
-- `doc/sessions.md` - Chat session storage and agent integration
-- `doc/skills.md` - Skills system documentation
+- `doc/database.md` - database schema and RAG details
+- `doc/rag_design.md`, `doc/rag_design2.md` - RAG design
+- `doc/tool_broker.md` - tool broker and tool groups
+- `doc/sessions.md` - chat session storage and agent integration
+- `doc/dialogue_search.md`, `doc/reasoning_search.md` - dialogue and reasoning indexes
+- `doc/compression.md` - context compression
+- `doc/skills.md` - skills system
+- `doc/slash_commands.md` - slash command registry and plugins
 - `doc/tui_design.md` - TUI architecture
-- `doc/todo.md` - Task tracking and known gaps
+- `doc/mcp.md` - MCP protocol details
+- `doc/threat_model.md` - threat model
+- `doc/todo.md` - task tracking and known gaps
