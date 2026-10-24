@@ -1,5 +1,4 @@
 - integrate internet search, searchxng
-- change tools so not all are listed via "tool_calls" but rather that there is one basic tool to ask for available tools
 - add Z3 as a tool
 - add a simple expression execution so the llm can call a tool with e.g. `1+3*4` to calculate 
 - add trace logging support to file
@@ -10,7 +9,6 @@
 - look at what claude code is doing with .claude/rules and CLAUDE.md
 - change the behavior of loading a .llmfun.yaml from the current directory if it exist to only doing it if the project is trusted
 - before writing a file check that the file isn't inside a tree of symlinks from the workarea and up
-- a memory file that is written should have a date when it was updated. Even better if each section in it that is changed have a date. This is to enhance the LLM's capability to reason about the "age" of the data if it gets conflicting data from different sources.
 - add more @safe tags
 - workarea is not allowed to be a symlink. Security reasons
 - the self improvement of how to use tools should always be injected directly after the system prompt on startup if the chat is empty
@@ -21,24 +19,18 @@
 - when summarizing the agent context add all messages, excluding the system prompt, to the RAG in one large document under the topic "agent_context". Protect this topic. This should then also be added to the summarized context that all details are saved in the RAG under this topic. Each time an agent is summarized or /new is called the topic is either replaced or deleted.
 - Each message that is processed should have their processing time recorded and other useful statistics such as tokens/s, total tokens etc.
 - Sometimes the agent stop after a compression. It starts working again with a /c
-- memory consolidation is too slow. It has to be more automated. Maybe something like a configured max number of memories that can be kept? Or that it tells the LLM that it will remove the "10 oldes" so if there is any information worth keeping in them the LLM has to "write one new memory" containing the important facts.
-- Need to add a concept of short and long term memory. Short term are up to 7 days old and can be accessed through listMemories(short), the agent is instructed to only look at short term memories on startup, long term are accessed through listMemories(long), automatic migration from short to long term. Memory consolidation run on the short term. Long term hmm maybe choose two random memories that the agent are asked to either merge to one or delete one of them. Or we have a max age of memories and those older than that are automatically removed.
 - when the context is at 90% only a call to requestCompression should be accepted. Everything else is blocked.
 - agent.md summary must be executed async in case it is "severly slowed down"
 - a /c must also remove all nudges from latest message and up to hmm ten messages back in the history. This is because sometimes a nudge has been added because of a network failure and if the network then comes back online the model/agent becomes confused.
 
 # ui
-- change the background color for the input field to dark grey
 - add UI where an agent can query the user for input.
 - make it easy to create a simple, straight pipeline from the TUI as a chat message.
-- log messages sent to the TUI should have the severity so the heading can be colored differently
 - add a tab which show a live stream of tool use
 - add a menu item to open a separate window to show more detailed statistic about LLM such as latency, token use in total etc
 - add a menu item to navigate the RAG database
-- taskDone is displayed incorrectly when reading the database. Should be FinalAnswer
 - the title in the GUI should contain the session name
 - the session sometimes have a system prompt as its description
-- the DPI/font size need to be adjustable
 
 # pipeline
 - must support resuming where a pipeline was last interrupted
@@ -60,7 +52,6 @@
 - each implementation task should be written to its own file with enough information for the task to be finished. The current design force the LLM to read the whole implementation plan before it can start on a task.
 - there should be a mode where the pipeline execute all tasks and then optionally ask the user for input
 - there should be something like /plan update, which goes through the pipeline but with other steering prompt such that the LLM understand that it should fix things in the system design and implementation plan.
-- use the memory system for transporting the implementation document between agents. It should be a checksum of the implementation plan
 
 # rag
 - Add a warning when the DB is wiped. Need to add migration in the future.
