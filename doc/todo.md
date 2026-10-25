@@ -18,8 +18,9 @@
 - merge the tools listDirectory, removeFile, checksumFile etc to one tool which take a command and then a key/value json string, which is the arguments. This approach should reduce the number of tools that is needed and thus the system prompt. Do a similar thing for sandbox.
 - when summarizing the agent context add all messages, excluding the system prompt, to the RAG in one large document under the topic "agent_context". Protect this topic. This should then also be added to the summarized context that all details are saved in the RAG under this topic. Each time an agent is summarized or /new is called the topic is either replaced or deleted.
 - Each message that is processed should have their processing time recorded and other useful statistics such as tokens/s, total tokens etc.
-- Sometimes the agent stop after a compression. It starts working again with a /c
 - when the context is at 90% only a call to requestCompression should be accepted. Everything else is blocked.
+    A nudge has to be feedback to the agent that all other tool calls are blocked. A bit of the history probably need to be rewined.
+    An observation also has to be made if the requestCompression mean that the context run out of space. Then rewined more messages from the stack and trigger the same message. Hmm could probably be that easy. Do this loop up to three times, or something like that. If it still fails then do an automatic compression. A "modern LLM" should never fail on this task but "stupid models" maybe could. Should also be a configuration option per model.
 - agent.md summary must be executed async in case it is "severly slowed down"
 - a /c must also remove all nudges from latest message and up to hmm ten messages back in the history. This is because sometimes a nudge has been added because of a network failure and if the network then comes back online the model/agent becomes confused.
 
