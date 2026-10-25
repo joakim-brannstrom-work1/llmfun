@@ -15,7 +15,7 @@ module llm.rag.dialogue_index;
 
 import core.time : dur, Duration;
 import std.algorithm : max;
-import std.conv : to;
+import std.conv : to, text;
 import std.datetime : SysTime, Clock, DateTime;
 import std.exception : collectException;
 import std.file : mkdirRecurse;
@@ -1154,13 +1154,13 @@ unittest {
 
     // Thinking text is never verbatim-searchable.
     auto think = di.query(qEmb(), SessionId(sid), "gamma", "");
-    assert(think.matches.length == 0,
-            "thinking text must not be indexed (got %s matches)".format(think.matches.length));
+    assert(think.matches.length == 0, i"thinking text must not be indexed (got $(
+            think.matches.length) matches)".text);
 
     // Harness nudge is not indexed (dialogue filter).
     auto nud = di.query(qEmb(), SessionId(sid), "epsilon", "");
-    assert(nud.matches.length == 0,
-            "harness nudge must not be indexed (got %s matches)".format(nud.matches.length));
+    assert(nud.matches.length == 0, i"harness nudge must not be indexed (got $(nud.matches.length) matches)"
+            .text);
 
     // The empty turn-2 episode was skipped: only turn 1 is indexed.
     assert(di.maxTurn(qEmb(), SessionId(sid)) == 1,
@@ -1220,12 +1220,12 @@ unittest {
 
     // The summary marker text must not be queryable.
     auto sm = di.query(qEmb(), SessionId(sid), "zebra", "");
-    assert(sm.matches.length == 0,
-            "merged summary must not be indexed, got %s matches".format(sm.matches.length));
+    assert(sm.matches.length == 0, i"merged summary must not be indexed, got $(sm.matches.length) matches"
+            .text);
     // The legacy unstamped text must not be queryable.
     auto lg = di.query(qEmb(), SessionId(sid), "quokka", "");
-    assert(lg.matches.length == 0,
-            "legacy turnId==0 entry must not be indexed, got %s matches".format(lg.matches.length));
+    assert(lg.matches.length == 0, i"legacy turnId==0 entry must not be indexed, got $(
+            lg.matches.length) matches".text);
     // The genuine adjacent turn IS indexed.
     auto g = di.query(qEmb(), SessionId(sid), "alpha", "");
     assert(g.hasHistory && g.matches.length > 0, "genuine adjacent turn must be indexed");
@@ -1391,8 +1391,8 @@ unittest {
     di.onCheckpoint(cp);
     sw.stop();
     auto elapsed = sw.peek.total!"msecs";
-    assert(elapsed < 100,
-            "onCheckpoint must enqueue and return, not embed inline (took %s ms)".format(elapsed));
+    assert(elapsed < 100, i"onCheckpoint must enqueue and return, not embed inline (took $(elapsed) ms)"
+            .text);
 
     // The job is still processed asynchronously: drain and verify.
     auto sup = scopedActor;
@@ -1447,9 +1447,8 @@ unittest {
     scope (exit)
         diB.dispose;
 
-    assert(diB.maxTurn(qEmb(), SessionId(sid)) == 2,
-            "cold-start maxTurn must be DB-derived (got %s)".format(diB.maxTurn(qEmb(),
-                SessionId(sid))));
+    assert(diB.maxTurn(qEmb(), SessionId(sid)) == 2, i"cold-start maxTurn must be DB-derived (got $(
+            diB.maxTurn(qEmb(), SessionId(sid))))".text);
     assert(diB.hasHistory(qEmb(), SessionId(sid)), "cold-start hasHistory must be true");
     auto res = diB.query(qEmb(), SessionId(sid), "two", "");
     assert(res.hasHistory && res.matches.length > 0, "cold-start query must find indexed dialogue");
@@ -1709,8 +1708,8 @@ unittest {
 
     // Count invariant: exactly one episode (turn 1) is indexed. The trace
     // ToolResponse must not have produced a hidden extra topic.
-    assert(db.getSources().length == 1,
-            "expected exactly one indexed episode, got %s".format(db.getSources().length));
+    assert(db.getSources().length == 1, i"expected exactly one indexed episode, got $(
+            db.getSources().length)".text);
 
     // The genuine dialogue IS present and verbatim (both pieces, one chunk).
     auto good = db.queryTextSearch("zebra", 100);
@@ -1726,9 +1725,8 @@ unittest {
     // nothing. If a future change indexed the ToolResponse content, this
     // phrase would match and the guard would trip.
     auto sent = db.queryTextSearch(SENTINEL, 100);
-    assert(sent.length == 0,
-            "sentinel ToolResponse content must not be text-searchable, "
-            ~ "got %s matches".format(sent.length));
+    assert(sent.length == 0, i"sentinel ToolResponse content must not be text-searchable, got $(
+            sent.length) matches".text);
     foreach (m; sent) {
         assert(indexOf(m.text, SENTINEL) == size_t.max, "no topic may contain ToolResponse content");
     }
@@ -1741,7 +1739,7 @@ unittest {
         scanEmb = null;
     });
     auto all = db.querySemantic(Search(scanEmb), 100);
-    assert(all.length == 1, "exactly one indexed chunk expected, got %s".format(all.length));
+    assert(all.length == 1, i"exactly one indexed chunk expected, got $(all.length)".text);
     foreach (m; all) {
         assert(indexOf(m.text, SENTINEL) == size_t.max,
                 "no topic may contain ToolResponse content: " ~ m.text);
@@ -1830,8 +1828,8 @@ unittest {
     // Count invariant: exactly one episode (the genuine turn 5) is
     // indexed. The summary and legacy entries must not have produced a
     // hidden extra topic.
-    assert(db.getSources().length == 1,
-            "expected exactly one indexed episode, got %s".format(db.getSources().length));
+    assert(db.getSources().length == 1, i"expected exactly one indexed episode, got $(
+            db.getSources().length)".text);
 
     // The single topic decodes to the genuine turn 5's range.
     auto meta = db.getSources()[0].origin.match!((Topic t) {
@@ -1839,9 +1837,8 @@ unittest {
         assert(hasValue(m), "indexed topic must decode: " ~ t.name);
         return m.match!((EpisodeMeta x) => x, (None _) => EpisodeMeta.init);
     }, (_) => EpisodeMeta.init);
-    assert(meta.turnStart == 5 && meta.turnEnd == 5,
-            "the only indexed episode must be genuine turn 5, got t%s-t%s".format(
-                meta.turnStart, meta.turnEnd));
+    assert(meta.turnStart == 5 && meta.turnEnd == 5, i"the only indexed episode must be genuine turn 5, got t$(
+            meta.turnStart)-t$(meta.turnEnd)".text);
 
     // THE GUARD (a): no indexed topic covers the summary's turn
     // range (1-3). If the marker exclusion regressed, the summary would
@@ -1863,15 +1860,13 @@ unittest {
     // finds nothing (cleanFts5 quotes the hyphenated token into a
     // phrase, so this is a sound "is this string indexed?" probe).
     auto sent = db.queryTextSearch(SENTINEL_SUMMARY, 100);
-    assert(sent.length == 0,
-            "merged summary content must not be text-searchable, got " ~ "%s matches".format(
-                sent.length));
+    assert(sent.length == 0, i"merged summary content must not be text-searchable, got $(
+            sent.length) matches".text);
 
     // The legacy unstamped entry is excluded the same way.
     auto leg = db.queryTextSearch(SENTINEL_LEGACY, 100);
-    assert(leg.length == 0,
-            "legacy turnId==0 content must not be text-searchable, got " ~ "%s matches".format(
-                leg.length));
+    assert(leg.length == 0, i"legacy turnId==0 content must not be text-searchable, got $(
+            leg.length) matches".text);
 
     // Positive control: the genuine dialogue IS present and verbatim
     // (both pieces in one chunk) - the marker filter is not over-broad, and
@@ -1894,7 +1889,7 @@ unittest {
         scanEmb = null;
     });
     auto all = db.querySemantic(Search(scanEmb), 100);
-    assert(all.length == 1, "exactly one indexed chunk expected, got %s".format(all.length));
+    assert(all.length == 1, i"exactly one indexed chunk expected, got $(all.length)".text);
     foreach (m; all) {
         assert(indexOf(m.text, SENTINEL_SUMMARY) == size_t.max,
                 "no topic may contain merged summary content: " ~ m.text);

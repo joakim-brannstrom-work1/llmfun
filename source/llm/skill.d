@@ -5,7 +5,6 @@ import std.algorithm : filter, map, among;
 import std.array : appender, join, Appender, empty;
 import std.conv : to, text;
 import std.file : exists, isDir, dirEntries, SpanMode, getSize, readText, rmdirRecurse;
-import std.format : format;
 import std.path : baseName, buildPath;
 import std.range : array;
 import std.regex : regex, matchFirst;
@@ -779,7 +778,7 @@ string buildAlwaysApplyBlock(Skill[] alwaysApply, long maxTokens) {
 
     foreach (skill; alwaysApply) {
         auto body = skill.loadBody();
-        auto block = format("## Skill: %s\n%s\n\n", skill.name, body);
+        auto block = i"## Skill: $(skill.name)\n$(body)\n\n".text;
         auto estimatedTokens = cast(long)(block.length / ApproxTokenSize);
 
         if (!unlimited && totalTokens + estimatedTokens > maxTokens) {

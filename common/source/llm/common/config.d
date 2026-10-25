@@ -1,8 +1,7 @@
 module llm.common.config;
 
 import logger = std.logger;
-import std.conv : to;
-import std.format : format;
+import std.conv : to, text;
 import std.sumtype : SumType, match;
 
 import my.path : Path;
@@ -54,19 +53,19 @@ struct ServerConfig {
     }
 
     string toChatUrl() {
-        return format!"%s/%s"(url, chatUrl);
+        return i"$(url)/$(chatUrl)".text;
     }
 
     string toPromptUrl() {
-        return format!"%s/%s"(url, promptUrl);
+        return i"$(url)/$(promptUrl)".text;
     }
 
     string toSlotUrl() {
-        return format!"%s/%s"(url, slotUrl);
+        return i"$(url)/$(slotUrl)".text;
     }
 
     string toEmbedUrl() {
-        return format!"%s/%s"(url, embedUrl);
+        return i"$(url)/$(embedUrl)".text;
     }
 }
 

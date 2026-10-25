@@ -4,7 +4,6 @@ import logger = std.logger;
 import std.algorithm : canFind, filter, map, startsWith;
 import std.array : empty, appender, array;
 import std.conv : to, text;
-import std.format : format;
 import std.json : JSONValue;
 import std.range : enumerate;
 import std.regex : Regex, regex;
@@ -66,10 +65,10 @@ private string location(Document doc) @safe pure {
 }
 
 private string toResult(Document[] docs) @safe {
-    return docs.enumerate.map!(doc => format("--- Result %s ('%s' in database '%s' line %s-%s chars %s-%s) ---\n%s",
-            doc.index + 1, location(doc.value), doc.value.databaseName,
-            doc.value.line.begin, doc.value.line.end, doc.value.offset.begin,
-            doc.value.offset.end, doc.value.data)).join("\n\n");
+    return docs.enumerate.map!(doc => i"--- Result $(doc.index + 1) ('$(location(doc.value))' in database '$(
+            doc.value.databaseName)' line $(doc.value.line.begin)-$(doc.value.line.end) chars $(
+            doc.value.offset.begin)-$(doc.value.offset.end) ---\n$(doc.value.data)".text).join(
+            "\n\n");
 }
 
 /**
@@ -413,9 +412,9 @@ struct QueryReadFileParams {
 
             string text = applyAppendLoc(match.data, match.line.begin, params.appendLoc);
 
-            resultBlocks ~= format("--- Result %s ('%s' in database '%s' line %s-%s chars %s-%s) ---\n%s", i + 1,
-                    originStr, match.databaseName, match.line.begin,
-                    match.line.end, match.offset.begin, match.offset.end, text);
+            resultBlocks ~= i"--- Result $(i + 1) ('$(originStr)' in database '$(match.databaseName)' line $(
+                    match.line.begin)-$(match.line.end) chars $(match.offset.begin)-$(
+                    match.offset.end) ---\n$(text)".text;
         }
 
         return ExecuteFuncResult(resultBlocks.join("\n\n"), success: true);

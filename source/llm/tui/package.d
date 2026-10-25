@@ -77,7 +77,6 @@ package string timeSuffix(MessageTime time) {
 // A D `Logger` implementation that captures log entries and drains them for display in the TUI log tab.
 class TuiLogger : Logger {
     import core.sync.mutex;
-    import std.format : format;
 
     private {
         Appender!(string[]) entries;
@@ -97,8 +96,8 @@ class TuiLogger : Logger {
         scope (exit)
             mtx.unlock_nothrow();
         if (entries[].length < MaxEntries) {
-            entries.put(format("%s - %s: %s [%s:%d]", Clock.currTime,
-                    payload.logLevel, payload.msg, payload.funcName, payload.line));
+            entries.put(i"$(Clock.currTime) - $(payload.logLevel): $(payload.msg) [$(
+                    payload.funcName):$(payload.line)]".text);
         }
     }
 

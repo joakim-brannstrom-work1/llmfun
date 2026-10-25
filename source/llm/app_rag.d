@@ -4,9 +4,8 @@ module llm.app_rag;
 import logger = std.logger;
 import std.algorithm;
 import std.array : appender, empty, array;
-import std.conv : to;
+import std.conv : to, text;
 import std.file : exists, isFile, isDir, dirEntries, SpanMode;
-import std.format : format;
 import std.path : extension, baseName, buildNormalizedPath;
 import std.string : strip, startsWith, join, toStringz, split;
 import std.sumtype : match;
@@ -522,7 +521,7 @@ int dialogueReport(LlmConfig llmConf) {
     foreach (dbPath; validSessionDatabases(dir)) {
         auto sessionId = baseName(dbPath.toString)[0 .. $ - ".db".length];
         sessionStats(dbPath).match!((DialogueSessionStats s) {
-            string turns = s.hasTurns ? format("turns %s-%s", s.minTurn, s.maxTurn) : "no turn info";
+            string turns = s.hasTurns ? i"turns $(s.minTurn)-$(s.maxTurn)".text : "no turn info";
             logger.infof("session '%s': %s source(s), %s", sessionId, s.sources, turns);
             sessionsReported++;
             totalSources += s.sources;

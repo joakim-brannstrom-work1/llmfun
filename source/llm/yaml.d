@@ -18,9 +18,9 @@
 module llm.yaml;
 
 import logger = std.logger;
+import std.conv : text;
 import std.datetime : SysTime;
 import std.file : readText;
-import std.format : format;
 import std.json : JSONValue;
 
 import my.path : Path;
@@ -46,13 +46,13 @@ Node loadYamlNode(Path filePath) {
     try {
         content = readText(filePath);
     } catch (Exception e) {
-        throw new Exception("Failed to read YAML file %s: %s".format(filePath, e.msg));
+        throw new Exception(i"Failed to read YAML file $(filePath): $(e.msg)".text);
     }
 
     try {
         return Loader.fromString(content, filePath.toString).load();
     } catch (Exception e) {
-        throw new Exception("Failed to parse YAML file %s: %s".format(filePath, e.msg));
+        throw new Exception(i"Failed to parse YAML file $(filePath): $(e.msg)".text);
     }
 }
 
@@ -89,8 +89,8 @@ JSONValue yamlToJson(Node node) {
 
 private JSONValue yamlToJsonImpl(Node node, ref size_t visited) {
     if (++visited > MaxYamlToJsonNodes) {
-        throw new Exception(("YAML conversion aborted: more than %d nodes" ~ " (possible alias expansion bomb)")
-                .format(MaxYamlToJsonNodes));
+        throw new Exception(i"YAML conversion aborted: more than $(MaxYamlToJsonNodes) nodes (possible alias expansion bomb)"
+                .text);
     }
     JSONValue output;
     switch (node.type) {
@@ -145,13 +145,13 @@ private JSONValue yamlToJsonImpl(Node node, ref size_t visited) {
 JSONValue loadYamlValue(Path filePath) {
     auto node = loadYamlNode(filePath);
     if (node.type != NodeType.mapping) {
-        throw new Exception("YAML config %s: root must be a mapping, got %s".format(filePath,
-                node.type));
+        throw new Exception(i"YAML config $(filePath): root must be a mapping, got $(node.type)"
+                .text);
     }
     try {
         return yamlToJson(node);
     } catch (Exception e) {
-        throw new Exception("Failed to convert YAML file %s: %s".format(filePath, e.msg));
+        throw new Exception(i"Failed to convert YAML file $(filePath): $(e.msg)".text);
     }
 }
 

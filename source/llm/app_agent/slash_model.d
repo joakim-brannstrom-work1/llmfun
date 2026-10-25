@@ -6,7 +6,6 @@ module llm.app_agent.slash_model;
 import std.array : empty;
 import std.conv : text, to;
 import std.exception : ifThrown;
-import std.format : format;
 import std.functional : toDelegate;
 import std.string : strip;
 
@@ -35,7 +34,7 @@ private AgentStatus modelHandler(ref AgentApp app, string arg) {
         foreach (i, model; app.llmConf.codeModels) {
             auto activeMarker = (i == cast(size_t) app.llmConf.activeCodeModelIndex) ? " [active]"
                 : "";
-            m ~= format("  %s  %s%s\n", i, model.display, activeMarker);
+            m ~= i"  $(i)  $(model.display)$(activeMarker)\n".text;
         }
         m ~= "Use /model <index> or /model <name> to switch.";
         app.sendChatMessage(m, TuiChatMessageType_Assistant);

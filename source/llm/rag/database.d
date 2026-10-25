@@ -4,10 +4,9 @@ import core.thread : Thread;
 import logger = std.experimental.logger;
 import std.algorithm : map, filter, cache;
 import std.array : appender, empty;
-import std.conv : to;
+import std.conv : to, text;
 import std.datetime : dur, SysTime;
 import std.exception : collectException, ifThrown;
-import std.format : format;
 import std.meta : AliasSeq;
 import std.sumtype : match;
 import std.typecons : Tuple, tuple;
@@ -70,15 +69,6 @@ private struct TextChunkTbl {
     long lineBegin;
     long lineEnd;
 }
-
-private immutable EmbeddingsTblSql = `
-CREATE VIRTUAL TABLE EmbeddingsTbl USING vec0(
-    id INTEGER PRIMARY KEY,
-    sourceId INTEGER NOT NULL,
-    embedding FLOAT[%s]
-);`;
-// FOREIGN KEY(source_id) REFERENCES SourceTbl(id) ON DELETE CASCADE
-// FOREIGN KEY(textChunkId) REFERENCES TextChunkTbl(id) ON DELETE CASCADE
 
 // FTS5 virtual table with external content mode - reads directly from TextChunkTbl
 private immutable FTSChunksSql = `
@@ -202,7 +192,15 @@ Optional!Database openDatabase(AbsolutePath dbFile_, string model,
                 db.run("DROP TABLE EmbeddingsTbl").collectException;
                 db.run("DROP TABLE FtsChunksTbl").collectException;
                 db.run(miniorm.buildSchema!Schema);
-                db.run(format!EmbeddingsTblSql(embedDimensions));
+                // FOREIGN KEY(source_id) REFERENCES SourceTbl(id) ON DELETE CASCADE
+                // FOREIGN KEY(textChunkId) REFERENCES TextChunkTbl(id) ON DELETE CASCADE
+                db.run(i`
+CREATE VIRTUAL TABLE EmbeddingsTbl USING vec0(
+    id INTEGER PRIMARY KEY,
+    sourceId INTEGER NOT NULL,
+    embedding FLOAT[$(
+                        embedDimensions)]
+);`.text);
                 db.run(FTSChunksSql);
                 db.run(miniorm.insert!VersionTbl, VersionTbl(SchemaVersion,
                         embedDimensions, model));

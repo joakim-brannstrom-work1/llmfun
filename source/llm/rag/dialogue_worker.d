@@ -8,6 +8,7 @@ import core.time : Duration, dur;
 import logger = std.logger;
 import std.algorithm : filter;
 import std.array : empty;
+import std.conv : text;
 import std.datetime : SysTime, Clock;
 import std.exception : collectException;
 import std.json : JSONValue;
@@ -1253,7 +1254,6 @@ version (unittest) {
 // corrupt here; the per-thread instances produced by the worker pattern are
 // isolated.
 unittest {
-    import std.format : format;
 
     auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
             modelName: "nts", dimensions: 16));
@@ -1292,7 +1292,7 @@ unittest {
                     allOk = false;
                 ++done;
             }), "a worker did not report its isolation verdict");
-    assert(done == N, "expected %s workers to report, got %s".format(N, done));
+    assert(done == N, i"expected $(N) workers to report, got $(done)".text);
     assert(allOk, "an embedder instance was not isolated (cross-thread corruption detected)");
 }
 
@@ -1303,7 +1303,6 @@ unittest {
     import std.file : mkdirRecurse, rmdirRecurse, tempDir;
     import std.path : buildPath;
     import std.conv : to;
-    import std.format : format;
 
     auto tmpDir = testArea("worker_integration");
     scope (exit)
@@ -1353,7 +1352,7 @@ unittest {
     }
 
     auto rowCount = countChunks(db);
-    assert(rowCount >= 2, "expected >= 2 indexed chunks, got %s".format(rowCount));
+    assert(rowCount >= 2, i"expected >= 2 indexed chunks, got $(rowCount)".text);
 
     // FTS5 must be rebuilt by the worker so text search sees the new chunks.
     auto hits = db.queryTextSearch("content", 10);
@@ -1369,7 +1368,6 @@ unittest {
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.conv : to;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_dedup");
     scope (exit)
@@ -1408,9 +1406,8 @@ unittest {
     auto db = dbOpt.match!((Database d) => d, (None _) => Database.init);
     scope (exit)
         db.destroy;
-    assert(db.getSources().length == 2,
-            "identical text under two topics must index two sources, got %s".format(
-                db.getSources().length));
+    assert(db.getSources().length == 2, i"identical text under two topics must index two sources, got $(
+            db.getSources().length)".text);
 }
 
 // A turn split across two compressions re-arrives under the same topic. The
@@ -1419,7 +1416,6 @@ unittest {
 // both pieces are text-searchable.
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_splitmerge");
     scope (exit)
@@ -1459,15 +1455,15 @@ unittest {
         db.destroy;
 
     // Exactly one source: the merge replaced the first piece's source, it did not add a second one.
-    assert(db.getSources().length == 1,
-            "split-turn merge must keep exactly one source, got %s".format(db.getSources().length));
+    assert(db.getSources().length == 1, i"split-turn merge must keep exactly one source, got $(
+            db.getSources().length)".text);
 
     auto opt = db.getSource(Origin(Topic(topicName)));
     assert(hasValue(opt), "merged source must be findable by topic");
     auto id = opt.match!(a => a.id, (None _) => SourceId.init);
     auto text = db.sourceText(id);
-    assert(text == "SPLITUSER exact question alpha\nSPLITASST answer beta",
-            "merged text must be old\nnew verbatim, got '%s'".format(text));
+    assert(text == "SPLITUSER exact question alpha\nSPLITASST answer beta", i"merged text must be old\nnew verbatim, got '$(
+            text)'".text);
 
     // Both pieces must be text-searchable (the FTS index covers the merge).
     auto h1 = db.queryTextSearch("SPLITUSER", 10);
@@ -1482,7 +1478,6 @@ unittest {
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.conv : to;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_multichunk");
     scope (exit)
@@ -1525,7 +1520,7 @@ unittest {
         foreach (ref r; stmt.get.execute)
             rowCount = r.peek!long(0);
     }
-    assert(rowCount >= 2, "expected >= 2 chunks for the round-trip test, got %s".format(rowCount));
+    assert(rowCount >= 2, i"expected >= 2 chunks for the round-trip test, got $(rowCount)".text);
 
     auto opt = db.getSource(Origin(Topic(topicName)));
     assert(hasValue(opt), "source must be findable by topic");
@@ -1540,7 +1535,6 @@ unittest {
 // source, no throw out of the job).
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_emptysrc");
     scope (exit)
@@ -1583,9 +1577,8 @@ unittest {
     scope (exit)
         db.destroy;
 
-    assert(db.getSources().length == 1,
-            "the empty source must be replaced, not duplicated (got %s)".format(
-                db.getSources().length));
+    assert(db.getSources().length == 1, i"the empty source must be replaced, not duplicated (got $(
+            db.getSources().length))".text);
     auto h = db.queryTextSearch("EMPTYFALLBACK", 10);
     assert(h !is null && h.length >= 1, "the plain piece was not indexed");
 }
@@ -1596,7 +1589,6 @@ unittest {
 // no longer flushes any deferred rebuilds.
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_ftsperjob");
     scope (exit)
@@ -1753,7 +1745,6 @@ private Embedder throwingEmbedderFactory(EmbedConfig config) {
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.conv : to;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_rw");
     scope (exit)
@@ -1803,12 +1794,10 @@ unittest {
     assert(sup.receiveTimeout(30.dur!"seconds", (WkRdResult r) { finMsg = r; }),
             "reader final verdict not received");
     assert(!finMsg.ready, "second reader message must be the final verdict");
-    assert(finMsg.errors == 0,
-            "read-only reader hit a lock/validity error while the writer was committing: %s".format(
-                finMsg.errors));
-    assert(finMsg.count >= 4,
-            "reader did not observe both commits (expected >= 4 chunks, saw %s)".format(
-                finMsg.count));
+    assert(finMsg.errors == 0, i"read-only reader hit a lock/validity error while the writer was committing: $(
+            finMsg.errors)".text);
+    assert(finMsg.count >= 4, i"reader did not observe both commits (expected >= 4 chunks, saw $(
+            finMsg.count))".text);
 
     // Single final drain (production dispose pattern): flush dirty FTS and close the write connection. The reader is closed now, so the checkpoint is clean.
     ch.diDrain(DiDrain(sup.address(), gate, Duration.zero));
@@ -1828,21 +1817,20 @@ unittest {
         foreach (ref r; stmt.get.execute)
             total = r.peek!long(0);
     }
-    assert(total >= 4, "fresh connection sees < 4 committed chunks: %s".format(total));
+    assert(total >= 4, i"fresh connection sees < 4 committed chunks: $(total)".text);
     string journal = "";
     {
         auto stmt = db.prepare("PRAGMA journal_mode;");
         foreach (ref r; stmt.get.execute)
             journal = r.peek!string(0);
     }
-    assert(journal == "wal", "expected wal journal mode, got '%s'".format(journal));
+    assert(journal == "wal", i"expected wal journal mode, got '$(journal)'".text);
 }
 
 /// Resilience (writer side): a pre-corrupted session DB must not crash the worker or starve other sessions. The corrupted session's job is skipped (openDatabase keeps failing and returns none), but a second session's job in the same mailbox is still indexed, and the worker still answers the drain (DiDrained).
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse, write;
     import std.conv : to;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_corrupt");
     scope (exit)
@@ -1899,13 +1887,12 @@ unittest {
         foreach (ref r; stmt.get.execute)
             rowCount = r.peek!long(0);
     }
-    assert(rowCount >= 2, "session B should have >= 2 indexed chunks, got %s".format(rowCount));
+    assert(rowCount >= 2, i"session B should have >= 2 indexed chunks, got $(rowCount)".text);
 }
 
 /// Resilience (degraded worker): when the injected embedder factory throws, the worker degrades gracefully -- it sends the degraded notice exactly once (from onSpawn, before any mailbox processing), skips every DiJob, and still answers diDrain so disposal never hangs.
 unittest {
     import std.conv : to;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_degraded");
     scope (exit)
@@ -1942,7 +1929,7 @@ unittest {
     string reason;
     assert(sup.receiveTimeout(30.dur!"seconds", (string s) { reason = s; }),
             "degraded worker did not report its degraded state");
-    assert(reason == "no embedder available", "unexpected degraded reason: %s".format(reason));
+    assert(reason == "no embedder available", i"unexpected degraded reason: $(reason)".text);
     assert(sup.receiveTimeout(30.dur!"seconds", (DiDrained _) {}),
             "degraded worker did not answer diDrain (disposal would hang)");
     // A duplicate notice would have been posted before the drain answer (same sender, FIFO) and therefore already sit in the supervisor's mailbox: the negative receive below enforces the exactly-once property (one onSpawn per spawn).
@@ -2067,7 +2054,7 @@ unittest {
         foreach (ref r; stmt.get.execute)
             rowCount = r.peek!long(0);
     }
-    assert(rowCount >= 2, "expected >= 2 indexed chunks, got %s".format(rowCount));
+    assert(rowCount >= 2, i"expected >= 2 indexed chunks, got $(rowCount)".text);
 }
 
 /// Fixed-text fake summarizer: an RiJob must produce a retrievable r_
@@ -2075,8 +2062,6 @@ unittest {
 //as a single chunk, FTS-searchable, and the topic decoding to the job's
 //session/turn range with Kind.reasoning.
 unittest {
-    import std.format : format;
-
     auto tmpDir = testArea("dialogue_p2_fixed");
     scope (exit)
         tmpDir.cleanup();
@@ -2123,9 +2108,9 @@ unittest {
             chunkTexts ~= r.peek!string(0) ~ "\n";
         }
     }
-    assert(chunkCount == 1, "expected exactly 1 chunk for the record, got %s".format(chunkCount));
-    assert(chunkTexts == "RI_FIXED_ALPHA\n",
-            "record must be indexed fence-stripped, verbatim; got: %s".format(chunkTexts));
+    assert(chunkCount == 1, i"expected exactly 1 chunk for the record, got $(chunkCount)".text);
+    assert(chunkTexts == "RI_FIXED_ALPHA\n", i"record must be indexed fence-stripped, verbatim; got: $(
+            chunkTexts)".text);
 
     // FTS surfaces it under an r_ topic that decodes to the RiJob metadata.
     auto hits = db.queryTextSearch("RI_FIXED_ALPHA", 10);
@@ -2134,17 +2119,16 @@ unittest {
     auto metaOpt = decodeTopicName(topicName);
     assert(metaOpt.hasValue, "r_ topic must decode, got: " ~ topicName);
     auto meta = metaOpt.match!((EpisodeMeta m) => m, (None _) => EpisodeMeta());
-    assert(meta.kind == Kind.reasoning, "kind must be reasoning, got %s".format(meta.kind));
+    assert(meta.kind == Kind.reasoning, i"kind must be reasoning, got $(meta.kind)".text);
     assert(meta.sessionId == sid, "sessionId mismatch: " ~ meta.sessionId);
-    assert(meta.turnStart == 4 && meta.turnEnd == 8,
-            "turn range mismatch: %s-%s".format(meta.turnStart, meta.turnEnd));
+    assert(meta.turnStart == 4 && meta.turnEnd == 8, i"turn range mismatch: $(meta.turnStart)-$(
+            meta.turnEnd)".text);
 }
 
 /// Slow fake summarizer: the LLM call runs OFF the mailbox (dedicated timeout): a DiJob queued behind an in-flight RiJob must complete (its chunk FTS-visible) well before the fake's 3 s sleep ends. A mailbox-blocked design would delay it by the full sleep.
 unittest {
     import core.thread : Thread;
     import std.conv : to;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_p2_slow");
     scope (exit)
@@ -2195,8 +2179,8 @@ unittest {
     }
     auto elapsed = Clock.currTime - t0;
     assert(diVisible, "DiJob chunk never became FTS-visible within 5 s");
-    assert(elapsed < 1000.dur!"msecs",
-            "DiJob was delayed by the in-flight RiJob (mailbox blocked?): %s".format(elapsed));
+    assert(elapsed < 1000.dur!"msecs", i"DiJob was delayed by the in-flight RiJob (mailbox blocked?): $(
+            elapsed)".text);
 
     // drain-while-pending / early finalize: the 3 s fake is still in flight,
     // so the drain registers the waiter and arms the default budget; the reply
@@ -2219,7 +2203,6 @@ unittest {
 unittest {
     import std.string : startsWith;
     import std.conv : to;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_p2_throw");
     scope (exit)
@@ -2272,16 +2255,14 @@ unittest {
             else if (t.name.startsWith("r_"))
                 rSources++;
         }, (_) {});
-    assert(dSources == 1, "the DiJob episode must be indexed, got %s d_ source(s)".format(dSources));
-    assert(rSources == 0,
-            "a throwing summarizer must not index a record, got %s r_ source(s)".format(rSources));
+    assert(dSources == 1, i"the DiJob episode must be indexed, got $(dSources) d_ source(s)".text);
+    assert(rSources == 0, i"a throwing summarizer must not index a record, got $(rSources) r_ source(s)"
+            .text);
     assert(db.queryTextSearch("GOODDI", 10).length >= 1, "the DiJob chunk must be FTS-searchable");
 }
 
 /// Degraded worker: an RiJob must be skipped WITHOUT spawning a summarizer thread (no LLM spend while degraded): the counting fake must never be invoked.
 unittest {
-    import std.format : format;
-
     auto tmpDir = testArea("dialogue_p2_degraded");
     scope (exit)
         tmpDir.cleanup();
@@ -2306,7 +2287,7 @@ unittest {
     string reason;
     assert(sup.receiveTimeout(30.dur!"seconds", (string s) { reason = s; }),
             "worker did not report its degraded state");
-    assert(reason == "no embedder available", "unexpected degraded reason: %s".format(reason));
+    assert(reason == "no embedder available", i"unexpected degraded reason: $(reason)".text);
 
     ch.riJob(RiJob(sid, "trace text for the degraded worker".idup, 2, 2));
     ch.diDrain(DiDrain(sup.address(), gate, Duration.zero));
@@ -2322,8 +2303,6 @@ unittest {
 // for the RiRecord, index it (recordJob) BEFORE the checkpoint+close, and then
 // answer DiDrained: the record survives in the closed DB.
 unittest {
-    import std.format : format;
-
     auto tmpDir = testArea("dialogue_p2_drainjoin");
     scope (exit)
         tmpDir.cleanup();
@@ -2367,8 +2346,8 @@ unittest {
             chunkTexts ~= r.peek!string(0) ~ "\n";
         }
     }
-    assert(chunkCount == 1, "expected exactly 1 chunk, got %s".format(chunkCount));
-    assert(chunkTexts == "DRAINJOIN_GAMMA\n", "record text mismatch: %s".format(chunkTexts));
+    assert(chunkCount == 1, i"expected exactly 1 chunk, got $(chunkCount)".text);
+    assert(chunkTexts == "DRAINJOIN_GAMMA\n", i"record text mismatch: $(chunkTexts)".text);
 }
 
 // Drain deadline exceeded: with an in-flight fake that cannot finish within
@@ -2379,7 +2358,6 @@ unittest {
 unittest {
     import core.thread : Thread;
     import std.string : startsWith;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_p2_deadline");
     scope (exit)
@@ -2414,8 +2392,8 @@ unittest {
     assert(reply.deadlineHit, "the deadline finalize must answer with deadlineHit set");
     gate.close();
     auto elapsed = Clock.currTime - t0;
-    assert(elapsed < 4000.dur!"msecs",
-            "drain blocked on the in-flight fake instead of the deadline: %s".format(elapsed));
+    assert(elapsed < 4000.dur!"msecs", i"drain blocked on the in-flight fake instead of the deadline: $(
+            elapsed)".text);
 
     lateWait = 3500.dur!"msecs" - (Clock.currTime - t0);
     // Let the late RiRecord (fake sleeps 3000 ms) be consumed by the still-running worker BEFORE the test area is cleaned up (documented unittest backoff sleep: the late recordJob may reopen the session DB; accepted shutdown record-loss window -- its state is deliberately not asserted).
@@ -2457,7 +2435,6 @@ unittest {
 @("DialogueWorkerActor: diJob + riJob + drain round-trip")
 unittest {
     import std.conv : to;
-    import std.format : format;
     import std.string : startsWith;
 
     auto tmpDir = testArea("dialogue_actor_roundtrip");
@@ -2506,16 +2483,13 @@ unittest {
             else if (t.name.startsWith("r_"))
                 rSources++;
         }, (_) {});
-    assert(dSources == 1, "the DiJob episode must be indexed, got %s d_ source(s)".format(dSources));
-    assert(rSources == 1,
-            "the RiJob record must be indexed before the drain's close, got %s r_ source(s)".format(
-                rSources));
+    assert(dSources == 1, i"the DiJob episode must be indexed, got $(dSources) d_ source(s)".text);
+    assert(rSources == 1, i"the RiJob record must be indexed before the drain's close, got $(
+            rSources) r_ source(s)".text);
 }
 
 @("DialogueWorkerActor: degraded path reaches the owner")
 unittest {
-    import std.format : format;
-
     auto tmpDir = testArea("dialogue_actor_degraded");
     scope (exit)
         tmpDir.cleanup();
@@ -2535,7 +2509,7 @@ unittest {
     string reason;
     assert(sup.receiveTimeout(30.dur!"seconds", (string s) { reason = s; }),
             "worker did not report its degraded state");
-    assert(reason == "no embedder available", "unexpected degraded reason: %s".format(reason));
+    assert(reason == "no embedder available", i"unexpected degraded reason: $(reason)".text);
 }
 
 @("DialogueWorkerActor: idle drain answers immediately")
@@ -2805,7 +2779,6 @@ unittest {
 unittest {
     import core.thread : Thread;
     import std.datetime : Clock;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_killpath");
     scope (exit)
@@ -2849,11 +2822,10 @@ unittest {
     auto sh0 = Clock.currTime;
     sys.shutdown();
     auto elapsed = Clock.currTime - sh0;
-    assert(elapsed >= floorMs.dur!"msecs",
-            "join-all must wait for the in-flight summarizer (floor %s ms): %s".format(floorMs,
-                elapsed));
-    assert(elapsed <= 15.dur!"seconds",
-            "kill-path shutdown must stay bounded by the fake's runtime: %s".format(elapsed));
+    assert(elapsed >= floorMs.dur!"msecs", i"join-all must wait for the in-flight summarizer (floor $(
+            floorMs) ms): $(elapsed)".text);
+    assert(elapsed <= 15.dur!"seconds", i"kill-path shutdown must stay bounded by the fake's runtime: $(
+            elapsed)".text);
 }
 
 // Join semantics: join-all includes in-flight detached summarizers -- the shutdown must block for
@@ -2865,7 +2837,6 @@ unittest {
 unittest {
     import core.thread : Thread;
     import std.datetime : Clock;
-    import std.format : format;
 
     auto tmpDir = testArea("dialogue_joinsem");
     scope (exit)
@@ -2900,10 +2871,9 @@ unittest {
     auto sh0 = Clock.currTime;
     sys.shutdown();
     auto elapsed = Clock.currTime - sh0;
-    assert(elapsed >= floorMs.dur!"msecs",
-            "join-all must include the in-flight summarizer (floor %s ms): %s".format(floorMs,
-                elapsed));
-    assert(elapsed <= 15.dur!"seconds", "join-all must stay bounded: %s".format(elapsed));
+    assert(elapsed >= floorMs.dur!"msecs", i"join-all must include the in-flight summarizer (floor $(
+            floorMs) ms): $(elapsed)".text);
+    assert(elapsed <= 15.dur!"seconds", i"join-all must stay bounded: $(elapsed)".text);
 }
 
 // Embedder serialization (the actor serialization invariant): one shared factory serves two
@@ -2912,8 +2882,6 @@ unittest {
 // episode plus one chunk per record, each on its own worker's mailbox.
 @("DialogueWorkerActor: embedder calls serialize per worker")
 unittest {
-    import std.format : format;
-
     auto tmp1 = testArea("dialogue_ser1");
     scope (exit)
         tmp1.cleanup();
@@ -2960,9 +2928,8 @@ unittest {
     assert(atomicLoad(serEmbInstances) == 2, "expected one embedder instance per worker");
     assert(atomicLoad(serEmbViolations) == 0,
             "a concurrent embed call observed inCall_ true on entry");
-    assert(atomicLoad(serEmbCalls) == 4,
-            "expected exactly four embed calls (two episodes + two records): %s".format(
-                atomicLoad(serEmbCalls)));
+    assert(atomicLoad(serEmbCalls) == 4, i"expected exactly four embed calls (two episodes + two records): $(
+            atomicLoad(serEmbCalls))".text);
 
     // Both workers committed their episode (per-directory DBs, as in the other blocks).
     auto db1Opt = openDatabase((tmp1 ~ (sid ~ ".db")).AbsolutePath, "ser", 8, readOnly: true);

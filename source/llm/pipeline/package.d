@@ -6,7 +6,6 @@ import std.algorithm : canFind, filter, max, map, count;
 import std.array : join, appender;
 import std.conv : to, text;
 import std.datetime : Clock, SysTime, Duration, dur;
-import std.format : format;
 import std.range;
 import std.typecons : Nullable;
 import std.json : JSONValue;
@@ -228,7 +227,7 @@ string prettyPrint(PipelineResult result) {
     a.put("\n");
 
     // Summary line
-    a.put(format("- Status: %s\n", result.allSuccess ? "✓ All succeeded" : "✗ Some failed"));
+    a.put(i"- Status: $(result.allSuccess ? "✓ All succeeded" : "✗ Some failed")\n".text);
     a.put(i"- Total duration: $(result.totalDurationMs) ms\n".text);
     a.put(i"- Agents executed: $(result.agentResults.length)\n".text);
     if (result.wasInterrupted)
@@ -237,7 +236,7 @@ string prettyPrint(PipelineResult result) {
 
     // Execution order
     if (result.executionOrder.length > 0) {
-        a.put(format("Execution order: %s\n", result.executionOrder.join(" → ")));
+        a.put(i"Execution order: $(result.executionOrder.join(" → "))\n".text);
         a.put("\n");
     }
 
@@ -248,7 +247,7 @@ string prettyPrint(PipelineResult result) {
     foreach (i, agent; result.agentResults) {
         a.put("\n");
         a.put(i"## Agent $(i + 1): $(agent.agentName)\n".text);
-        a.put(format("- Status: %s\n", agent.success ? "✓ Success" : "✗ Failed"));
+        a.put(i"- Status: $(agent.success ? "✓ Success" : "✗ Failed")\n".text);
         a.put(i"- Duration: $(agent.durationMs) ms\n".text);
 
         // Truncate long outputs for readability

@@ -9,12 +9,11 @@ import core.atomic : atomicFetchAdd;
 import core.sys.posix.signal : SIGPIPE, SIG_IGN, signal;
 import core.thread : Thread;
 import miniorm : spinSql;
-import std.conv : to;
+import std.conv : to, text;
 import std.datetime;
 import std.exception : ErrnoException;
 import std.file : SpanMode, dirEntries, exists, FileException, isDir,
     mkdirRecurse, readText, rmdirRecurse;
-import std.format : format;
 import std.logger : FileLogger, LogLevel, logf, sharedLog;
 import std.path : buildPath;
 import std.stdio : stderr;
@@ -150,7 +149,7 @@ version (unittest) {
         import std.path : baseName;
         import my.path;
 
-        auto p = AbsolutePath(TestBaseDir) ~ format("%s_%s_%s", baseName(file), line, testName);
+        auto p = AbsolutePath(TestBaseDir) ~ i"$(baseName(file))_$(line)_$(testName)".text;
         return TestArea(p);
     }
 

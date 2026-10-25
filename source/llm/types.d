@@ -31,7 +31,7 @@ interface IBasicAgent : IAgent {
 
 struct StreamMessage {
     import std.array : empty;
-    import std.format : format;
+    import std.conv : text;
 
     string role;
     string content;
@@ -43,8 +43,8 @@ struct StreamMessage {
     }
 
     string toString() @safe const {
-        return format!`Message(role:%s content:"%s" reasoning:"%s" finishReason:"%s")`(role,
-                content, reasoning, finishReason);
+        return i`Message(role:$(role) content:"$(content)" reasoning:"$(reasoning)" finishReason:"$(
+                finishReason)")`.text;
     }
 }
 

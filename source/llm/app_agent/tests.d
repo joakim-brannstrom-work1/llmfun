@@ -7,7 +7,6 @@ import std.array : empty, array, appender;
 import std.conv : to, text;
 import std.datetime : dur;
 import std.exception : collectException;
-import std.format : format;
 import std.json : JSONType, JSONValue;
 import std.string : startsWith, strip, join;
 import std.sumtype : match;
@@ -800,7 +799,6 @@ unittest {
         "sidebar snapshot keeps store order (updatedAt descending) with the active marker; clicking must not reorder")
 unittest {
     import std.file : write;
-    import std.format : format;
     import std.path : buildPath;
 
     auto tmpDir = testArea("app_agent_snapshot_order");
@@ -813,9 +811,8 @@ unittest {
     auto b = SessionId("20260618-153045-b3c4");
     auto c = SessionId("20260618-153045-c5d6");
     void writeSession(SessionId id, long updatedAt) {
-        write(buildPath(tmpDir, id.get ~ ".json"),
-                format(`{"title": "T", "createdAt": 100, "updatedAt": %d, "messages": []}`,
-                    updatedAt));
+        write(buildPath(tmpDir, id.get ~ ".json"), i`{"title": "T", "createdAt": 100, "updatedAt": $(
+                updatedAt), "messages": []}`.text);
     }
 
     writeSession(a, 100);
@@ -876,7 +873,6 @@ unittest {
         "navigation never rewrites a session (updatedAt unchanged) and a dirty chat commits with an updatedAt bump")
 unittest {
     import std.file : write;
-    import std.format : format;
     import std.path : buildPath;
     import my.filter : ReFilter;
 
@@ -891,9 +887,8 @@ unittest {
     auto newer = SessionId("20260618-153045-b3c4");
     auto older = SessionId("20260618-153045-a1b2");
     void writeSession(SessionId id, long updatedAt) {
-        write(buildPath(tmpDir, "chat", id.get ~ ".json"), format(
-                `{"title": "T", "createdAt": 100, "updatedAt": %d,` ~ `"messages": [{"role": "user", "content": "hi"}]}`,
-                updatedAt));
+        write(buildPath(tmpDir, "chat", id.get ~ ".json"), i`{"title": "T", "createdAt": 100, "updatedAt": $(
+                updatedAt), "messages": [{"role": "user", "content": "hi"}]}`.text);
     }
 
     writeSession(newer, 300);
@@ -1125,7 +1120,6 @@ unittest {
         "delete-active falls back to the most recently updated remaining session and the snapshot drops the deleted id")
 unittest {
     import std.file : write, exists;
-    import std.format : format;
     import std.path : buildPath;
     import my.filter : ReFilter;
 
@@ -1144,9 +1138,8 @@ unittest {
     // Test-only helper: userContent must be JSON-safe ASCII (no escaping).
     // createdAt is arbitrary (100): only updatedAt matters for ordering.
     void writeSession(SessionId id, long updatedAt, string userContent) {
-        write(buildPath(tmpDir, "chat", id.get ~ ".json"), format(
-                `{"title": "T", "createdAt": 100, "updatedAt": %d,` ~ `"messages": [{"role": "user", "content": "%s"}]}`,
-                updatedAt, userContent));
+        write(buildPath(tmpDir, "chat", id.get ~ ".json"), i`{"title": "T", "createdAt": 100, "updatedAt": $(
+                updatedAt), "messages": [{"role": "user", "content": "$(userContent)"}]}`.text);
     }
 
     writeSession(a, 400, "hello-a");

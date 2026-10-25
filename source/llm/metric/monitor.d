@@ -192,14 +192,14 @@ JSONValue brokerEvent(string kind, string agentName, JSONValue[string] fields) @
 unittest {
     import std.algorithm : filter;
     import std.array : array;
+    import std.conv : text;
     import std.datetime : Clock;
     import std.file : mkdirRecurse, rmdirRecurse;
-    import std.format : format;
     import std.path : buildPath;
     import std.string : splitLines;
 
     auto now = Clock.currTime();
-    auto tmpDir = format("llmfun_test/monitor_t10_record_%d_%d", now.toUnixTime(), now.stdTime);
+    auto tmpDir = i"llmfun_test/monitor_t10_record_$(now.toUnixTime())_$(now.stdTime)".text;
     mkdirRecurse(tmpDir);
     scope (exit)
         rmdirRecurse(tmpDir);
@@ -221,13 +221,13 @@ unittest {
 
 @("loadEvents loads only the ToolCallEvent lines from a mixed JSONL (broker lines are skipped)")
 unittest {
+    import std.conv : text;
     import std.datetime : Clock;
     import std.file : mkdirRecurse, rmdirRecurse, write;
-    import std.format : format;
     import std.path : buildPath;
 
     auto now = Clock.currTime();
-    auto tmpDir = format("llmfun_test/monitor_t10_mixed_%d_%d", now.toUnixTime(), now.stdTime);
+    auto tmpDir = i"llmfun_test/monitor_t10_mixed_$(now.toUnixTime())_$(now.stdTime)".text;
     mkdirRecurse(tmpDir);
     scope (exit)
         rmdirRecurse(tmpDir);

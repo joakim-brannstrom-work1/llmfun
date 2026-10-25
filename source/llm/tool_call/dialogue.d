@@ -75,8 +75,8 @@ struct QueryDialogueHistoryParams {
     if (sid.empty)
         return ExecuteFuncResult("error: no active session and no sessionId provided", false);
     if (!isValidId(SessionId(sid)))
-        return ExecuteFuncResult(format(
-                "error: invalid sessionId '%s' (expected YYYYMMDD-HHMMSS-4hex)", sid), false);
+        return ExecuteFuncResult(i"error: invalid sessionId '$(sid)' (expected YYYYMMDD-HHMMSS-4hex)".text,
+                false);
 
     auto di = ctx.getDialogueIndex();
     if (di is null)
@@ -101,8 +101,8 @@ struct QueryDialogueHistoryParams {
     }
 
     if (result.matches.length == 0)
-        return ExecuteFuncResult(format(
-                "No matches found in the indexed dialogue history of session '%s'.", sid), true);
+        return ExecuteFuncResult(i"No matches found in the indexed dialogue history of session '$(
+                sid)'.".text, true);
 
     // Render each match: session id, turn range, timestamp, rank, verbatim text.
     string rendered;
@@ -679,9 +679,8 @@ unittest {
     assert(r.success, r.msg);
     // Header shape: --- Match 1 (session: <sid>, turns 1-1, YYYY-MM-DD HH:MM:SS, rank: R) ---
     // FTS5 bm25 ranks are negative (more negative = better), so allow a sign.
-    auto headerPattern = format(
-            r"--- Match 1 \(session: %s, turns 1-1, \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}, rank: -?\d+\.\d{3}\) ---\n",
-            TestSessionId);
+    auto headerPattern = i`--- Match 1 \(session: $(TestSessionId), turns 1-1, \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}, rank: -?\d+\.\d{3}\) ---\n`
+        .text;
     assert(!r.msg.match(regex(headerPattern)).empty, r.msg);
     // The verbatim episode text follows the header.
     assert(r.msg.canFind("PostgreSQL default port is 5432."), r.msg);

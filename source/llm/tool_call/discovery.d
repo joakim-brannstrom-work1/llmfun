@@ -85,7 +85,7 @@ private string[] sortedTagNames(string[] tags, const BrokerState st) @safe {
 /// description renders as a bare name.
 private string tagListEntry(string group, string[string] descriptions) @safe {
     if (auto p = group in descriptions) {
-        return (*p).empty ? group : format!"%s (%s)"(group, *p);
+        return (*p).empty ? group : i"$(group) ($(*p))".text;
     }
     return group;
 }
@@ -98,7 +98,7 @@ private string renderTagList(string[] tags, string[string] descriptions) @safe {
     string[] entries = tags[0 .. min(tags.length, MaxTagsInDiscoveryDesc)].map!(
             a => tagListEntry(a, descriptions)).array;
     if (tags.length > MaxTagsInDiscoveryDesc)
-        entries ~= format!"…and %s more — use toolSearch"(tags.length - MaxTagsInDiscoveryDesc);
+        entries ~= i"…and $(tags.length - MaxTagsInDiscoveryDesc) more — use toolSearch".text;
     return entries.join(", ");
 }
 
@@ -117,8 +117,8 @@ private string unknownGroupMsg(string group, RegFunction[] pool,
     auto groups = visibleGroupNames(pool, resolved);
     auto list = groups.empty ? "no groups are registered - every visible tool is alwaysOn (ungrouped)" : renderTagList(
             sortedTagNames(groups, st), groupDescriptions(resolved));
-    return format!"error: unknown tool group '%s'. Valid groups: %s. Call listToolTags with one of them (or without a tag to list them)."(
-            group, list);
+    return i"error: unknown tool group '$(group)'. Valid groups: $(list). Call listToolTags with one of them (or without a tag to list them)."
+        .text;
 }
 
 /// Composes the discovery tool's own description: the base text plus the
@@ -467,7 +467,6 @@ unittest {
     import std.array : array;
     import std.datetime : Clock;
     import std.file : mkdirRecurse, rmdirRecurse, readText;
-    import std.format : format;
     import std.json : parseJSON;
     import std.path : buildPath;
     import std.string : splitLines;
@@ -475,7 +474,7 @@ unittest {
     import my.path : Path;
 
     auto now = Clock.currTime();
-    auto tmpDir = format("llmfun_test/discovery_m1_%d_%d", now.toUnixTime(), now.stdTime);
+    auto tmpDir = i"llmfun_test/discovery_m1_$(now.toUnixTime())_$(now.stdTime)".text;
     mkdirRecurse(tmpDir);
     scope (exit)
         rmdirRecurse(tmpDir);

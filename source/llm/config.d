@@ -1271,16 +1271,16 @@ private string[] checkApiKeyWarnings(LlmConfig conf) {
 
     void warnOrNot(ref ServerConfig conf, string name, string helpText) {
         if (conf.warnIfNoApiKey && getEnvApiKey(conf.apiKeyEnv).empty) {
-            warnings ~= format("No API key found in environment variable '%s' for %s: %s",
-                    conf.apiKeyEnv, helpText, name);
+            warnings ~= i"No API key found in environment variable '$(conf.apiKeyEnv)' for $(
+                    helpText): $(name)".text;
         }
 
         if (!conf.jsonFields.empty) {
             try {
                 auto dummy = parseJSON(conf.jsonFields);
             } catch (Exception e) {
-                warnings ~= format("Unable to parse jsonFields '%s' in model config '%s': %s",
-                        conf.jsonFields, name, e.msg);
+                warnings ~= i"Unable to parse jsonFields '$(conf.jsonFields)' in model config '$(
+                        name)': $(e.msg)".text;
             }
         }
     }

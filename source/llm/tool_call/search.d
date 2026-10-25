@@ -23,7 +23,7 @@ module llm.tool_call.search;
 import logger = std.logger;
 import std.algorithm : canFind, filter, map;
 import std.array : array, empty;
-import std.format : format;
+import std.conv : text;
 import std.json : JSONValue;
 import std.string : toLower;
 
@@ -99,9 +99,8 @@ ExecuteFuncResult toolSearch(Context baseCtx, ToolSearchParams params) {
         // No state change on a miss; the instructive text names the
         // recovery path: tags are the coarse vocabulary.
         emitSearchEvents(ctx.getMetricMonitor(), ctx.agentName, params.query, 0, 0);
-        return ExecuteFuncResult(format("No visible tools match '%s'. Tags are "
-                ~ "the coarse search: call listToolTags (without a tag) to list " ~ "the available tags with descriptions.",
-                params.query), true);
+        return ExecuteFuncResult(i"No visible tools match '$(params.query)'. Tags are the coarse search: call listToolTags (without a tag) to list the available tags with descriptions."
+                .text, true);
     }
 
     // Activation (the loadToolTag step's per-tool variant): activate
@@ -262,7 +261,7 @@ unittest {
     import my.path : Path;
 
     auto now = Clock.currTime();
-    auto tmpDir = format("llmfun_test/search_t14_events_%d_%d", now.toUnixTime(), now.stdTime);
+    auto tmpDir = i"llmfun_test/search_t14_events_$(now.toUnixTime())_$(now.stdTime)".text;
     mkdirRecurse(tmpDir);
     scope (exit)
         rmdirRecurse(tmpDir);

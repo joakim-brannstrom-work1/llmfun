@@ -3,7 +3,8 @@ module llm.utility;
 import logger = std.logger;
 import std.algorithm : sort, filter;
 import std.array : array, appender, empty, join;
-import std.format : format, formattedWrite;
+import std.conv : text;
+import std.format : formattedWrite;
 import std.json : JSONValue, JSONType, parseJSON, JSONOptions;
 import std.stdio : writef, stdout;
 import std.utf : byUTF, toUTF8, validate, UTFException;
@@ -115,8 +116,9 @@ long computeContentHash(string content) @safe {
 string compressionResultToString(bool compressed, size_t originalLength,
         size_t newLength, size_t keptXCount, long keptXTokens, long ctxUsed, long newContextSize) {
     if (compressed) {
-        return format("Compression finished. History %s->%s messages, kept %s msgs (%s tokens), context %s->%s\n",
-                originalLength, newLength, keptXCount, keptXTokens, ctxUsed, newContextSize);
+        return i"Compression finished. History $(originalLength)->$(newLength) messages, kept $(
+                keptXCount) msgs ($(keptXTokens) tokens), context $(ctxUsed)->$(newContextSize)\n"
+            .text;
     }
     return null;
 }
@@ -128,8 +130,8 @@ string summarizeToolResponse(ToolResponse msg, size_t maxLength) {
         content = parseJSON(msg.content).toPrettyString(JSONOptions.doNotEscapeSlashes);
     } catch (Exception e) {
     }
-    return content.length < maxLength ? content : format("%s... (%d chars)",
-            content[0 .. maxLength], content.length);
+    return content.length < maxLength ? content : i"$(content[0 .. maxLength])... ($(content.length) chars)"
+        .text;
 }
 
 string[] summarizeToolCalls(JSONValue calls, size_t maxLength) @trusted {
@@ -175,9 +177,9 @@ string summarizeToolCallArguments(JSONValue args, size_t maxLength) @trusted {
         foreach (key, value; args.object) {
             auto valueStr = value.toString;
             if (valueStr.length > maxLength) {
-                valueStr = format("'%s...' (%s chars)", valueStr[0 .. maxLength], valueStr.length);
+                valueStr = i"'$(valueStr[0 .. maxLength])...' ($(valueStr.length) chars)".text;
             }
-            params ~= format("%s=%s", key, valueStr);
+            params ~= i"$(key)=$(valueStr)".text;
         }
 
         // Sort parameters by length so shortest (most visible) come first

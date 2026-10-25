@@ -10,7 +10,7 @@ import std.conv : to, text;
 import std.datetime : Clock, SysTime;
 import std.exception : collectException;
 import std.file : readText;
-import std.format : format, formattedWrite;
+import std.format : formattedWrite;
 import std.json : JSONValue, parseJSON, JSONType, JSONOptions;
 import std.range : enumerate, iota;
 import std.string : strip, replace, toUpper, toLower;
@@ -680,11 +680,6 @@ Conversation to summarize (JSONL):
 ```jsonl
 {conversation}
 )";
-        immutable Previous = "Previous summary:
-%s
-
-Now summarize the next %s messages, noting any changes, reversals, or continuations.
-";
 
         auto chunks = buildConversationText(messages, contextSize - AnswerSize);
         foreach (conversation; chunks) {
@@ -695,7 +690,9 @@ Now summarize the next %s messages, noting any changes, reversals, or continuati
                 query = query.replace("{previous}", "");
             } else {
                 auto p = summaries[$ - 1];
-                query = query.replace("{previous}", format!Previous(p[0], p[2] - p[1]));
+                query = query.replace("{previous}", i"Previous summary:\n$(p[0])\n\nNow summarize the next $(
+                        p[2] - p[1]) messages, noting any changes, reversals, or continuations.\n"
+                        .text);
             }
 
             Chat summaryChat;
@@ -709,16 +706,15 @@ Now summarize the next %s messages, noting any changes, reversals, or continuati
                 summaries ~= SummaryChunkT(stripFences(resp.response),
                         conversation[1], conversation[2]);
                 if (callback) {
-                    callback(chunkCount, chunks.length,
-                            format("Chunk %s of %s completed successfully",
-                                chunkCount, chunks.length));
+                    callback(chunkCount, chunks.length, i"Chunk $(chunkCount) of $(chunks.length) completed successfully"
+                            .text);
                 }
             } else {
                 failedChunks++;
                 logger.warningf("Chunk %s produced no summary content, skipping", chunkCount);
                 if (callback) {
-                    callback(chunkCount, chunks.length,
-                            format("Chunk %s of %s failed", chunkCount, chunks.length));
+                    callback(chunkCount, chunks.length, i"Chunk $(chunkCount) of $(chunks.length) failed"
+                            .text);
                 }
             }
         }

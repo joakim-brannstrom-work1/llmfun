@@ -20,7 +20,6 @@ import std.algorithm.searching : endsWith, startsWith;
 import std.array : join, split;
 import std.conv : to, text;
 import std.exception : collectException;
-import std.format : format;
 import std.json : JSONType, JSONValue;
 import std.range : empty;
 import std.string : cmp, indexOf;
@@ -54,7 +53,6 @@ immutable size_t ToolResponseMaxChars = 1000;
 
 // Answer reserve = SummaryAgent.AnswerSize.
 immutable int AnswerReserve = 8192;
-immutable string OmissionMarkerFmt = "[%s older trace entries omitted for size]";
 
 // Retrieval-artifact guard: never re-enter a trace.
 immutable string[2] RetrievalToolNames = [
@@ -109,7 +107,7 @@ private string loadReasoningPrompt(LlmConfig conf, ref string[] warnings) {
     try {
         return conf.readPromptFile(conf.reasoningSummaryPrompt);
     } catch (Exception e) {
-        warnings ~= format("loadReasoningPrompt: using built-in default (%s)", e.msg);
+        warnings ~= i"loadReasoningPrompt: using built-in default ($(e.msg))".text;
         return defaultReasoningPrompt;
     }
 }
@@ -206,9 +204,8 @@ class ReasoningIndex {
             if (lines.empty)
                 return;
             if (omitted > 0)
-                lines = [
-                TraceLine(format(OmissionMarkerFmt, omitted), lines[0].turnId)
-            ] ~ lines;
+                lines = [TraceLine(i"[$(omitted) older trace entries omitted for size]".text,
+                        lines[0].turnId)] ~ lines;
             // turnStart/turnEnd = min/max turnId over INCLUDED lines (empty ⇒
             // returned above; cp fallback subsumed).
             long turnStart = lines[0].turnId, turnEnd = lines[0].turnId;
@@ -600,7 +597,7 @@ unittest {
     auto m = Message(Role.assistant, false, "", "thinking body");
     m.turnId = 5;
     auto lines = ReasoningIndex.renderTrace([Chat.MessageT(m)]);
-    assert(lines.length == 1, "expected one thinking line, got %s".format(lines.length));
+    assert(lines.length == 1, i"expected one thinking line, got $(lines.length)".text);
     assert(lines[0].text == "[t5 assistant thinking] thinking body",
             "unexpected line: " ~ lines[0].text);
     assert(lines[0].turnId == 5);
@@ -624,7 +621,7 @@ unittest {
     auto tm = ToolMessage("tm thinking", calls, JSONValue.init, JSONValue.init);
     tm.turnId = 4;
     auto lines = ReasoningIndex.renderTrace([Chat.MessageT(tm)]);
-    assert(lines.length == 2, "expected tool_calls + thinking, got %s".format(lines.length));
+    assert(lines.length == 2, i"expected tool_calls + thinking, got $(lines.length)".text);
     assert(lines[0].text == "[t4 assistant tool_calls] readFile()",
             "unexpected tool_calls line: " ~ lines[0].text);
     assert(lines[1].text == "[t4 assistant thinking] tm thinking",
@@ -635,7 +632,7 @@ unittest {
     auto tm2 = ToolMessage("", JSONValue(JSONType.array), JSONValue.init, JSONValue.init);
     tm2.turnId = 9;
     auto lines2 = ReasoningIndex.renderTrace([Chat.MessageT(tm2)]);
-    assert(lines2.length == 1, "expected one line, got %s".format(lines2.length));
+    assert(lines2.length == 1, i"expected one line, got $(lines2.length)".text);
     assert(lines2[0].text == "[t9 assistant tool_calls] Wants to run: <unknown>",
             "unexpected line: " ~ lines2[0].text);
 }
@@ -645,7 +642,7 @@ unittest {
     auto tr = ToolResponse("file contents here", "call_1", "readFile", true);
     tr.turnId = 7;
     auto lines = ReasoningIndex.renderTrace([Chat.MessageT(tr)]);
-    assert(lines.length == 1, "expected one tool line, got %s".format(lines.length));
+    assert(lines.length == 1, i"expected one tool line, got $(lines.length)".text);
     assert(lines[0].text == "[t7 tool readFile] file contents here",
             "unexpected line: " ~ lines[0].text);
 }
@@ -660,8 +657,8 @@ unittest {
     auto lines = ReasoningIndex.renderTrace([Chat.MessageT(m)]);
     assert(lines.length == 1);
     assert(lines[0].text.length == 24 + ThinkingMaxChars,
-            "capped line must be prefix + exactly %s chars, got %s".format(ThinkingMaxChars,
-                lines[0].text.length));
+            i"capped line must be prefix + exactly $(ThinkingMaxChars) chars, got $(
+                lines[0].text.length)".text);
     assert(lines[0].text.startsWith("[t8 assistant thinking] "),
             "cap must keep the shape prefix: " ~ lines[0].text[0 .. 24]);
 
@@ -719,10 +716,10 @@ unittest {
     assert(capStore.got, "RiJob must be sent for a budgeted trace");
     assert(capStore.job.sessionId == sid, "sessionId mismatch: " ~ capStore.job.sessionId);
     assert(capStore.job.turnStart == 2 && capStore.job.turnEnd == 9,
-            "range must be min..max of INCLUDED lines, got %s-%s".format(
-                capStore.job.turnStart, capStore.job.turnEnd));
+            i"range must be min..max of INCLUDED lines, got $(capStore.job.turnStart)-$(
+                capStore.job.turnEnd)".text);
     auto textLines = capStore.job.traceText.split("\n");
-    assert(textLines.length == 9, "expected 1 marker + 8 lines, got %s".format(textLines.length));
+    assert(textLines.length == 9, i"expected 1 marker + 8 lines, got $(textLines.length)".text);
     assert(textLines[0] == "[1 older trace entries omitted for size]",
             "marker must carry the omitted count: " ~ textLines[0]);
     assert(textLines[1].startsWith("[t2 assistant thinking] "),
@@ -761,9 +758,8 @@ unittest {
     assert(capStore.got, "RiJob must be sent even for a hard-capped singleton");
     assert(capStore.job.turnStart == 3 && capStore.job.turnEnd == 3);
     size_t budget = (9000 - AnswerReserve) * ApproxTokenSize;
-    assert(capStore.job.traceText.length == budget,
-            "singleton must be hard-capped to the budget, got %s (budget %s)".format(
-                capStore.job.traceText.length, budget));
+    assert(capStore.job.traceText.length == budget, i"singleton must be hard-capped to the budget, got $(
+            capStore.job.traceText.length) (budget $(budget))".text);
     assert(capStore.job.traceText.startsWith("[t3 assistant thinking] "),
             "cap must keep the shape prefix");
 }
@@ -820,8 +816,8 @@ unittest {
     assert(capStore.got, "RiJob must be sent for the surviving entries");
     assert(capStore.job.sessionId == sid);
     assert(capStore.job.turnStart == 2 && capStore.job.turnEnd == 7,
-            "range must cover included lines only, got %s-%s".format(capStore.job.turnStart,
-                capStore.job.turnEnd));
+            i"range must cover included lines only, got $(capStore.job.turnStart)-$(
+                capStore.job.turnEnd)".text);
     // idup'd payload: the captured strings must not alias this test's locals
     // (onCheckpoint's stack strings are gone by the time the actor reads).
     assert(capStore.job.sessionId.cmp(sid) == 0);
@@ -958,9 +954,9 @@ unittest {
         // so no ack may arrive within the window.
         bool acked = false;
         sup.receiveTimeout(2.dur!"seconds", (string _) { acked = true; });
-        assert(!acked, "no RiJob was sent (ctx %s); a cap-ack implies one arrived".format(ctx));
-        assert(!capStore.got,
-                "ctx %s <= AnswerReserve must not send an RiJob (budget would wrap)".format(ctx));
+        assert(!acked, i"no RiJob was sent (ctx $(ctx)); a cap-ack implies one arrived".text);
+        assert(!capStore.got, i"ctx $(ctx) <= AnswerReserve must not send an RiJob (budget would wrap)"
+                .text);
     }
 }
 
@@ -981,7 +977,7 @@ unittest {
 
     auto result = ri.query(qEmb(), SessionId(sid), "REASONING_TOKEN", "");
     assert(result.hasHistory, "mixed DB must report reasoning history");
-    assert(result.matches.length == 1, "exactly one r_ match, got %s".format(result.matches.length));
+    assert(result.matches.length == 1, i"exactly one r_ match, got $(result.matches.length)".text);
     assert(result.matches[0].episode.kind == Kind.reasoning);
     assert(result.matches[0].episode.sessionId == sid);
     assert(result.matches[0].episode.turnStart == 5 && result.matches[0].episode.turnEnd == 5);
@@ -1026,15 +1022,14 @@ unittest {
             Kind.reasoning), "AGE_TOKEN new record");
 
     auto noWindow = ri.query(qEmb(), SessionId(sid), "AGE_TOKEN", "");
-    assert(noWindow.matches.length == 2,
-            "no window: both r_ records, got %s".format(noWindow.matches.length));
+    assert(noWindow.matches.length == 2, i"no window: both r_ records, got $(
+            noWindow.matches.length)".text);
 
     auto windowed = ri.query(qEmb(), SessionId(sid), "AGE_TOKEN", "", 10, 2);
-    assert(windowed.matches.length == 1,
-            "window must keep only the recent record, got %s".format(windowed.matches.length));
-    assert(windowed.matches[0].episode.turnEnd == 10,
-            "survivor must be the turnEnd-10 record, got %s".format(
-                windowed.matches[0].episode.turnEnd));
+    assert(windowed.matches.length == 1, i"window must keep only the recent record, got $(
+            windowed.matches.length)".text);
+    assert(windowed.matches[0].episode.turnEnd == 10, i"survivor must be the turnEnd-10 record, got $(
+            windowed.matches[0].episode.turnEnd)".text);
 }
 
 unittest {
@@ -1121,7 +1116,7 @@ unittest {
             chunkTexts ~= r.peek!string(0) ~ "\n";
         }
     }
-    assert(chunkCount == 1, "expected exactly 1 chunk for the record, got %s".format(chunkCount));
+    assert(chunkCount == 1, i"expected exactly 1 chunk for the record, got $(chunkCount)".text);
     assert(chunkTexts == "RI_FAKE_RECORD_T4\n",
             "ctor-supplied SummarizerFn must reach the worker; got: " ~ chunkTexts);
 
@@ -1133,8 +1128,8 @@ unittest {
     auto meta = metaOpt.match!((EpisodeMeta m) => m, (None _) => EpisodeMeta());
     assert(meta.kind == Kind.reasoning, "kind must be reasoning");
     assert(meta.sessionId == sid, "sessionId mismatch: " ~ meta.sessionId);
-    assert(meta.turnStart == 4 && meta.turnEnd == 8,
-            "turn range mismatch: %s-%s".format(meta.turnStart, meta.turnEnd));
+    assert(meta.turnStart == 4 && meta.turnEnd == 8, i"turn range mismatch: $(meta.turnStart)-$(
+            meta.turnEnd)".text);
 }
 
 // defaultReasoningPrompt sanity

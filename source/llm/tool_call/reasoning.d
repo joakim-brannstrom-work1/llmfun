@@ -94,8 +94,8 @@ struct QueryReasoningHistoryParams {
     }
 
     if (result.matches.length == 0)
-        return ExecuteFuncResult(format(
-                "No matches found in the indexed reasoning history of session '%s'.", sid), true);
+        return ExecuteFuncResult(i"No matches found in the indexed reasoning history of session '$(
+                sid)'.".text, true);
 
     // Render each match: session id, turn range, timestamp, rank, record
     // text, then the static annotation with the match's turn range.
@@ -322,12 +322,11 @@ unittest {
 
     Case[] cases = [
         Case(QueryReasoningHistoryParams(), "error: provide textQuery, vectorQuery or both"),
-        Case(QueryReasoningHistoryParams(textQuery: "x", topK: 0), format("topK must be in [1, %s]",
-                maxK)),
-        Case(QueryReasoningHistoryParams(textQuery: "x", topK: -1), format("topK must be in [1, %s]",
-                maxK)),
+        Case(QueryReasoningHistoryParams(textQuery: "x", topK: 0), i"topK must be in [1, $(maxK)]".text),
+        Case(QueryReasoningHistoryParams(textQuery: "x", topK: -1),
+                i"topK must be in [1, $(maxK)]".text),
         Case(QueryReasoningHistoryParams(textQuery: "x", topK: maxK + 1),
-                format("topK must be in [1, %s]", maxK)),
+                i"topK must be in [1, $(maxK)]".text),
         Case(QueryReasoningHistoryParams(textQuery: "x", sessionId: "../../etc/passwd"), "error: invalid sessionId"),
         Case(QueryReasoningHistoryParams(textQuery: "x", sessionId: "not-an-id"),
                 "error: invalid sessionId")

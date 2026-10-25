@@ -3,7 +3,6 @@ import std.range;
 import std.algorithm;
 import std.array : array, empty;
 import std.conv : to;
-import std.format : format;
 import std.json : JSONValue, JSONOptions, parseJSON;
 import std.logger;
 import std.stdio : writeln, writefln, write;
@@ -79,7 +78,7 @@ struct UserConfig {
     SubCommand!(Default!PrintOk, ChatTestConfig, SummaryTestConfig, FuncCallPrint,
             TestSlotApiConfig, PrintToolMetricsConfig, TestPipelineConfig, TestRagSqliteConfig) cmd;
 
-    @(NamedArgument("v", "verbose").Description(format!"Log verbosity level"))
+    @(NamedArgument("v", "verbose").Description("Log verbosity level"))
     VerboseMode verbosity;
 
     @(Command("print_ok"))

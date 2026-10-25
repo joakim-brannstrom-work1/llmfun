@@ -584,7 +584,6 @@ unittest {
     import std.algorithm : filter, startsWith;
     import std.array : array;
     import std.conv : text;
-    import std.format : format;
 
     import core.atomic : atomicFetchAdd;
     import core.thread : Thread;
@@ -602,8 +601,8 @@ unittest {
             // comes from an atomic counter instead.
             auto idx = atomicFetchAdd(stressNextIdx, 1);
             foreach (j; 0 .. 50)
-                registerMcpTool(format("mcp_stress_t12_%d_%d", idx, j),
-                    "stress tool", [], &mcpRegFixtureCallback, ["stress_t12"]);
+                registerMcpTool(i"mcp_stress_t12_$(idx)_$(j)".text, "stress tool", [
+            ], &mcpRegFixtureCallback, ["stress_t12"]);
         });
         threads[k].start();
     }
