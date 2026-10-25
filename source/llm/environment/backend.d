@@ -347,10 +347,7 @@ ExecutionResult runContainerCommand(string runtimeCli, string[] args,
     return ExecutionResult(output.stdout, output.stderr, exitCode);
 }
 
-// Unit tests for collectOutputLimited()
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Test: collectOutputLimited collects all output when within limit.
+@("collectOutputLimited: output within the limit is collected in full into stdout")
 unittest {
     DrainElement[] elems = [
         DrainElement(DrainElement.Type.stdout, cast(const(ubyte)[]) "hello ".dup),
@@ -363,7 +360,7 @@ unittest {
     assert(result.stderr == "");
 }
 
-/// Test: collectOutputLimited handles empty input.
+@("collectOutputLimited: empty input returns empty stdout and stderr")
 unittest {
     DrainElement[] elems; // empty array
     auto result = collectOutputLimited(elems, 1024);
@@ -371,7 +368,8 @@ unittest {
     assert(result.stderr == "");
 }
 
-/// Test: collectOutputLimited truncates output and adds warning when over limit.
+@(
+        "collectOutputLimited: output over the limit is truncated with a stderr warning of the collected bytes")
 unittest {
     import std.algorithm : canFind;
 
@@ -394,7 +392,7 @@ unittest {
     assert(result.stderr.canFind("limit:"));
 }
 
-/// Test: collectOutputLimited separates stdout and stderr correctly.
+@("collectOutputLimited: alternating stdout and stderr elements route to their respective streams")
 unittest {
     DrainElement[] elems = [
         DrainElement(DrainElement.Type.stdout, cast(const(ubyte)[]) "stdout-line1\n".dup),
@@ -409,7 +407,8 @@ unittest {
     assert(result.stderr == "stderr-line1\nstderr-line2\n");
 }
 
-/// Test: collectOutputLimited reports correct stderr length when both truncated.
+@(
+        "collectOutputLimited: with both streams truncated each warning reports its own original byte count")
 unittest {
     import std.algorithm : canFind;
 
@@ -432,10 +431,7 @@ unittest {
     assert(result.stderr.canFind("50 bytes collected"));
 }
 
-// Unit tests for ContainerRunner command building
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Test: buildCommand with whitespace join mode produces correct structure.
+@("buildCommand whitespace mode: sorted options, then image, then shell, then the joined command")
 unittest {
     string[][string] options;
     options["00_subcommand"] = ["run"];
@@ -456,7 +452,7 @@ unittest {
     assert(args[6] == "echo hello");
 }
 
-/// Test: buildCommand with append join mode produces separate args.
+@("buildCommand append mode: sorted options, then image, then separate command args")
 unittest {
     string[][string] options;
     options["00_subcommand"] = ["run"];
@@ -474,7 +470,8 @@ unittest {
     assert(args[5] == "world");
 }
 
-/// Test: buildCommand with shell + append mode produces correct structure.
+@(
+        "buildCommand with shell and append: the shell comes after the image and each command arg stays separate")
 unittest {
     string[][string] options;
     options["00_subcommand"] = ["run"];
@@ -492,7 +489,7 @@ unittest {
     assert(args[5] == "hello");
 }
 
-/// Test: buildCommand skips keys without numeric prefix.
+@("buildCommand skips option keys without a numeric prefix")
 unittest {
     import std.algorithm : canFind;
 
@@ -512,7 +509,7 @@ unittest {
     assert(!args.canFind("--should-be-skipped"));
 }
 
-/// Test: buildCommand with empty options produces minimal command.
+@("buildCommand with empty options yields only the image and the command")
 unittest {
     string[][string] options;
 
@@ -524,7 +521,7 @@ unittest {
     assert(args[1] == "echo hello");
 }
 
-/// Test: ContainerRunner magic word substitution in options.
+@("ContainerRunner constructs with options containing a @{llmfun_workarea} magic-word mount")
 unittest {
     import std.algorithm : canFind;
 
@@ -539,7 +536,7 @@ unittest {
     assert(runner !is null);
 }
 
-/// Test: ContainerRunner dispose is a no-op.
+@("ContainerRunner dispose is a no-op safe to call repeatedly")
 unittest {
     string[][string] options;
     auto runner = new ContainerRunner("docker", "alpine:latest", options,
@@ -549,7 +546,7 @@ unittest {
     runner.dispose(); // Should be safe to call multiple times
 }
 
-/// Test: ExecutionResult toString.
+@("ExecutionResult toString contains the exit code, the stdout, and the stderr")
 unittest {
     import std.algorithm : canFind;
 
@@ -560,10 +557,7 @@ unittest {
     assert(str.canFind("error"));
 }
 
-// Unit tests for HostRunner
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Test: buildCommand with whitespace join mode.
+@("HostRunner buildCommand whitespace mode: sorted options followed by the joined command")
 unittest {
     string[][string] options;
     options["00_shell"] = ["sh", "-c"];
@@ -577,7 +571,7 @@ unittest {
     assert(args[3] == "echo hello");
 }
 
-/// Test: buildCommand with append join mode.
+@("HostRunner buildCommand append mode: the command args stay separate")
 unittest {
     string[][string] options;
     options["00_cmd"] = ["echo"];
@@ -589,7 +583,7 @@ unittest {
     assert(args[2] == "world");
 }
 
-/// Test: buildCommand with empty options.
+@("HostRunner buildCommand with empty options yields only the command")
 unittest {
     string[][string] options;
 
@@ -599,7 +593,7 @@ unittest {
     assert(args[0] == "echo hello");
 }
 
-/// Test: buildCommand skips invalid keys.
+@("HostRunner buildCommand skips option keys without a numeric prefix")
 unittest {
     string[][string] options;
     options["00_valid"] = ["--valid"];
@@ -613,7 +607,7 @@ unittest {
     assert(args[2] == "echo");
 }
 
-/// Test: HostRunner construction and dispose.
+@("HostRunner construction succeeds and dispose is safe to call repeatedly")
 unittest {
     string[][string] options;
     string[string] envVars;
@@ -626,7 +620,7 @@ unittest {
     runner.dispose(); // Should be safe to call multiple times
 }
 
-/// Test: buildCommand produces correct command.
+@("buildCommand with empty options and append mode yields the separate command args")
 unittest {
     string[][string] options;
 

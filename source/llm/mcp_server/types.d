@@ -145,6 +145,7 @@ struct ToolResult {
     }
 }
 
+@("fromJson parses requests with integer, string, and explicit null ids plus notifications, and the response, error, tool result, and tool definition types serialize correctly")
 unittest {
     import std.json : parseJSON;
 

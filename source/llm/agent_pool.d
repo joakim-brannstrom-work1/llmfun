@@ -300,7 +300,7 @@ version (unittest) {
     }
 }
 
-/// Test: basic submit-execute-callback flow (happy path)
+@("basic submit-execute-callback flow delivers the agent and its ok status; the pool stops cleanly")
 unittest {
     auto pool = new AgentExecutionPool();
     scope (exit)
@@ -329,7 +329,7 @@ unittest {
     assert(!pool.isRunning(), "Pool should not be running after stop");
 }
 
-/// Test: submit with non-ok status is passed through correctly
+@("submit with a non-ok status passes that status through to the callback")
 unittest {
     auto pool = new AgentExecutionPool();
     scope (exit)
@@ -352,7 +352,7 @@ unittest {
             "Expected status unknownFailure, got " ~ capturedResult.status.to!string);
 }
 
-/// Test: concurrent submissions from multiple threads
+@("concurrent submissions from 10 threads each execute their agent exactly once")
 unittest {
     auto pool = new AgentExecutionPool();
     scope (exit)
@@ -410,7 +410,7 @@ unittest {
     }
 }
 
-/// Test: stop/drain behavior
+@("stop drains the submitted agents, submit after stop throws, and a second stop is safe")
 unittest {
     auto pool = new AgentExecutionPool();
     scope (exit)
@@ -460,7 +460,7 @@ unittest {
     assert(!pool.isRunning(), "Pool should not be running after stop");
 }
 
-/// Test: exception resilience - pool survives agent and callback exceptions
+@("the pool survives agent and callback exceptions and still processes later submissions")
 unittest {
     auto pool = new AgentExecutionPool();
     scope (exit)
@@ -533,11 +533,7 @@ unittest {
     assert(agentFound(agentE, successfulAgents), "Agent E should have completed");
 }
 
-/// Test: two pooled agents' chats each run an independent, monotonic TurnID
-/// sequence. The chats are separate, so overlap across chats is allowed and
-/// asserted harmless - cross-session identity is (session_id, turn_id), and
-/// only per-chat monotonicity is a guarantee. Deterministic on purpose: no
-/// cross-chat disjointness or wall-clock ordering is asserted.
+@("two pooled agents' chats each run an independent, monotonic TurnID sequence")
 unittest {
     auto pool = new AgentExecutionPool(2);
     scope (exit)
@@ -595,7 +591,7 @@ unittest {
     }
 }
 
-/// Test: start() is idempotent
+@("a freshly constructed pool reports running (start is idempotent)")
 unittest {
     auto pool = new AgentExecutionPool();
     scope (exit)

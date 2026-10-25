@@ -14,6 +14,7 @@ version (unittest) {
     import llm.test_util : testArea;
 }
 
+@("user queries open new turns while continue, keep-reasoning and retry nudges stay in the current turn and out of the dialogue/trace projections")
 unittest {
     import std.file : write;
     import llm.test_util : testArea;
@@ -55,6 +56,7 @@ unittest {
 // CONSTRUCTION with the same "Prompt file not found" error a missing AGENT.md
 // produces - before any request is wasted. The override names a file that
 // exists nowhere in the fixture prompt dir.
+@("Agent construction fails with a prompt-file error when a configured nudge file is missing")
 unittest {
     import std.file : write;
     import llm.test_util : testArea;
@@ -84,6 +86,7 @@ unittest {
 // ENTIRE policy - fields the model block does not restate fall back to struct
 // defaults, NOT to the global customization - and the model's own templates are
 // eagerly loaded from the construction prompt dir.
+@("resetModel swaps the whole nudge policy (fields not restated fall back to defaults) and eagerly loads the model templates")
 unittest {
     import std.file : write;
     import llm.test_util : testArea;
@@ -133,6 +136,8 @@ unittest {
 // getPrompt/getBasePrompt path (FlatVfs) and asserts the section heading and
 // the exact tool name are present. A missing file makes getBasePrompt throw,
 // which fails the test.
+@(
+        "the composed AGENT.md prompt keeps the Dialogue History Retrieval section naming query_dialogue_history")
 unittest {
     const agentPromptFile = "llmfun/config/prompt/AGENT.md";
     assert(agentPromptFile.exists, "in-tree AGENT.md missing; getBasePrompt would throw at startup");
@@ -150,6 +155,7 @@ unittest {
 // llmfun/config/prompt/AGENT.md through the production getPrompt path and
 // assert the section heading, the exact tool name, and the anti-anchoring
 // warning are present.
+@("the composed AGENT.md prompt keeps the Reasoning History Retrieval section naming query_reasoning_history with the past-thoughts warning")
 unittest {
     const agentPromptFile = "llmfun/config/prompt/AGENT.md";
     assert(agentPromptFile.exists, "in-tree AGENT.md missing; getBasePrompt would throw at startup");
@@ -170,6 +176,7 @@ unittest {
 // llmfun/config/prompt/NUDGE_*.md through the production readPromptFile path
 // (FlatVfs) and assert exactly what the nudge files require. A missing file makes
 // readPromptFile throw, which fails the test.
+@("the five shipped nudge templates exist and carry the required tool names and harness markers")
 unittest {
     foreach (name; [
         "NUDGE_KEEP_REASONING_SOFT.md", "NUDGE_KEEP_REASONING_HARD.md",
@@ -243,6 +250,7 @@ version (unittest) {
 // any HTTP endpoint. Also carries the harness-traffic acceptance: the nudges
 // are userQuery:false - invisible in the dialogue/trace projections, and they
 // never open or fragment a turn.
+@("the default keep-reasoning ladder emits soft then hard nudges and exhausts into agentStuckInLoop without fragmenting the turn")
 unittest {
     import std.file : write;
     import llm.test_util : testArea;
@@ -290,6 +298,7 @@ unittest {
 // Wholesale per-model override: the model block restates only softStrikes:1
 // - everything else (hardStrikes, file lists) falls back to struct defaults, so
 // strike 1 uses the shipped soft nudge and strike 2 the shipped hard one.
+@("a per-model ladder with softStrikes:1 exhausts after one soft and one hard nudge")
 unittest {
     import std.file : write;
     import llm.test_util : testArea;
@@ -338,6 +347,7 @@ unittest {
 // backstop (4 identical needMoreThinking results), not via ladder exhaustion.
 // The fixture omits the keep-reasoning files entirely: if the disabled kind's
 // ladder were touched, the missing-key AA access would throw.
+@("a disabled keep-reasoning kind injects no nudge and touches no counters; the turn ends via the loop-safety backstop")
 unittest {
     import std.file : write;
     import llm.test_util : testArea;
@@ -373,6 +383,7 @@ unittest {
 // Pin: a pipeline-retry message added via addContinueMessage consumes no
 // strikes and never routes through the ladder - the retry path bypasses the
 // escalation mechanism entirely (caller-supplied text).
+@("a pipeline retry via addContinueMessage bypasses the ladder: no strikes consumed, caller text verbatim, out of the projections")
 unittest {
     import std.file : write;
     import llm.test_util : testArea;
@@ -404,6 +415,8 @@ unittest {
 // multi-round turn never drifts toward ladder exhaustion. The soft marker on
 // the second keep-reasoning nudge proves the reset: without it, strike 2 would
 // emit the hard template.
+@(
+        "an ok round with tool calls resets the strike counters, so the next keep-reasoning nudge is soft again")
 unittest {
     import std.file : write;
     import llm.test_util : testArea;
@@ -440,6 +453,7 @@ unittest {
 // The ok-without-tool-call path drives the recovery ladder through the real
 // loop: the nudge is injected, the counter advances, and the
 // projections stay nudge-free.
+@("an ok round without tool calls drives the recovery ladder: the soft recovery nudge is injected and the counter advances")
 unittest {
     import std.file : write;
     import llm.test_util : testArea;
@@ -480,6 +494,7 @@ unittest {
 // {{context_percent}} substituted (rendered %.1f, e.g. "83.0%"), and the
 // one-shot compressNudgeSent keeps later rounds in the same compress cycle
 // silent.
+@("the compression nudge fires only at/above the configured threshold, renders context_percent, and stays one-shot per compress cycle")
 unittest {
     import std.array : replicate;
     import std.file : write;
@@ -529,6 +544,7 @@ unittest {
 // model's own threshold governs. At the same 83% usage a model with 0.9 stays
 // silent where the global default 0.8 fires, and a model with 0.6 fires
 // earlier than the global default would.
+@("the per-model compression threshold governs: 0.9 stays silent at 83%, 0.6 fires earlier, and the exact boundary is strict >")
 unittest {
     import std.array : replicate;
     import std.file : write;
@@ -606,6 +622,7 @@ unittest {
 // guard returns before the threshold check, and loadNudgeTexts loads no
 // template for the disabled kind (nudgeTexts_.compression stays empty - even a
 // guard bug could not substitute anything).
+@("a disabled compression kind is silent at any usage and loads no template at all")
 unittest {
     import std.array : replicate;
     import std.file : write;
@@ -634,6 +651,7 @@ unittest {
 // two gates. The first-warning sentinel (toolCallWarnCounter == -1) fires
 // regardless of minToolCalls once the interval has passed - the sentinel
 // start is SysTime.init.
+@("feedback warning gating: the sentinel fires first, then the intervalSecs and minToolCalls gates (strict >) apply, and disabled is fully silent")
 unittest {
     import std.datetime : SysTime;
     import std.file : write;
@@ -1698,6 +1716,7 @@ unittest {
 // handleToolCalls. Injected Durations keep the asserts deterministic; the
 // wall-clock path is covered E2E. The default parameter leaves direct
 // two-arg call sites unstamped (NoProcessingTime).
+@("an injected Duration is stamped once at construction on the assistant and tool messages; the default parameter leaves messages unstamped")
 unittest {
     import std.datetime : dur;
     import std.file : write;
@@ -1776,6 +1795,8 @@ version (unittest) {
     }
 }
 
+@(
+        "each ToolResponse carries its own measured per-call tool-execution time, non-zero with the sleep fixture")
 unittest {
     import std.datetime : Duration;
     import std.file : write;

@@ -152,10 +152,9 @@ version (unittest) {
     }
 }
 
+@(
+        "toolSearch name match (case-insensitive), tools-array cards, sticky activation, rebuild hook fires")
 unittest {
-    // Match by name (case-insensitive); cards in the standard tools-array
-    // shape; every match activated (sticky) through activateTool; the
-    // rebuildTools hook fires so the owning Agent rebuilds the tools array.
     auto ctx = searchContext();
     ctx.pool = [
         searchTool("wf_read", "Reads a workarea file", ["workarea"]),
@@ -188,9 +187,8 @@ unittest {
     assert(rebuilds == 2); // the hook still fires (a harmless no-op rebuild)
 }
 
+@("toolSearch matches description and tag substrings (case-insensitive)")
 unittest {
-    // Match by description and by tag (both case-insensitive); the tag match
-    // is a SUBSTRING per tag (tags feed the search: tag = coarse search).
     auto ctx = searchContext();
     ctx.pool = [
         searchTool("alpha", "compiles the report", ["build"]),
@@ -210,9 +208,8 @@ unittest {
     assert(!byTag.msg.canFind("gamma"));
 }
 
+@("zero matches return instructive empty text naming the listToolTags recovery, no state change")
 unittest {
-    // Zero matches ⇒ instructive empty text naming the recovery path;
-    // no state change: nothing activated, no rebuild.
     auto ctx = searchContext();
     ctx.pool = [searchTool("alpha", "unrelated", ["misc"])];
     ctx.brokerEnabled = true;
@@ -228,11 +225,8 @@ unittest {
     assert(rebuilds == 0);
 }
 
+@("kill switch: broker-disabled search is inert with an instructive error, empty query is rejected")
 unittest {
-    // Kill switch: with the broker disabled every tool is
-    // alwaysOn — search is inert, instructive error, no state change.
-    // An empty query would match everything (it is a substring of it all)
-    // and is refused instructively, also with no state change.
     auto ctx = searchContext();
     ctx.pool = [searchTool("alpha", "unrelated", ["misc"])];
     ctx.brokerEnabled = false;
@@ -249,9 +243,8 @@ unittest {
     assert(ctx.broker.activated.empty);
 }
 
+@("metrics: one tool_search JSONL event per search with hit and miss counts")
 unittest {
-    // Metrics: one tool_search event per search — hit (matched > 0)
-    // and miss both land in the JSONL sink with kind+ts+agent.
     import std.datetime : Clock;
     import std.file : mkdirRecurse, rmdirRecurse, readText;
     import std.json : parseJSON;
@@ -294,11 +287,8 @@ unittest {
     assert(miss["activated"].integer == 0);
 }
 
+@("guard: listToolTags and toolSearch keep non-empty descriptions")
 unittest {
-    // Guard: the discovery meta-tools (listToolTags + toolSearch)
-    // must stay described - the description is what the registry lists, and
-    // their untagged/alwaysOn status is what keeps them permanently visible
-    // (the startup-warning side lives in validateToolBrokerConfig).
     import std.traits : getUDAs;
 
     import llm.tool_call.discovery : listToolTags;
@@ -309,9 +299,8 @@ unittest {
     assert(searchUda.desc.length > 0);
 }
 
+@("registration: toolSearch is present in the global function registry")
 unittest {
-    // Registration (mixin RegisterLlmFunctions!() after the imports): the
-    // search tool is in the global registry.
     import llm.tool_call : getFunctions;
 
     assert(getFunctions().canFind!(f => f.name == "toolSearch"));

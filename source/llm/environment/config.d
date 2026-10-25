@@ -415,10 +415,7 @@ EnvironmentBackend[] loadExecutionBackends(Path filePath,
     return result;
 }
 
-// Unit tests for loadExecutionBackends()
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Test: valid YAML with container and host environments parses correctly.
+@("valid YAML with container and host environments parses with all fields and default values")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -509,7 +506,7 @@ environments:
     assert(result[2].config.match!((ContainerConfig c) => true, (HostConfig h) => false));
 }
 
-/// Test: missing file returns null with notConfigured state.
+@("a missing config file returns null with the notConfigured state")
 unittest {
     ExecutionConfigState state;
     string defaultTag;
@@ -519,7 +516,7 @@ unittest {
     assert(defaultTag is null);
 }
 
-/// Test: defaultEnvironment referencing an unknown tag is dropped with a warning.
+@("a defaultEnvironment referencing an unknown tag is dropped with a warning")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -550,7 +547,7 @@ environments:
     assert(defaultTag is null);
 }
 
-/// Test: duplicate tags warn and skip, keeping first occurrence.
+@("duplicate environment tags warn and skip, keeping the first occurrence")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -583,7 +580,7 @@ unittest {
     assert(result[0].tag == "sandbox");
 }
 
-/// Test: invalid YAML returns null with loadFailed state.
+@("a YAML parse error returns null with the loadFailed state")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -607,7 +604,7 @@ unittest {
     assert(state == ExecutionConfigState.loadFailed);
 }
 
-/// Test: envVars in list format ["KEY=VALUE"] normalizes to map.
+@("envVars in KEY=VALUE list form normalize to a map")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -637,7 +634,7 @@ unittest {
             (HostConfig h) => h.envVars["FOO"] == "bar" && h.envVars["BAZ"] == "qux"));
 }
 
-/// Test: envVars in map format {"KEY": "VALUE"} parses correctly.
+@("envVars in map form parse into the host config")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -669,7 +666,7 @@ unittest {
             (HostConfig h) => h.envVars["KEY1"] == "val1" && h.envVars["KEY2"] == "val2"));
 }
 
-/// Test: empty environments array returns null (load failed).
+@("an empty environments array returns null with the loadFailed state")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -692,7 +689,7 @@ environments: []
     assert(state == ExecutionConfigState.loadFailed);
 }
 
-/// Test: missing "environments" field returns null.
+@("a config without an environments field returns null with the loadFailed state")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -715,7 +712,7 @@ items: []
     assert(state == ExecutionConfigState.loadFailed);
 }
 
-/// Test: container detection by runtimeCli field (no type field).
+@("a container environment is detected by the runtimeCli field")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -748,7 +745,7 @@ unittest {
             (HostConfig h) => false));
 }
 
-/// Test: default environment tag is returned via output parameter.
+@("the default environment tag is returned via the output parameter")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -779,7 +776,7 @@ environments:
     assert(defaultTag == "mydefault");
 }
 
-/// Test: option key validation — invalid keys are removed.
+@("option keys without a numeric prefix are removed at load")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -814,7 +811,7 @@ unittest {
             && ("00_valid" in c.options) && ("01_also_valid" in c.options), (HostConfig h) => false));
 }
 
-/// Test: envVars with empty value ("KEY=") is accepted.
+@("an envVar with an empty value (KEY=) is accepted")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -844,7 +841,7 @@ unittest {
             (HostConfig h) => h.envVars["FOO"] == "" && h.envVars["BAR"] == "baz"));
 }
 
-/// Test: envVars with empty key ("=value") is rejected.
+@("an envVar with an empty key (=value) is rejected while valid entries are kept")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -875,7 +872,7 @@ unittest {
             (HostConfig h) => !("" in h.envVars) && h.envVars["GOOD"] == "ok"));
 }
 
-/// Test: defaultOptions are merged with container options, environment options override defaults.
+@("defaultOptions merge with container options and the environment overrides the defaults")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -924,7 +921,7 @@ unittest {
         }, (HostConfig h) => false));
 }
 
-/// Test: defaultOptions with null produces no merge (environment options only).
+@("null defaultOptions produce no merge, only the environment options")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -962,7 +959,7 @@ unittest {
         }, (HostConfig h) => false));
 }
 
-/// Test: environment options override defaults.
+@("host environment options override the default options")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -1006,8 +1003,7 @@ unittest {
         }));
 }
 
-/// Test: a wrong-typed 'version' (YAML decimal `1.0`) degrades to the
-/// unknown-version warning instead of throwing and failing the whole load.
+@("a wrong-typed version (YAML decimal) degrades to a warning instead of failing the load")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.path : buildPath;
@@ -1037,9 +1033,8 @@ environments:
     assert(result[0].tag == "sandbox");
 }
 
-/// Test: the shipped config/execution_environments.yaml loads all six
-/// environments; container environments keep the workarea mount and network
-/// isolation, and the native environment keeps its magic-word workingDir.
+@(
+        "the shipped execution environments file loads all six environments with mounts and overrides intact")
 unittest {
     import std.sumtype : match;
 

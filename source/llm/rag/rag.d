@@ -948,9 +948,7 @@ version (unittest) {
     }
 }
 
-// randomizeRanks is deterministic per query and seed-sensitive.
-// Same query -> same shuffle (the agent contract); different query ->
-// different seed, so the orderings differ.
+@("randomizeRanks is deterministic per query (same query shuffles the same way) and seed-sensitive (different queries differ)")
 unittest {
     import std.conv : to;
 
@@ -977,8 +975,8 @@ unittest {
     assert(differs, "different queries should shuffle differently (1/120 collision)");
 }
 
-// randomizeRanks is a permutation (rank multiset preserved) and the
-// query seed changes the shuffle.
+@(
+        "randomizeRanks preserves the rank multiset as a permutation and different queries change the shuffle")
 unittest {
     import std.conv : to;
     import std.algorithm : sort, canFind;
@@ -1013,7 +1011,8 @@ unittest {
             "different queries should shuffle differently, distinct firsts: " ~ distinct.to!string);
 }
 
-// addToDatabase indexes a scratch DB; overlap honored; re-add no-op
+@(
+        "addToDatabase indexes a scratch DB honoring the overlap setting, and re-adding the same document is a no-op")
 unittest {
     import std.conv : to;
     import llm.rag.database : openDatabase, Search;
@@ -1075,6 +1074,7 @@ unittest {
 // no-op; and a salt-less add keeps today's bare-content identity (a third
 // source here). Mirrors production: the worker's salt is the episode's topic
 // name, which is also the document origin.
+@("the same content under two different topic salts indexes as two sources, a same-salt re-add is a no-op, and a salt-less add keeps bare-content identity")
 unittest {
     import std.conv : to;
     import llm.rag.database : openDatabase;
@@ -1131,6 +1131,8 @@ unittest {
 // maintained by the indexing path, so the test rebuilds it explicitly,
 // mirroring the production caller contract (tool_call/rag.d, app_rag.d).
 // The purge itself is verified at the TextChunkTbl row level.
+@(
+        "re-adding a changed source purges its stale chunks and the new chunks are text-searchable after the FTS rebuild")
 unittest {
     import llm.rag.database : openDatabase;
     import my.optional;
@@ -1184,8 +1186,7 @@ unittest {
     assert(fresh != null && fresh.length > 0, "new chunks must be queryable");
 }
 
-// add(rag, ...) and addToDatabase(rag.db, rag.embedder, ...)
-// produce identical database contents
+@("add(rag, ...) and addToDatabase(rag.db, rag.embedder, ...) produce identical database contents")
 unittest {
     import std.conv : to;
     import llm.rag.database : openDatabase, Search;
@@ -1254,13 +1255,8 @@ unittest {
     }
 }
 
-// Token path, 10% overlap — uniform token-based steps.
-// 100 one-letter words (200 graphemes); 1 token/word; the 3-token topic
-// prefix is reserved out of the 50-token budget → nBatch 47, advance 42.
-// The stored text is the full window; the step advances to the pin, so the
-// next window starts 4 words back (the overlap). Expected windows (1-based
-// word idx): [1..47], [44..90], [87..100] → offsets (0,94), (86,180),
-// (172,200); embedded tokens 50+50+17 (window + 3 prefix tokens).
+@(
+        "token-path 10% overlap chunks with uniform token-based steps and the expected offsets and embedded token counts")
 unittest {
     import std.conv : to;
     import llm.rag.database : openDatabase, Search;
@@ -1309,11 +1305,7 @@ unittest {
     db.destroy;
 }
 
-// Token path at 0% overlap — contiguous, non-overlapping.
-// advance == nBatch (47 after the 3-token prefix reservation) so the pin
-// never fires and the whole-window step yields contiguous,
-// non-overlapping chunks: [1..47], [48..94], [95..100] → offsets (0,94),
-// (94,188), (188,200); embedded tokens 50+50+9 (window + 3 prefix).
+@("token-path 0% overlap yields contiguous non-overlapping chunks with the expected offsets")
 unittest {
     import std.conv : to;
     import llm.rag.database : openDatabase, Search;
@@ -1355,8 +1347,7 @@ unittest {
     db.destroy;
 }
 
-// Token path dedup — re-adding the unchanged document is a
-// no-op (hasSource short-circuit; same behavior as runOnText).
+@("re-adding the unchanged document on the token path is a no-op via the hasSource short-circuit")
 unittest {
     import llm.rag.database : openDatabase;
     import my.optional;

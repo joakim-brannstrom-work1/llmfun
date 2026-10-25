@@ -13,8 +13,9 @@ struct TestCmdParams {
     @ParamOptional string cwd;
 }
 
+@(
+        "double-encoded array: a string holding JSON array integers yields a fix hint naming the parameter")
 unittest {
-    // Double-encoded array: a string containing JSON array integers must produce a hint that names the fix instead of a bare type-mismatch error.
     auto json = parseJSON(`{"command": "[1, 2]"}`);
     auto params = initParams!TestCmdParams(json, toParams!TestCmdParams);
     assert(params.errorMsg.length > 0);
@@ -22,8 +23,8 @@ unittest {
     assert(params.errorMsg.canFind("command"), params.errorMsg);
 }
 
+@("double-encoded array: a string holding JSON array text decodes to a D string array")
 unittest {
-    // Double-encoded array: a string containing JSON array text should decode the json array to a D string array
     auto json = parseJSON(`{"command": "[\"cd\", \"llmfun\"]"}`);
     auto params = initParams!TestCmdParams(json, toParams!TestCmdParams);
     assert(params.errorMsg.empty);
@@ -31,29 +32,25 @@ unittest {
     assert(params.value.command[1] == "llmfun");
 }
 
+@("a real JSON array converts without error")
 unittest {
-    // A real array converts without error.
     auto okJson = parseJSON(`{"command": ["cd", "llmfun"]}`);
     auto okParams = initParams!TestCmdParams(okJson, toParams!TestCmdParams);
     assert(okParams.errorMsg.length == 0, okParams.errorMsg);
     assert(okParams.value.command == ["cd", "llmfun"]);
 }
 
+@("a plain string for an array parameter gets the generic received/expected message")
 unittest {
-    // A plain string (not JSON) for an array parameter gets the generic received/expected message.
     auto strJson = parseJSON(`{"command": "cd llmfun"}`);
     auto strParams = initParams!TestCmdParams(strJson, toParams!TestCmdParams);
     assert(strParams.errorMsg.canFind("received string"), strParams.errorMsg);
     assert(strParams.errorMsg.canFind("string[]"), strParams.errorMsg);
 }
 
-/// Empty params struct for the tags fixtures (nothing to decode).
 struct TagsFixtureParams {
 }
 
-/// Fixture with a bare @Function UDA (the UDA has no tags channel); registered
-/// by the unittests below via addFunction.
-/// The resulting module-global registry entry is a deliberate, benign test leak (addFunction dedupes by name).
 @Function("tags fixture tool") private void tagsUdaFixture(Context ctx, TagsFixtureParams params) {
 }
 
@@ -62,10 +59,8 @@ private ExecuteFuncResult tagsFixtureRawCallback(Context ctx, JSONValue args) {
     return ExecuteFuncResult("ok", true);
 }
 
+@("registration with a bare Function UDA leaves runtime tags empty")
 unittest {
-    // Registration leaves runtime tags empty: the UDA carries no tags, so a
-    // registered RegFunction defaults to the empty tags array (only MCP
-    // registration fills it).
     import std.algorithm : filter;
     import std.array : array;
     import std.conv : text;
@@ -82,8 +77,8 @@ unittest {
     assert(hits[0].tags.empty, text(hits[0].tags));
 }
 
+@("duplicate-name registration warns and is ignored: the first registration wins")
 unittest {
-    // Duplicate-name registration warns and ignores: first registration wins (order-proof).
     import std.algorithm : filter;
     import std.array : array;
     import std.conv : text;
@@ -104,12 +99,9 @@ unittest {
     assert(hits[0].tags == ["first"], text(hits[0].tags));
 }
 
+@(
+        "snake-collision registration warns and is ignored: same snake name, different D names, first wins")
 unittest {
-    // Snake-collision registration warns and ignores: the D names differ but
-    // the snake (model-facing, dispatch) names collide - first registration
-    // wins. Unique task2_ prefix: the global registry is shared module state
-    // across the test binary (same deliberate-leak convention as the tags
-    // fixtures above).
     import std.algorithm : filter;
     import std.array : array;
 

@@ -241,6 +241,8 @@ version (unittest) {
 
 }
 
+@(
+        "list mode renders visible pool groups with config descriptions, undescribed bare, and omits zero-visible groups")
 unittest {
     // List mode: groups of the visible pool with config descriptions; an
     // undescribed group renders as a bare name.
@@ -266,6 +268,8 @@ unittest {
     assert(!rval.msg.canFind("ghost"), "zero-visible member groups are omitted");
 }
 
+@(
+        "list mode orders groups by activation frequency then name, caps at MaxTagsInDiscoveryDesc with an overflow line")
 unittest {
     // Ordering: activation frequency desc then name asc; cap at
     // MaxTagsInDiscoveryDesc with an overflow line pointing at toolSearch.
@@ -289,6 +293,8 @@ unittest {
     assert(rval.msg.countUntil("tag00") < rval.msg.countUntil("tag01"));
 }
 
+@(
+        "activating a known group enables its visible tools stickily and names them without re-sending schema JSON")
 unittest {
     // Activation: a known group activates its visible tools (sticky) and
     // names them in the reply (no card JSON: the schemas are already in the
@@ -316,6 +322,7 @@ unittest {
     assert(again.msg.countUntil("workarea") < again.msg.countUntil("unrelated"));
 }
 
+@("Loaded tools names activated tools on the model-facing snake-case axis")
 unittest {
     // "Loaded tools" names the activated tools on the MODEL-FACING (snake)
     // axis: a mixed fixture (one D name already snake, one camelCase) asserts
@@ -339,6 +346,8 @@ unittest {
     assert(rval.msg.canFind("mixed_case"));
 }
 
+@(
+        "a described group whose tools are all toolFilter-excluded returns an instructive error with no state change")
 unittest {
     // A described group whose every visible tool is excluded by the agent
     // toolFilter ⇒ instructive text, not a bare empty success; no state
@@ -356,6 +365,7 @@ unittest {
     assert(ctx.broker.tagActivationCount.empty);
 }
 
+@("unknown group returns an instructive error listing the activatable groups with descriptions")
 unittest {
     // An unknown group ⇒ instructive error listing the activatable groups with
     // descriptions; no state change.
@@ -373,6 +383,7 @@ unittest {
     assert(ctx.broker.tagActivationCount.empty);
 }
 
+@("all-ungrouped visible tools make list mode say so instead of an empty string")
 unittest {
     // Every visible tool ungrouped ⇒ nothing to discover; the list mode says
     // so instead of returning an empty string.
@@ -385,6 +396,7 @@ unittest {
     assert(rval.msg.canFind("alwaysOn (ungrouped)"));
 }
 
+@("kill switch: a disabled broker makes discovery inert with an instructive error in both modes")
 unittest {
     // Kill switch: with the broker disabled, discovery is inert —
     // instructive error, no state change, in both modes.
@@ -403,6 +415,8 @@ unittest {
     assert(ctx.broker.activated.empty);
 }
 
+@(
+        "the composed description includes every described group up to the cap and never advertises undescribed ones")
 unittest {
     // The composed description contains every described group (up to the
     // cap); an undescribed group is not advertised.
@@ -432,6 +446,7 @@ unittest {
     assert(bigDesc.countUntil("tag03") < bigDesc.countUntil("tag00"));
 }
 
+@("a described group with no pool tools gives the pinned instructive text; no described groups gives the no-groups fallback")
 unittest {
     // Zero-visible subcases: a DESCRIBED group (not just a runtime tag name)
     // with no pool tool ⇒ the pinned instructive text; and, with no described
@@ -459,6 +474,8 @@ unittest {
     assert(miss.msg.canFind("no groups are registered"));
 }
 
+@(
+        "discovery metric events carry group semantics: known means described and toolsActivated is the visible pool size")
 unittest {
     // M1: the discovery metric events carry the group semantics - known =
     // "the group has a description", toolsActivated = the group's visible
@@ -517,6 +534,8 @@ unittest {
     assert(activations[0]["toolsActivated"].integer == 1, "the group's visible pool size");
 }
 
+@(
+        "guard: listToolTags keeps its own description non-empty so the registry listing stays informative")
 unittest {
     // Guard: the discovery tool itself must stay described - the
     // description is what the registry lists. It must never be silently
@@ -527,6 +546,7 @@ unittest {
     assert(uda.desc.length > 0);
 }
 
+@("registration: listToolTags is present in the global function registry")
 unittest {
     // Registration (mixin RegisterLlmFunctions!() after the imports): the
     // discovery tool is in the global registry.

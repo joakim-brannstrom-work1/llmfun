@@ -1253,6 +1253,7 @@ version (unittest) {
 // overlap, then reads it back. A SINGLE instance shared across threads would
 // corrupt here; the per-thread instances produced by the worker pattern are
 // isolated.
+@("a non-thread-safe embedder shared across threads would corrupt, but the worker pattern's per-thread instances are isolated")
 unittest {
 
     auto cfg = EmbedConfig(RemoteEmbedConfig(server: ServerConfig(url: "http://127.0.0.1:0"),
@@ -1296,9 +1297,8 @@ unittest {
     assert(allOk, "an embedder instance was not isolated (cross-thread corruption detected)");
 }
 
-// Worker integration: spawn the actor, feed it one DiJob, drain it (the
-// mailbox is FIFO so the drain proves the job was processed), and verify the
-// per-session DB was created and contains indexed chunks.
+@(
+        "spawning a worker, feeding one DiJob, and draining it creates the per-session DB with indexed chunks")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse, tempDir;
     import std.path : buildPath;
@@ -1361,10 +1361,8 @@ unittest {
     assert(hits[0].text.length > 0, "hit must carry the verbatim chunk text");
 }
 
-// Identical episode text under two different topics must both be indexed. The
-// topic name is the dedup salt, so the two salted identities differ; with
-// content-only dedup the second episode would be dropped as a duplicate and
-// only one source would exist.
+@(
+        "identical episode text under two different topics indexes two sources because the topic is the dedup salt")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.conv : to;
@@ -1410,10 +1408,8 @@ unittest {
             db.getSources().length)".text);
 }
 
-// A turn split across two compressions re-arrives under the same topic. The
-// worker merges the existing episode text with the new piece (instead of
-// replacing it): after both jobs, one source holds "old\nnew" verbatim and
-// both pieces are text-searchable.
+@(
+        "a turn split across two compressions merges under the same topic with both pieces text-searchable")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
 
@@ -1472,9 +1468,8 @@ unittest {
     assert(h2 !is null && h2.length >= 1, "new piece not text-searchable after the merge");
 }
 
-// Database.sourceText reconstructs a multi-chunk source exactly - the
-// leading-overlap stripping removes the sliding-window overlap without
-// duplicating or dropping any text.
+@(
+        "sourceText reconstructs a multi-chunk source exactly, with no duplicated overlap and no lost text")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.conv : to;
@@ -1530,9 +1525,7 @@ unittest {
             "sourceText must round-trip the original text exactly (no duplicated overlap, no lost text)");
 }
 
-// A pre-existing source with no chunks (empty reconstruction) must not poison
-// the merge - the plain piece is indexed, replacing the empty source (one
-// source, no throw out of the job).
+@("a pre-existing empty source is replaced by the plain piece without poisoning the merge")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
 
@@ -1583,10 +1576,7 @@ unittest {
     assert(h !is null && h.length >= 1, "the plain piece was not indexed");
 }
 
-// Two back-to-back jobs for one session (the second arriving well inside the
-// old 1 s coalescing window) must BOTH be text-searchable after the drain -
-// every job that committed chunks rebuilds the FTS index itself, and the drain
-// no longer flushes any deferred rebuilds.
+@("two back-to-back jobs for one session are both text-searchable after the drain")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
 
@@ -1742,6 +1732,8 @@ private Embedder throwingEmbedderFactory(EmbedConfig config) {
 // second commit land (polling for visibility) without a lock error. This
 // follows the production pattern: the worker drains exactly once, at dispose,
 // AFTER all its DiJobs -- it does not checkpoint mid-stream.
+@(
+        "a concurrent read-only reader coexists with the worker via WAL and sees both commits land without a lock error")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse;
     import std.conv : to;
@@ -1827,7 +1819,13 @@ unittest {
     assert(journal == "wal", i"expected wal journal mode, got '$(journal)'".text);
 }
 
-/// Resilience (writer side): a pre-corrupted session DB must not crash the worker or starve other sessions. The corrupted session's job is skipped (openDatabase keeps failing and returns none), but a second session's job in the same mailbox is still indexed, and the worker still answers the drain (DiDrained).
+/// Resilience (writer side): a pre-corrupted session DB must not crash the
+//worker or starve other sessions. The corrupted session's job is skipped
+//(openDatabase keeps failing and returns none), but a second session's job in
+//the same mailbox is still indexed, and the worker still answers the drain
+//(DiDrained).
+@(
+        "a pre-corrupted session DB is skipped without crashing the worker or starving other sessions' jobs")
 unittest {
     import std.file : mkdirRecurse, rmdirRecurse, write;
     import std.conv : to;
@@ -1890,7 +1888,8 @@ unittest {
     assert(rowCount >= 2, i"session B should have >= 2 indexed chunks, got $(rowCount)".text);
 }
 
-/// Resilience (degraded worker): when the injected embedder factory throws, the worker degrades gracefully -- it sends the degraded notice exactly once (from onSpawn, before any mailbox processing), skips every DiJob, and still answers diDrain so disposal never hangs.
+@(
+        "a throwing embedder factory degrades the worker: one notice, every DiJob skipped, the drain still answered")
 unittest {
     import std.conv : to;
 
@@ -1938,7 +1937,8 @@ unittest {
     gate.close();
 }
 
-/// Resilience (per-episode): a poisoned episode (the embedder THROWS for that text) must not abort the rest of the job. The bad episode is skipped (warningf + ++failures) and the other episodes in the SAME job are still indexed.
+@(
+        "a poisoned episode whose embedding throws is skipped and the other episodes in the same job are still indexed")
 unittest {
     auto tmpDir = testArea("dialogue_poison");
     scope (exit)
@@ -1993,9 +1993,8 @@ unittest {
             "poisoned episode was indexed despite the embedder throwing");
 }
 
-/// One completed DiJob with two single-turn episodes (turns 3 and 7) indexes
-/// its chunks into the session DB, the drain answers once the job is done -
-/// and no per-chunk spam (row-count check below).
+@(
+        "one completed DiJob indexes its two single-turn episodes, the drain answers, and no per-chunk spam appears")
 unittest {
     import std.conv : to;
     import std.format : format;
@@ -2057,10 +2056,8 @@ unittest {
     assert(rowCount >= 2, i"expected >= 2 indexed chunks, got $(rowCount)".text);
 }
 
-/// Fixed-text fake summarizer: an RiJob must produce a retrievable r_
-//reasoning record in the session DB: the fence-stripped text indexed verbatim
-//as a single chunk, FTS-searchable, and the topic decoding to the job's
-//session/turn range with Kind.reasoning.
+@(
+        "an RiJob with a fixed-text summarizer indexes a retrievable r_ record as one verbatim FTS-searchable chunk")
 unittest {
     auto tmpDir = testArea("dialogue_p2_fixed");
     scope (exit)
@@ -2125,7 +2122,11 @@ unittest {
             meta.turnEnd)".text);
 }
 
-/// Slow fake summarizer: the LLM call runs OFF the mailbox (dedicated timeout): a DiJob queued behind an in-flight RiJob must complete (its chunk FTS-visible) well before the fake's 3 s sleep ends. A mailbox-blocked design would delay it by the full sleep.
+// Slow fake summarizer: the LLM call runs OFF the mailbox (dedicated timeout):
+// a DiJob queued behind an in-flight RiJob must complete (its chunk
+// FTS-visible) well before the fake's 3 s sleep ends. A mailbox-blocked design
+// would delay it by the full sleep.
+@("a DiJob queued behind an in-flight slow RiJob completes before the fake's sleep ends")
 unittest {
     import core.thread : Thread;
     import std.conv : to;
@@ -2199,7 +2200,8 @@ unittest {
             "the in-flight RiJob record must be indexed by the drain join");
 }
 
-/// Throwing fake summarizer: the LLM failure takes the RiDone path: no record indexed, and the DiJob queued in the same mailbox is unaffected.
+@(
+        "a throwing summarizer takes the RiDone path: no record indexed and the same-mailbox DiJob is unaffected")
 unittest {
     import std.string : startsWith;
     import std.conv : to;
@@ -2261,7 +2263,7 @@ unittest {
     assert(db.queryTextSearch("GOODDI", 10).length >= 1, "the DiJob chunk must be FTS-searchable");
 }
 
-/// Degraded worker: an RiJob must be skipped WITHOUT spawning a summarizer thread (no LLM spend while degraded): the counting fake must never be invoked.
+@("a degraded worker skips RiJobs without invoking the summarizer")
 unittest {
     auto tmpDir = testArea("dialogue_p2_degraded");
     scope (exit)
@@ -2299,9 +2301,7 @@ unittest {
             "degraded worker must never invoke the summarizer (no LLM spend while degraded)");
 }
 
-// diDrain with an in-flight slow fake: the drain's bounded deadline must wait
-// for the RiRecord, index it (recordJob) BEFORE the checkpoint+close, and then
-// answer DiDrained: the record survives in the closed DB.
+@("a drain with an in-flight RiRecord waits within its bounded deadline, indexes it before close, and the record survives in the closed DB")
 unittest {
     auto tmpDir = testArea("dialogue_p2_drainjoin");
     scope (exit)
@@ -2355,6 +2355,8 @@ unittest {
 // with a warning, still answer DiDrained, and never block on the fake. The
 // late completion is consumed by the still-running worker afterwards (accepted
 // shutdown record-loss window; its state is not asserted).
+@(
+        "a drain whose deadline expires gives up with a warning and still answers DiDrained without blocking on the fake")
 unittest {
     import core.thread : Thread;
     import std.string : startsWith;

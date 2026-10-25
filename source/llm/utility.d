@@ -46,34 +46,34 @@ T sanitizeUtf8(T)(T s) @safe nothrow {
     }
 }
 
-/// Test: sanitizeUtf8 returns an empty string unchanged.
+@("sanitizeUtf8 returns an empty string unchanged")
 unittest {
     assert(sanitizeUtf8("") == "");
 }
 
-/// Test: sanitizeUtf8 returns valid ASCII unchanged without copying.
+@("sanitizeUtf8 returns valid ASCII unchanged without copying")
 unittest {
     string s = "hello world";
     assert(sanitizeUtf8(s) is s);
 }
 
-/// Test: sanitizeUtf8 returns valid multibyte UTF-8 unchanged without copying.
+@("sanitizeUtf8 returns valid multibyte UTF-8 unchanged without copying")
 unittest {
     string s = "héllo wörld ☕";
     assert(sanitizeUtf8(s) is s);
 }
 
-/// Test: sanitizeUtf8 replaces a lone 0xF0 (incomplete 4-byte sequence).
+@("sanitizeUtf8 replaces a lone 0xF0 incomplete 4-byte sequence")
 unittest {
     assert(sanitizeUtf8("\xF0") == "\uFFFD");
 }
 
-/// Test: sanitizeUtf8 replaces a truncated 3-byte sequence.
+@("sanitizeUtf8 replaces a truncated 3-byte sequence")
 unittest {
     assert(sanitizeUtf8("\xE2\x82") == "\uFFFD");
 }
 
-/// Test: sanitizeUtf8 replaces malformed 0xFF sequences with U+FFFD.
+@("sanitizeUtf8 replaces malformed 0xFF sequences with U+FFFD")
 unittest {
     assert(sanitizeUtf8("\xFF") == "\uFFFD");
     // Two adjacent 0xFF bytes form one malformed sequence (lead byte +
@@ -85,12 +85,12 @@ unittest {
     assert(sanitizeUtf8("ab\xFFcd") == "ab\uFFFDd");
 }
 
-/// Test: sanitizeUtf8 preserves valid content around invalid bytes.
+@("sanitizeUtf8 preserves valid content around invalid bytes")
 unittest {
     assert(sanitizeUtf8("ab\x80cd") == "ab\uFFFDcd");
 }
 
-/// Test: sanitizeUtf8 is idempotent for input already containing U+FFFD.
+@("sanitizeUtf8 is idempotent for input already containing U+FFFD")
 unittest {
     string s = "a\uFFFDb";
     assert(sanitizeUtf8(s) is s);

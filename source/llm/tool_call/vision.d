@@ -281,12 +281,8 @@ struct LoadImageApiParams {
     }
 }
 
-// --- single-turn vision opens a real turn (beginNewTurn) ---
-
-// processImage() must fail against a closed localhost port, but the turn
-// opens BEFORE the request: system prompt stamps 0, the VisionMessage stamps
-// 1, and a second image (after clear()) gets turn 2 — the counter never
-// re-uses IDs.
+@(
+        "processImage opens a real turn before the request and never re-uses turn ids across cleared messages")
 unittest {
     import llm.chat : turnIdOf;
 

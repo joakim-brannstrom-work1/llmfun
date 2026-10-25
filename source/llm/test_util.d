@@ -193,6 +193,7 @@ template retrySql(alias query) {
     }
 }
 
+@("instantiating retrySql compile-checks the template body under this module's build")
 unittest {
     // Instantiates retrySql so the template body is compile-checked by THIS
     // task's build (template bodies are only type-checked when instantiated;

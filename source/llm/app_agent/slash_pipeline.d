@@ -57,6 +57,7 @@ private AgentStatus codeHandler(ref AgentApp app, string arg) {
     return AgentStatus.active;
 }
 
+@("bare /plan and /code take the unknown-command path, and the help lines render in order")
 unittest {
     import llm.app_config : UserConfig;
     import std.algorithm.searching : canFind;

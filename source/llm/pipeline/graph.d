@@ -292,7 +292,7 @@ version (unittest) {
     import std.stdio : writeln, writefln;
 }
 
-// test the simplest node traversal
+@("simple two-node graph: the start node is queued, both nodes execute, and the graph finishes")
 unittest {
     auto g = new Graph();
     g.add(new DummyNode("a"));
@@ -318,7 +318,7 @@ unittest {
     assert(executCount == 2);
 }
 
-// a node that is never executed, missing edge to it
+@("an unreachable node is never executed, only the reachable start-to-stop path runs")
 unittest {
     auto g = new Graph();
     g.add(new DummyNode("a"));
@@ -352,7 +352,8 @@ unittest {
     assert(!g.isDone);
 }
 
-// a conditional node
+@(
+        "a conditional edge blocks traversal until its condition holds, then the looped graph reaches the stop node")
 unittest {
     class DummyCondEdge : DummyEdge {
         this(string fromId_, string toId_, uint maxLoops_ = 0, int* cnt) {
@@ -417,6 +418,7 @@ unittest {
     assert(!g.isDone);
 }
 
+@("a bounded a/b loop runs to maxLoops, and the stop node receives the accumulated loop inputs")
 unittest {
     auto g = new Graph();
     g.add(new DummyNode("a"));
@@ -456,6 +458,7 @@ unittest {
     assert(inputs[$ - 2] == ["a", "a", "a", "a"]); // node b had multiple a as input because of the loop
 }
 
+@("a graph with exhausted loop edges keeps accepting runNext calls without hanging or throwing")
 unittest {
     auto g = new Graph();
     g.add(new DummyNode("a"));
@@ -485,7 +488,7 @@ unittest {
     }
 }
 
-// Test that restart() resets currentPos to null
+@("restart() resets currentPos to null and runNext sets it to the dequeued node")
 unittest {
     auto g = new Graph();
     g.add(new DummyNode("a"));

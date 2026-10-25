@@ -262,6 +262,8 @@ package SlashCommand[] startupSlashCommands() {
     return cast(SlashCommand[]) startupCommands_.dup;
 }
 
+@(
+        "registry dispatches names and aliases, enforces arg modes, rejects bad registrations, and renders sorted help text")
 unittest {
     import llm.app_config : UserConfig;
     import std.exception : assertThrown;
@@ -360,6 +362,7 @@ unittest {
     assert(longLine.length >= 25 && longLine[25 .. $] == "Switch");
 }
 
+@("help ordering tie-breaks by registration order when order values are equal")
 unittest {
     // Help ordering tiebreak: equal order values keep registration order
     import llm.app_config : UserConfig;
@@ -376,6 +379,8 @@ unittest {
             "equal orders must keep registration order");
 }
 
+@(
+        "a startup command registered via addStartupSlashCommand does not make later AgentApp constructions throw")
 unittest {
     // Regression test: a startup command registered via addStartupSlashCommand
     // must not make later AgentApp constructions throw. slashCommands_ is a
@@ -391,6 +396,8 @@ unittest {
     auto app2 = AgentApp(UserConfig.AgentChatConfig.init); // must not throw
 }
 
+@(
+        "isRegistered mirrors execute's tokenization: registered forms match, typos and degenerate inputs do not")
 unittest {
     // isRegistered mirrors execute's tokenization via the shared commandNameOf
     // helper: the dispatcher's /delete parity guard

@@ -616,6 +616,7 @@ private struct TestWorkarea {
     }
 }
 
+@("direct AGENTS.md content without @path references passes through unchanged")
 unittest {
     // Test: Direct AGENTS.md content (no @path) passes through unchanged
     auto tw = TestWorkarea("path_direct");
@@ -627,6 +628,7 @@ unittest {
     assert(result == content, "Content without @path should pass through unchanged");
 }
 
+@("@path to a valid workarea file resolves to the referenced content")
 unittest {
     // Test: @path to valid workarea file resolves correctly
     auto tw = TestWorkarea("path_valid");
@@ -641,6 +643,7 @@ unittest {
     assert(result == refContent, "Expected resolved content to match referenced file");
 }
 
+@("@path to a non-existent file fails completely and returns the empty string")
 unittest {
     // Test: @path to non-existent file produces empty result (complete failure)
     auto tw = TestWorkarea("path_missing");
@@ -652,6 +655,7 @@ unittest {
     assert(result == "", "Complete @path failure should return empty string");
 }
 
+@("nested @path references resolve through the chain to the final content")
 unittest {
     // Test: Nested @path references resolve correctly
     auto tw = TestWorkarea("path_nested");
@@ -671,6 +675,7 @@ unittest {
     assert(result == innerContent, "Nested @path should resolve to final content");
 }
 
+@("@path with a ../ reference escaping the workarea is rejected")
 unittest {
     // Test: Path traversal attacks (../) are rejected
     auto tw = TestWorkarea("path_traversal");
@@ -682,6 +687,7 @@ unittest {
     assert(result == "", "Path traversal should be rejected (complete failure returns empty)");
 }
 
+@("isPathInsideWorkarea allows inside and exact paths and rejects the prefix-spoof path")
 unittest {
     // Test: isPathInsideWorkarea prefix attack prevention
     auto workarea = "/workarea".AbsolutePath;
@@ -693,6 +699,7 @@ unittest {
     assert(isPathInsideWorkarea(exactMatch, workarea), "Exact workarea match should be allowed");
 }
 
+@("@path to a symlinked file is rejected")
 unittest {
     // Test: Symlinks are rejected
     import std.file : mkdirRecurse;
@@ -718,6 +725,7 @@ unittest {
     assert(result == "", "Symlink @path should be rejected (complete failure returns empty)");
 }
 
+@("@path to a file over 1MB is rejected")
 unittest {
     // Test: File size limit enforcement (> 1MB rejected)
     auto tw = TestWorkarea("path_size");
@@ -740,6 +748,7 @@ unittest {
     assert(result == "", "Oversized file should be rejected (complete failure returns empty)");
 }
 
+@("@path chains deeper than 5 levels are rejected")
 unittest {
     // Test: Recursion limit enforcement (> 5 levels rejected)
     auto tw = TestWorkarea("path_recursion");
@@ -770,6 +779,7 @@ unittest {
             "Recursion depth limit should be exceeded (complete failure returns empty)");
 }
 
+@("@path chains within the 5-level recursion limit resolve successfully")
 unittest {
     // Test: Recursion boundary - should succeed within limit
     auto tw = TestWorkarea("path_recursion_boundary");
@@ -787,6 +797,7 @@ unittest {
     assert(result == "Final content reached", "Boundary recursion should succeed");
 }
 
+@("circular @path references (A to B to A) are detected and rejected")
 unittest {
     // Test: Circular @path reference detection
     auto tw = TestWorkarea("path_circular");
@@ -802,6 +813,7 @@ unittest {
     assert(result == "", "Circular @path reference should be detected and rejected");
 }
 
+@("partial @path failure keeps the successful resolutions and marks the failed references")
 unittest {
     // Test: Partial @path failure handling (some succeed, some fail)
     auto tw = TestWorkarea("path_partial");
@@ -820,6 +832,7 @@ unittest {
     assert(result.canFind("@@RESOLVE_ERROR"), "Partial failure should include error markers");
 }
 
+@("complete @path failure (all references missing) returns the empty string")
 unittest {
     // Test: Complete @path failure handling (all fail, returns empty)
     auto tw = TestWorkarea("path_completefail");
@@ -832,6 +845,7 @@ unittest {
     assert(result == "", "Complete @path failure should return empty string");
 }
 
+@("mixed regular text and @path references: the text is preserved and the references resolved")
 unittest {
     // Test: Mixed content with @path references and regular text
     auto tw = TestWorkarea("path_mixed");
@@ -848,6 +862,7 @@ unittest {
     assert(result.canFind("Additional instructions here."), "Text after @path should be preserved");
 }
 
+@("@path with a subdirectory prefix resolves the file")
 unittest {
     // Test: @path with subdirectory resolution
     auto tw = TestWorkarea("path_subdir");
@@ -862,6 +877,7 @@ unittest {
     assert(result == refContent, "Subdirectory @path should resolve correctly");
 }
 
+@("a bare @ line passes through without being treated as an @path reference")
 unittest {
     // Test: Empty @ line is passed through (not treated as @path)
     auto tw = TestWorkarea("path_empty");
@@ -873,6 +889,7 @@ unittest {
     assert(result == content, "Empty @ line should pass through unchanged");
 }
 
+@("a self-referencing @path is detected as circular and rejected")
 unittest {
     // Test: Self-referencing @path (file references itself)
     auto tw = TestWorkarea("path_selfref");
@@ -912,6 +929,7 @@ private struct TestDataDir {
     }
 }
 
+@("agent-md cache round trip: save writes the file and load returns the same state")
 unittest {
     // Integration Test: Cache file creation, persistence, and round-trip
     auto td = TestDataDir("cache_roundtrip");
@@ -942,6 +960,7 @@ unittest {
     assert(loadedState.summary == testState.summary, "Summary should match after round-trip");
 }
 
+@("a corrupted cache JSON loads as an invalid state without throwing")
 unittest {
     // Integration Test: Cache file corruption handling
     auto td = TestDataDir("cache_corrupt");
@@ -958,6 +977,7 @@ unittest {
     assert(!state.isValid(), "Corrupted cache should return invalid state");
 }
 
+@("removing the cache file clears the state; loading the removed cache is invalid")
 unittest {
     // Integration Test: Cache clearing (file removal)
     auto td = TestDataDir("cache_clear");
@@ -981,6 +1001,7 @@ unittest {
     assert(!state.isValid(), "Removed cache should return invalid state");
 }
 
+@("a full AgentMdState (multi-line summary, non-init timestamp) survives serialization")
 unittest {
     // Integration Test: AgentMdState serialization with all fields
     auto td = TestDataDir("cache_fullserial");
@@ -1001,6 +1022,7 @@ unittest {
     assert(loaded.timestamp != SysTime.init, "Timestamp should be non-zero after round-trip");
 }
 
+@("makeAgentMdTopicName yields the agent_md_ prefix with 8 hex chars, 16 for negative checksums, distinct per checksum")
 unittest {
     // Integration Test: RAG topic naming convention
     // Verify makeAgentMdTopicName produces correct format
@@ -1023,6 +1045,7 @@ unittest {
             "Negative checksum hex portion should be 16 characters (full 64-bit hex)");
 }
 
+@("bulletListMerge combines chunks and deduplicates identical bullet lines")
 unittest {
     // Integration Test: Bullet list merge with multiple chunks
     SummaryChunkT[] chunks;
@@ -1044,6 +1067,7 @@ unittest {
     assert(pointALines.length == 1, "Duplicate bullets should be deduplicated");
 }
 
+@("bulletListMerge over empty chunks returns an empty result")
 unittest {
     // Integration Test: Bullet list merge with empty chunks
     SummaryChunkT[] emptyChunks;
@@ -1051,6 +1075,7 @@ unittest {
     assert(result.empty, "Empty chunks should produce empty result");
 }
 
+@("bulletListMerge normalizes star bullets to dashes and prefixes plain lines with a bullet")
 unittest {
     // Integration Test: Bullet list merge normalizes bullet prefixes
     SummaryChunkT[] chunks;
@@ -1064,6 +1089,7 @@ unittest {
     assert(result.canFind("- Plain text line"), "Plain text should get bullet prefix");
 }
 
+@("AgentMdState equality compares all fields: same fields equal, different checksum not")
 unittest {
     // Integration Test: AgentMdState equality comparison
     SysTime fixedTime = SysTime(DateTime(2024, 1, 1, 0, 0, 0), UTC());
@@ -1078,6 +1104,7 @@ unittest {
     assert(state1 != state3, "States with different checksums should not be equal");
 }
 
+@("AgentMdState.isValid requires a non-zero checksum and a non-empty summary")
 unittest {
     // Integration Test: AgentMdState isValid checks
     auto validState = AgentMdState(checksum: 1, summary: "- Rule\n", timestamp: SysTime.init);
@@ -1094,6 +1121,7 @@ unittest {
     assert(!defaultState.isValid(), "Default state should not be valid");
 }
 
+@("end-to-end cache workflow: first-run miss, second-run hit, content-change miss, cache update")
 unittest {
     // Integration Test: End-to-end workflow simulation (cache + state management)
     // Simulates the key steps of processAgentMd without RAG/LLM dependencies
@@ -1154,6 +1182,7 @@ unittest {
     assert(oldTopic != newTopic, "Different checksums should produce different topics");
 }
 
+@("noCwdConfig cleanup removes the cache; the state is invalid afterwards")
 unittest {
     // Integration Test: noCwdConfig cleanup simulation
     // Simulates the cleanup path when noCwdConfig is true
@@ -1178,6 +1207,8 @@ unittest {
     assert(!state.isValid(), "State should be invalid after noCwdConfig cleanup");
 }
 
+@(
+        "prompt composition order: base prompt precedes the AGENTS.md summary, which precedes the RAG instruction")
 unittest {
     // Integration Test: Prompt composition order specification
     // 1. basePrompt, 2. alwaysApplyBlock, 3. agentMdSummary, 4. manifestXml,
@@ -1203,6 +1234,8 @@ unittest {
     assert(summaryPos < ragPos, "AGENTS.md summary should come before RAG instruction");
 }
 
+@(
+        "forceRefresh clears the stale cache before re-summarization; the new cache holds the new checksum")
 unittest {
     // Integration Test: forceRefresh workflow simulation
     // Simulates processAgentMd's forceRefresh path: the stale cache is
@@ -1241,6 +1274,7 @@ unittest {
     assert(state.checksum == newChecksum, "Cache should have new checksum after refresh");
 }
 
+@("AGENTS.md removal invalidates the cached state")
 unittest {
     // Integration Test: AGENTS.md removal workflow
     // Simulates when AGENTS.md file is deleted after being cached
@@ -1267,6 +1301,8 @@ unittest {
     assert(!state.isValid(), "Cache should be invalid after AGENTS.md removal");
 }
 
+@(
+        "mixed content resolution keeps the header and surrounding text while inlining the referenced file")
 unittest {
     // Integration Test: resolveAgentMdContent with mixed content
     // Verify that regular text and @path references work together
@@ -1289,6 +1325,7 @@ unittest {
     assert(result.canFind("Remember to write tests"), "Text after @path should be preserved");
 }
 
+@("computeContentHash is deterministic, distinct for different content, and non-zero")
 unittest {
     // Integration Test: computeContentHash consistency
     // Verify that the same content always produces the same hash

@@ -145,7 +145,7 @@ version (unittest) {
 
 }
 
-// Test: output from agent-A propagates as input to agent-B
+@("agent A's output propagates as the input query of agent B")
 unittest {
     auto outputA = "output_from_A";
     auto agentA = new PropagatingMockAgent("agentA", outputA);
@@ -169,7 +169,7 @@ unittest {
             "Agent B should have received A's output as input");
 }
 
-// test interrupt of pipeline
+@("an interrupt delegate firing mid-pipeline stops the run with partial results")
 unittest {
     auto agentA = new SlowMockAgent("agentA", dur!"msecs"(1));
     auto agentB = new SlowMockAgent("agentB", dur!"msecs"(300));
@@ -212,7 +212,7 @@ unittest {
     assert(result.agentResults.length < 3, "Not all agents should have completed due to interrupt");
 }
 
-// null delegate (no-op)
+@("a null interrupt delegate is a no-op and all agents complete")
 unittest {
     auto agentA = new SlowMockAgent("agentA", dur!"msecs"(1));
     auto agentB = new SlowMockAgent("agentB", dur!"msecs"(1));
@@ -242,7 +242,7 @@ unittest {
             "wasInterrupted should be false when interrupt delegate is null");
 }
 
-// throwing delegate
+@("a throwing interrupt delegate is treated as not interrupted and the pipeline completes")
 unittest {
     auto agentA = new SlowMockAgent("agentA", dur!"msecs"(1));
     auto agentB = new SlowMockAgent("agentB", dur!"msecs"(1));
@@ -276,7 +276,7 @@ unittest {
     assert(!result.wasInterrupted, "wasInterrupted should be false when interrupt delegate throws");
 }
 
-// Test PipelineAgent with agent that produces output immediately
+@("PipelineAgent with an agent producing output immediately runs once with no retry nudge")
 unittest {
     auto mockAgent = new ControllableMockAgent("instantOutput", 1); // produces output on call 1
     auto node = new PipelineNode("testNode", mockAgent, NodeConfig.init);
@@ -291,7 +291,7 @@ unittest {
     assert(!node.output.empty, "Node output should be set");
 }
 
-// Test PipelineAgent with agent that never produces output
+@("PipelineAgent with an agent never producing output exhausts maxRetries with maxRetries-1 nudges")
 unittest {
     const uint maxRetries = 3;
     auto mockAgent = new ControllableMockAgent("noOutput", 0); // never produces output
@@ -308,7 +308,7 @@ unittest {
     assert(node.output.empty, "Node output should still be empty");
 }
 
-// Test PipelineAgent with agent that produces output on second retry
+@("PipelineAgent with an agent producing output on the second retry runs twice with one nudge")
 unittest {
     auto mockAgent = new ControllableMockAgent("secondTryOutput", 2); // produces output on call 2
     auto node = new PipelineNode("testNode", mockAgent, NodeConfig.init);

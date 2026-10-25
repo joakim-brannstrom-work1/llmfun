@@ -306,7 +306,7 @@ version (unittest) {
     }
 }
 
-// parameter validation rejects bad input without crashing (table-driven) ---
+@("parameter validation: empty query, topK 0 and negative rejected, the maxTopK limit is accepted")
 unittest {
     auto testDir = testArea("param_validation");
     scope (exit)
@@ -343,7 +343,7 @@ unittest {
     assert(r.success, r.msg);
 }
 
-// graceful no-history and missing-dependency responses ---
+@("graceful responses: fresh session gives the pinned no-history notice, no session is a caller error, missing index and RAG are errors")
 unittest {
     auto testDir = testArea("graceful_no_history");
     scope (exit)
@@ -374,7 +374,8 @@ unittest {
     assert(!r.success && r.msg.canFind("RAG not available"), r.msg);
 }
 
-// embedder failure on the vector path is an error, not a no-history ---
+@(
+        "embedder failure on the vector path is an explicit error, text+vector falls back to the text path")
 unittest {
     auto testDir = testArea("embedder_failure");
     scope (exit)
@@ -400,8 +401,8 @@ unittest {
     assert(r.msg.canFind("EMBED_FAIL_TOKEN"), r.msg);
 }
 
-// Test: happy path - r_ + d_ in one session DB, only the r_ match is
-// rendered, with the match header and the static annotation verbatim ---
+@(
+        "happy path: r_ and d_ in one session DB, only the r_ match renders with the turn range and static annotation")
 unittest {
     auto testDir = testArea("happy_path");
     scope (exit)
@@ -430,7 +431,7 @@ unittest {
     assert(!r.msg.canFind("DIALOGUE_RECORD_TOKEN"), r.msg);
 }
 
-// d_-only DB reports no reasoning history (kind-specific) ---
+@("d_-only DB reports no reasoning history (kind-specific)")
 unittest {
     auto testDir = testArea("donly_no_history");
     scope (exit)
@@ -445,7 +446,7 @@ unittest {
     assert(r.msg == "No reasoning history indexed for this session yet.", r.msg);
 }
 
-// r_ present but zero hits reports no matches (not an error) ---
+@("r_ present but zero hits reports no matches, not an error")
 unittest {
     auto testDir = testArea("rno_matches");
     scope (exit)
@@ -462,7 +463,8 @@ unittest {
     assert(r.msg.canFind(TestSessionId), r.msg);
 }
 
-// maxTurnAge windowing (0 and negative mean no filter) ---
+@(
+        "maxTurnAge windowing: 0 and negative disable filtering, a positive window keeps only recent turns")
 unittest {
     auto testDir = testArea("max_turn_age");
     scope (exit)
@@ -495,7 +497,7 @@ unittest {
     assert(r.msg.canFind("formed during turns 10-10"), r.msg);
 }
 
-// AgentContext implements ReasoningContext (pair mirrors the dialogue one) ---
+@("AgentContext implements ReasoningContext: getReasoningIndex returns the stored instance")
 unittest {
     auto testDir = testArea("agent_context_pair");
     scope (exit)
@@ -650,8 +652,8 @@ version (unittest) {
     }
 }
 
-// --- Test (a): "why did you …" → record with stated reason retrieved,
-//     turn range cited, annotation present.
+@(
+        "recall: a why-did-you query retrieves the record with the stated reason, cites the turn range, annotation present")
 unittest {
     auto testDir = testArea("recall_abandon_reason");
     scope (exit)
@@ -677,8 +679,7 @@ unittest {
     assert(r.success && r.msg.canFind("REASONTOKEN"), r.msg);
 }
 
-// --- Test (b): stuck loop — retrying an abandoned approach; prior failure
-//     surfaces with the anti-retry annotation.
+@("recall: a stuck-loop query surfaces the prior abandoned failure with the anti-retry annotation")
 unittest {
     auto testDir = testArea("recall_stuck_loop");
     scope (exit)
@@ -696,7 +697,7 @@ unittest {
     assert(r.msg.canFind("turns 10-12"), "turn range not cited");
 }
 
-// session scoping — records never leak across sessions.
+@("session scoping: records never leak across sessions, a cross-session query reports no matches")
 unittest {
     auto testDir = testArea("recall_session_scope");
     scope (exit)

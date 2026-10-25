@@ -88,6 +88,7 @@ JsonRpcResponse createSuccessResponse(JSONValue id, JSONValue result) {
     return resp;
 }
 
+@("parseRequest handles valid, malformed, and non-object JSON with the right error flags, and serializeResponse round-trips success and error responses")
 unittest {
 
     // --- parseRequest: valid requests ---

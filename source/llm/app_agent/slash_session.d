@@ -173,6 +173,7 @@ private AgentStatus clearHandler(ref AgentApp app, string arg) {
     return AgentStatus.active;
 }
 
+@("session commands: arg-mode guards hold and the help text renders in order")
 unittest {
     import llm.app_config : UserConfig;
     import std.algorithm.searching : canFind;
@@ -217,8 +218,8 @@ unittest {
     assert(help.indexOf("   /delete") < help.indexOf("   /clear"));
 }
 
-// --- Test: decideDeleteCommand state machine ---
-
+@(
+        "decideDeleteCommand: no pending confirmation is ignored, the same id confirms, a different id clears")
 unittest {
     // No pending confirmation -> ignore
     assert(decideDeleteCommand(SessionId.init, SessionId("idA")) == PendingDeleteAction.ignore);

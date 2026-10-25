@@ -708,6 +708,7 @@ version (unittest) {
     }
 }
 
+@("encodeTopicName produces the d_ name and decodeTopicName restores the episode metadata")
 unittest {
     // Round-trip: encode then decode
     auto encoded = encodeTopicName("20240101-120000-abcd", 5, 5, 1700000000000);
@@ -722,6 +723,7 @@ unittest {
     assert(decMeta.epochMillis == 1700000000000);
 }
 
+@("decodeTopicName rejects malformed topic names")
 unittest {
     // Decode rejects malformed names
     assert(!hasValue(decodeTopicName("")));
@@ -732,6 +734,7 @@ unittest {
     assert(!hasValue(decodeTopicName("d_s__x5_5__123"))); // missing 't' prefix
 }
 
+@("multiple encode/decode round-trips with different values all succeed")
 unittest {
     // Multiple round-trips with different values
     foreach (i; 1 .. 20) {
@@ -1089,8 +1092,7 @@ unittest {
     }
 }
 
-// Episode grouping: taskDone included, thinking excluded, empty episode
-// skipped, non-final ToolMessage and harness nudge excluded.
+@("episode grouping: taskDone is included, thinking excluded, empty episodes skipped, non-final ToolMessage and harness nudge excluded")
 unittest {
     auto s = setupTest("episode_grouping");
     scope (exit)
@@ -1167,8 +1169,8 @@ unittest {
             "empty episode must be skipped, maxTurn should be 1");
 }
 
-// End-to-end: summary markers and turnId==0 entries are NOT indexed;
-// a genuine adjacent turn in the same checkpoint IS indexed.
+@(
+        "summary markers and turnId==0 entries are not indexed, while adjacent turns in the same checkpoint are indexed")
 unittest {
     auto s = setupTest("end_to_end_summary_markers");
     scope (exit)
@@ -1360,6 +1362,7 @@ version (unittest) {
     }
 }
 
+@("onCheckpoint with a slow embedder enqueues and returns immediately, and the episode is indexed asynchronously after drain")
 unittest {
     import std.datetime.stopwatch : StopWatch;
 
@@ -1898,7 +1901,7 @@ unittest {
     }
 }
 
-// An r_-only session DB reports no DIALOGUE history
+@("an r_-only session DB reports no dialogue history")
 unittest {
     auto s = setupTest("p2d1_r_only_no_history");
     scope (exit)
@@ -1937,7 +1940,7 @@ unittest {
     assert(result.matches.length == 0, "r_-only session must return no matches");
 }
 
-// A mixed session returns only d_ matches (r_ never surfaces)
+@("a mixed session returns only d_ matches and r_ entries never surface")
 unittest {
     auto s = setupTest("p2d1_mixed_only_d");
     scope (exit)

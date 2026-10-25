@@ -51,6 +51,7 @@ private string formatSkillsList(ref AgentApp app) {
     return lines[].join("\n");
 }
 
+@("bare /skills dispatches to the handler with a null skill manager, and the help line renders")
 unittest {
     import llm.app_config : UserConfig;
     import std.algorithm.searching : canFind;

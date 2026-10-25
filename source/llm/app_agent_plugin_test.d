@@ -23,6 +23,8 @@ import llm.app_agent.slash : AgentStatus, SlashArgMode, SlashCommand,
 import llm.app_config : UserConfig;
 import std.algorithm.searching : canFind;
 
+@(
+        "a startup-hook command registered from outside the package appears in help and dispatches to its handler")
 unittest {
     // Unique command name: the startup list is global and append-only, so
     // the name must never collide with a built-in or another test module.

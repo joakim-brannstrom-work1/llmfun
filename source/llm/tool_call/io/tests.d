@@ -77,6 +77,7 @@ version (unittest) {
     }
 }
 
+@("parseEditMode parses mode names case-insensitively and throws on unknown modes")
 unittest {
     assert(parseEditMode("replace") == EditMode.replace);
     assert(parseEditMode("remove") == EditMode.remove);
@@ -95,6 +96,7 @@ unittest {
     assert(threw, "should throw on invalid mode");
 }
 
+@("findMarkerLine returns the first substring match index with start offset and endExclusive scope")
 unittest {
     string[] lines = ["hello world", "foo bar", "hello again"];
 
@@ -149,6 +151,8 @@ unittest {
     assert(findMarkerLine(lines, "hello", 0, 100) == 0); // end beyond file clamps
 }
 
+@(
+        "findNthMarkerLine and countMarkerOccurrences find the nth occurrence and count with range limits")
 unittest {
     string[] lines = ["a", "b", "a", "c", "a"];
 
@@ -175,6 +179,7 @@ unittest {
     assert(countMarkerOccurrences(lines, "a", 0, 100) == 3); // clamps to file
 }
 
+@("findCodeBlock finds the first trimmed-equality block with whitespace and CRLF tolerance and comment false-positive prevention")
 unittest {
     // findCodeBlock: exact/whitespace/tab tolerance
     {
@@ -364,6 +369,8 @@ unittest {
     }
 }
 
+@(
+        "findNthCodeBlock finds the nth non-overlapping block and countCodeBlockOccurrences counts by anchor within range")
 unittest {
     string[] fileLines = ["foo", "bar", "foo", "bar", "foo", "bar", "end"];
     string[] searchLines = ["foo", "bar"];
@@ -405,6 +412,8 @@ unittest {
     assert(countCodeBlockOccurrences(fileLines, searchLines, 6, 100) == 0);
 }
 
+@(
+        "editFileInMemory applies each mode in memory and reports the net linesChanged without mutating the input")
 unittest {
     // === replace: 3-line block replaced with 2-line content -> linesChanged = -1 ===
     {
@@ -640,6 +649,8 @@ unittest {
     }
 }
 
+@(
+        "log helpers sanitize paths, classify edit error strings, extract hunk numbers, and format scope text")
 unittest {
     // Structured logging helpers.
     assert(sanitizeLogPath("a/b/c.txt") == "a/b/c.txt");
@@ -717,6 +728,7 @@ unittest {
     assert(scopeLogValue(-1, -1) == "none");
 }
 
+@("byLine replace replaces the correct lines with correct match metadata")
 unittest {
     // === byLine + replace: replaces correct lines, returns correct metadata ===
     string[] fileLines = ["a", "b", "c", "d", "e"];
@@ -729,6 +741,7 @@ unittest {
     assert(!res.autoCountUsed);
 }
 
+@("byMarker replace with multi-line content and no count auto-counts the content lines")
 unittest {
     // === byMarker + replace + multi-line content + no count → auto-count ===
     string[] fileLines = ["a", "marker", "b", "c", "d"];
@@ -740,6 +753,7 @@ unittest {
     assert(res.linesChanged == 0, res.linesChanged.to!string);
 }
 
+@("byMarker replace with single-line content and no count defaults to count=1")
 unittest {
     // === byMarker + replace + single-line content + no count → count=1 ===
     string[] fileLines = ["a", "marker", "b"];
@@ -749,6 +763,7 @@ unittest {
     assert(!res.autoCountUsed);
 }
 
+@("byMarker replace with multi-line content and explicit count=1 replaces only the anchor line")
 unittest {
     // === byMarker + replace + multi-line content + explicit count=1 ===
     string[] fileLines = ["a", "marker", "b", "c"];
@@ -759,6 +774,7 @@ unittest {
     assert(!res.autoCountUsed);
 }
 
+@("byMarker replace with explicit count larger than the content replaces that many lines")
 unittest {
     // === byMarker + replace + explicit count > content lines ===
     string[] fileLines = ["a", "marker", "b", "c", "d"];
@@ -768,6 +784,7 @@ unittest {
     assert(res.matched.matchedLines == 3);
 }
 
+@("byMarker auto-count exceeding the file length errors out")
 unittest {
     // === byMarker + auto-count exceeds file length → error ===
     bool threw = false;
@@ -780,6 +797,7 @@ unittest {
     assert(threw, "auto-count beyond EOF must error");
 }
 
+@("byContent replace finds the block by trimmed equality")
 unittest {
     // === byContent + replace: block found by trimmed equality ===
     string[] fileLines = ["a", "foo() {", "  bar();", "}", "b"];
@@ -790,6 +808,7 @@ unittest {
     assert(res.matched.matchedLines == 3, res.matched.matchedLines.to!string);
 }
 
+@("byContent replaceAll replaces every non-overlapping occurrence")
 unittest {
     // === byContent + replaceAll: all occurrences replaced, non-overlapping ===
     string[] fileLines = ["x", "foo", "y", "foo", "z"];
@@ -800,6 +819,7 @@ unittest {
     assert(res.matched.matchedAt == 2);
 }
 
+@("byContent replaceAll never re-matches replacement text that contains the pattern")
 unittest {
     // === byContent + replaceAll is non-overlapping: replacement content that
     // contains the search pattern is not re-matched ===
@@ -810,6 +830,7 @@ unittest {
     assert(res.operations == 1, res.operations.to!string);
 }
 
+@("byMarker replaceAll replaces each marker line")
 unittest {
     // === byMarker + replaceAll: each marker line replaced ===
     string[] fileLines = ["a", "marker", "b", "marker", "c"];
@@ -820,6 +841,7 @@ unittest {
     assert(res.matched.matchedAt == 2);
 }
 
+@("append with byMarker keeps the marker line and inserts after it")
 unittest {
     // === append with byMarker keeps the marker line ===
     string[] fileLines = ["a", "marker", "b"];
@@ -828,6 +850,7 @@ unittest {
     assert(res.matched.matchedAt == 2);
 }
 
+@("insert_before with byContent inserts before the matched block")
 unittest {
     // === insert_before with byContent inserts before the matched block ===
     string[] fileLines = ["a", "foo", "b"];
@@ -835,6 +858,7 @@ unittest {
     assert(res.lines == ["a", "X", "foo", "b"], res.lines.to!string);
 }
 
+@("remove with byContent deletes the matched block")
 unittest {
     // === remove with byContent deletes the matched block ===
     string[] fileLines = ["a", "foo", "bar", "b"];
@@ -843,8 +867,8 @@ unittest {
     assert(res.linesChanged == -2);
 }
 
+@("byContent with explicit count extends the replaced range")
 unittest {
-    // === byContent + explicit count extends the replaced range ===
     string[] fileLines = ["a", "foo", "bar", "baz", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "X",
             searchContent: "foo", count: 3);
@@ -852,16 +876,16 @@ unittest {
     assert(res.matched.matchedLines == 3);
 }
 
+@("empty content in replace mode deletes the targeted line")
 unittest {
-    // === empty content in replace mode deletes the targeted lines ===
     string[] fileLines = ["a", "marker", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "", marker: "marker");
     assert(res.lines == ["a", "b"], res.lines.to!string);
     assert(res.linesChanged == -1);
 }
 
+@("ambiguous targeting with multiple methods errors naming both")
 unittest {
-    // === error: ambiguous targeting (multiple methods) ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a"], EditMode.replace, "x", startLine: 1, marker: "a");
@@ -873,8 +897,8 @@ unittest {
     assert(threw);
 }
 
+@("missing targeting method errors out")
 unittest {
-    // === error: missing targeting (no method) ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a"], EditMode.replace, "x");
@@ -885,6 +909,7 @@ unittest {
     assert(threw);
 }
 
+@("append with no targeting appends at the end with matchedAt one past the last line")
 unittest {
     // === append with NO targeting: appends at the end of the file ===
     // Zero targeting + mode=append is a pure insertion one past the last
@@ -901,27 +926,24 @@ unittest {
     assert(!res.autoCountUsed);
 }
 
+@("byLine append at EOF reports the anchor line as matchedAt")
 unittest {
-    // === byLine append at EOF (startLine == file length): matchedAt is the
-    // === anchor line (length), pinning the documented divergence from the
-    // === zero-targeting path above ===
     string[] fileLines = ["a", "b", "c"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.append, "X", startLine: 3);
     assert(res.lines == ["a", "b", "c", "X"], res.lines.to!string);
     assert(res.matched.matchedAt == 3, res.matched.to!string);
 }
 
+@("append with no targeting on an empty file inserts at line 1")
 unittest {
-    // === append with NO targeting on an empty file: inserts at line 1 ===
     auto res = editFileUnifiedMemory([], EditMode.append, "X");
     assert(res.lines == ["X"], res.lines.to!string);
     assert(res.matched.matchedAt == 1, res.matched.to!string);
     assert(res.linesChanged == 1, res.linesChanged.to!string);
 }
 
+@("no targeting with non-append modes fails with the use mode=append hint")
 unittest {
-    // === error: no targeting with a non-append mode still fails, with the
-    // === extended "use mode=append" hint ===
     foreach (mode; [
         EditMode.replace, EditMode.insert_after, EditMode.insert_before,
         EditMode.remove
@@ -938,8 +960,8 @@ unittest {
     }
 }
 
+@("byMarker not found errors out")
 unittest {
-    // === error: byMarker not found ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a", "b"], EditMode.replace, "x", marker: "zzz");
@@ -950,8 +972,8 @@ unittest {
     assert(threw);
 }
 
+@("byContent not found errors out")
 unittest {
-    // === error: byContent not found ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a", "b"], EditMode.replace, "x", searchContent: "zzz");
@@ -962,8 +984,8 @@ unittest {
     assert(threw);
 }
 
+@("replaceAll with byLine targeting is not supported")
 unittest {
-    // === error: replaceAll with byLine is not supported ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a", "b"], EditMode.replace, "x", startLine: 1,
@@ -975,8 +997,8 @@ unittest {
     assert(threw);
 }
 
+@("replaceAll with insert modes is not supported")
 unittest {
-    // === error: replaceAll with insert modes is not supported ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a"], EditMode.append, "x", marker: "a", replaceAll: true);
@@ -987,8 +1009,8 @@ unittest {
     assert(threw);
 }
 
+@("matchIndex=2 targets the second occurrence with byMarker")
 unittest {
-    // === matchIndex=2 targets the SECOND occurrence (byMarker) ===
     string[] fileLines = ["a", "b", "a", "c"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "x", marker: "a", matchIndex: 2);
     assert(res.lines == ["a", "b", "x", "c"], res.lines.to!string);
@@ -996,8 +1018,8 @@ unittest {
     assert(res.matched.matchedLines == 1);
 }
 
+@("matchIndex=3 targets the third occurrence with byContent")
 unittest {
-    // === matchIndex=3 targets the THIRD occurrence (byContent) ===
     string[] fileLines = ["foo", "bar", "foo", "bar", "foo", "bar", "end"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "X",
             searchContent: "foo\nbar", matchIndex: 3);
@@ -1006,8 +1028,8 @@ unittest {
     assert(res.matched.matchedLines == 2);
 }
 
+@("matchIndex out of range with byMarker reports the actual occurrence count")
 unittest {
-    // === matchIndex OOB reports actual occurrence count (byMarker) ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a", "b", "a"], EditMode.replace, "x", marker: "a", matchIndex: 3);
@@ -1018,8 +1040,8 @@ unittest {
     assert(threw);
 }
 
+@("matchIndex out of range with byContent reports the actual occurrence count")
 unittest {
-    // === matchIndex OOB reports actual occurrence count (byContent) ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["foo", "bar", "foo"], EditMode.replace, "x",
@@ -1031,8 +1053,8 @@ unittest {
     assert(threw);
 }
 
+@("matchIndex greater than 1 combined with replaceAll is rejected")
 unittest {
-    // === matchIndex > 1 with replaceAll is rejected ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a", "a"], EditMode.replace, "x", marker: "a",
@@ -1044,9 +1066,8 @@ unittest {
     assert(threw);
 }
 
+@("byLine replaceAll error takes precedence over a matchIndex violation")
 unittest {
-    // === byLine + replaceAll + matchIndex>1: byLine error takes precedence
-    // (matchIndex is documented as ignored by byLine) ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a", "b"], EditMode.replace, "x", startLine: 1,
@@ -1058,8 +1079,8 @@ unittest {
     assert(threw);
 }
 
+@("matchIndex is ignored with byLine targeting")
 unittest {
-    // === matchIndex with byLine is ignored ===
     string[] fileLines = ["a", "b", "c"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "x",
             startLine: 2, count: 1, matchIndex: 2);
@@ -1067,8 +1088,8 @@ unittest {
     assert(res.matched.matchedAt == 2);
 }
 
+@("scope finds a byMarker inside the scope range")
 unittest {
-    // === scope: byMarker found within scope ===
     string[] fileLines = ["a", "target", "c", "d"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "x", marker: "target",
             scopeStart: 2, scopeEnd: 3);
@@ -1076,8 +1097,8 @@ unittest {
     assert(res.matched.matchedAt == 2, res.matched.matchedAt.to!string);
 }
 
+@("byMarker outside the scope range is not found with a scope-mentioning error")
 unittest {
-    // === scope: byMarker outside scope → not found, message mentions scope ===
     string[] fileLines = ["target", "b", "c", "d"];
     bool threw = false;
     try {
@@ -1091,8 +1112,8 @@ unittest {
     assert(threw);
 }
 
+@("byMarker after scopeEnd is not found")
 unittest {
-    // === scope: byMarker after scopeEnd → not found ===
     string[] fileLines = ["a", "b", "c", "target"];
     bool threw = false;
     try {
@@ -1105,8 +1126,8 @@ unittest {
     assert(threw);
 }
 
+@("scopeStart alone searches from that line to EOF")
 unittest {
-    // === scope: scopeStart alone searches to EOF ===
     string[] fileLines = ["target", "b", "c", "target2"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "x", marker: "target2",
             scopeStart: 4);
@@ -1114,8 +1135,8 @@ unittest {
     assert(res.matched.matchedAt == 4, res.matched.matchedAt.to!string);
 }
 
+@("scopeEnd alone searches from line 1 to that line")
 unittest {
-    // === scope: scopeEnd alone searches from line 1 ===
     string[] fileLines = ["a", "target", "c", "target2"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "x", marker: "target",
             scopeEnd: 2);
@@ -1123,8 +1144,8 @@ unittest {
     assert(res.matched.matchedAt == 2, res.matched.matchedAt.to!string);
 }
 
+@("scope finds a byContent block inside the scope range")
 unittest {
-    // === scope: byContent found within scope ===
     string[] fileLines = ["foo", "bar", "baz", "end"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "X",
             searchContent: "bar\nbaz", scopeStart: 2, scopeEnd: 3);
@@ -1132,8 +1153,8 @@ unittest {
     assert(res.matched.matchedAt == 2, res.matched.matchedAt.to!string);
 }
 
+@("byContent block outside the scope range is not found with a scope-mentioning error")
 unittest {
-    // === scope: byContent block outside scope → not found, mentions scope ===
     string[] fileLines = ["foo", "bar", "baz", "end"];
     bool threw = false;
     try {
@@ -1147,8 +1168,8 @@ unittest {
     assert(threw);
 }
 
+@("a block anchored inside the scope may extend past scopeEnd")
 unittest {
-    // === scope: block anchor in scope may extend past scopeEnd ===
     string[] fileLines = ["foo", "bar", "baz", "qux", "end"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "X",
             searchContent: "bar\nbaz\nqux", scopeStart: 2, scopeEnd: 2);
@@ -1157,8 +1178,8 @@ unittest {
     assert(res.matched.matchedLines == 3, res.matched.matchedLines.to!string);
 }
 
+@("scopeEnd beyond EOF clamps to the file end")
 unittest {
-    // === scope: scopeEnd beyond EOF clamps to file end ===
     string[] fileLines = ["a", "target", "c"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "x", marker: "target",
             scopeStart: 1, scopeEnd: 100);
@@ -1166,8 +1187,8 @@ unittest {
     assert(res.matched.matchedAt == 2);
 }
 
+@("scopeStart beyond EOF is not found with a scope-mentioning error")
 unittest {
-    // === scope: scopeStart beyond EOF → not found with scope ===
     string[] fileLines = ["a", "b", "c"];
     bool threw = false;
     try {
@@ -1181,8 +1202,8 @@ unittest {
     assert(threw);
 }
 
+@("empty file with a scope is not found with a scope-mentioning error")
 unittest {
-    // === scope: empty file + scope → not found with scope ===
     bool threw = false;
     try {
         editFileUnifiedMemory(cast(string[])[], EditMode.replace, "x", marker: "b",
@@ -1195,8 +1216,8 @@ unittest {
     assert(threw);
 }
 
+@("scopeStart greater than scopeEnd is a validation error")
 unittest {
-    // === scope: validation error when scopeStart > scopeEnd ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a"], EditMode.replace, "x", marker: "a",
@@ -1208,8 +1229,8 @@ unittest {
     assert(threw);
 }
 
+@("scopeStart below 1 is a validation error")
 unittest {
-    // === scope: validation error when scopeStart < 1 ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a"], EditMode.replace, "x", marker: "a", scopeStart: 0);
@@ -1220,8 +1241,8 @@ unittest {
     assert(threw);
 }
 
+@("scopeEnd below 1 is a validation error")
 unittest {
-    // === scope: validation error when scopeEnd < 1 ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a"], EditMode.replace, "x", marker: "a", scopeEnd: 0);
@@ -1232,8 +1253,8 @@ unittest {
     assert(threw);
 }
 
+@("scope is ignored with byLine targeting")
 unittest {
-    // === scope: ignored by byLine targeting ===
     string[] fileLines = ["a", "b", "c"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "x",
             startLine: 2, count: 1, scopeStart: 1, scopeEnd: 1);
@@ -1241,8 +1262,8 @@ unittest {
     assert(res.matched.matchedAt == 2);
 }
 
+@("scope plus matchIndex targets the nth occurrence within the scope")
 unittest {
-    // === scope + matchIndex: Nth occurrence within scope ===
     string[] fileLines = ["a", "a", "a", "a"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "x", marker: "a",
             matchIndex: 2, scopeStart: 2, scopeEnd: 4);
@@ -1250,8 +1271,8 @@ unittest {
     assert(res.matched.matchedAt == 3, res.matched.matchedAt.to!string);
 }
 
+@("scope plus matchIndex out of range counts only in-scope occurrences")
 unittest {
-    // === scope + matchIndex OOB: count only in-scope occurrences ===
     string[] fileLines = ["a", "a", "a", "a"];
     bool threw = false;
     try {
@@ -1265,8 +1286,8 @@ unittest {
     assert(threw);
 }
 
+@("scope plus replaceAll replaces only the in-scope occurrences")
 unittest {
-    // === scope + replaceAll: only in-scope occurrences replaced ===
     string[] fileLines = ["a", "a", "a", "a", "a"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "x", marker: "a",
             replaceAll: true, scopeStart: 2, scopeEnd: 3);
@@ -1275,8 +1296,8 @@ unittest {
     assert(res.operations == 2, res.operations.to!string);
 }
 
+@("scope plus replaceAll with no in-scope occurrences is not found")
 unittest {
-    // === scope + replaceAll: no in-scope occurrences → not found with scope ===
     string[] fileLines = ["a", "b", "a"]; // marker only on lines 1 and 3
     bool threw = false;
     try {
@@ -1290,8 +1311,8 @@ unittest {
     assert(threw);
 }
 
+@("scope plus byContent replaceAll replaces only the in-scope blocks")
 unittest {
-    // === scope + replaceAll byContent: only in-scope blocks replaced ===
     string[] fileLines = ["foo", "bar", "foo", "bar", "foo", "bar", "end"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "X",
             searchContent: "foo\nbar", replaceAll: true, scopeStart: 3, scopeEnd: 5);
@@ -1299,8 +1320,8 @@ unittest {
     assert(res.operations == 2, res.operations.to!string); // anchors at lines 3 and 5
 }
 
+@("scope plus byContent replaceAll on an empty file is not found")
 unittest {
-    // === scope + byContent + replaceAll on empty file → not found ===
     bool threw = false;
     try {
         editFileUnifiedMemory(cast(string[])[], EditMode.replace, "x",
@@ -1312,8 +1333,8 @@ unittest {
     assert(threw);
 }
 
+@("scope plus append anchors inside the scope and inserts after it")
 unittest {
-    // === scope + append mode: anchor in scope, content inserted after ===
     string[] fileLines = ["a", "target", "c", "target2"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.append, "x", marker: "target",
             scopeStart: 2, scopeEnd: 2);
@@ -1321,8 +1342,8 @@ unittest {
     assert(res.matched.matchedAt == 2, res.matched.matchedAt.to!string);
 }
 
+@("scope plus byContent matchIndex targets the nth block within the scope")
 unittest {
-    // === scope + byContent + matchIndex: Nth block within scope ===
     string[] fileLines = ["foo", "bar", "foo", "bar", "foo", "bar", "end"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "X",
             searchContent: "foo\nbar", matchIndex: 2, scopeStart: 3, scopeEnd: 7);
@@ -1331,8 +1352,8 @@ unittest {
     assert(res.matched.matchedLines == 2);
 }
 
+@("scope plus byMarker remove deletes only the in-scope line")
 unittest {
-    // === scope + byMarker + remove: removes only the in-scope line ===
     string[] fileLines = ["a", "marker", "c", "marker", "e"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.remove, "", marker: "marker",
             scopeStart: 2, scopeEnd: 2);
@@ -1341,8 +1362,8 @@ unittest {
     assert(res.linesChanged == -1);
 }
 
+@("scope plus insert_before inserts before the in-scope marker")
 unittest {
-    // === scope + insert_before: inserts before the in-scope marker ===
     string[] fileLines = ["a", "target", "c", "target2"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.insert_before, "x",
             marker: "target", scopeStart: 2, scopeEnd: 2);
@@ -1350,8 +1371,8 @@ unittest {
     assert(res.matched.matchedAt == 2, res.matched.matchedAt.to!string);
 }
 
+@("byMarker with count greater than 1 may extend past scopeEnd per the anchor rule")
 unittest {
-    // === scope: byMarker with count > 1 may extend past scopeEnd (anchor rule)
     // The marker is at line 2 (in scope [2,2]) but targetCount=3 replaces
     // lines 2-4, which reach beyond the scope end. ===
     string[] fileLines = ["a", "target", "c", "d", "e"];
@@ -1362,24 +1383,24 @@ unittest {
     assert(res.matched.matchedLines == 3, res.matched.matchedLines.to!string);
 }
 
+@("matchIndex with append mode targets the nth occurrence")
 unittest {
-    // === matchIndex with append mode targets the Nth occurrence ===
     string[] fileLines = ["a", "b", "a", "c"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.append, "x", marker: "a", matchIndex: 2);
     assert(res.lines == ["a", "b", "a", "x", "c"], res.lines.to!string);
     assert(res.matched.matchedAt == 3, res.matched.matchedAt.to!string);
 }
 
+@("matchIndex=1 default targets the first match")
 unittest {
-    // === matchIndex=1 (default) targets the first match ===
     string[] fileLines = ["a", "b", "a"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "x", marker: "a", matchIndex: 1);
     assert(res.lines == ["x", "b", "a"], res.lines.to!string);
     assert(res.matched.matchedAt == 1);
 }
 
+@("remove mode with non-empty content errors out")
 unittest {
-    // === error: remove mode with non-empty content ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a"], EditMode.remove, "not empty", marker: "a");
@@ -1390,8 +1411,8 @@ unittest {
     assert(threw);
 }
 
+@("byLine replace without a count errors out")
 unittest {
-    // === error: byLine with count < 1 for replace ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a", "b"], EditMode.replace, "x", startLine: 1);
@@ -1402,23 +1423,23 @@ unittest {
     assert(threw);
 }
 
+@("byLine append on an empty file inserts at the start")
 unittest {
-    // === byLine append on an empty file inserts at the start ===
     auto res = editFileUnifiedMemory(cast(string[])[], EditMode.append, "a\nb", startLine: 1);
     assert(res.lines == ["a", "b"], res.lines.to!string);
     assert(res.linesChanged == 2);
 }
 
+@("marker diagnostics report the closest match with line, text, and searched lines")
 unittest {
-    // === diagnostics: marker closest match ===
     auto diag = buildMarkerDiagnostic(["hello world", "foo bar"], "hello worl");
     assert(diag["closestMatch"]["atLine"].integer == 1, diag.toString);
     assert(diag["closestMatch"]["matchedText"].str == "hello worl", diag.toString);
     assert(diag["searchedLines"].integer == 2, diag.toString);
 }
 
+@("block diagnostics report the closest match with mismatch detail")
 unittest {
-    // === diagnostics: block closest match with mismatch detail ===
     auto diag = buildBlockDiagnostic([
         "a", "int total = x + y + z;", "int avg = total / 3;", "b"
     ], "int total = x + y;\nint avg = total / 3;");
@@ -1427,8 +1448,8 @@ unittest {
     assert(diag["closestMatch"]["matchedLines"].array.length >= 1, diag.toString);
 }
 
+@("marker diagnostics respect scope with clamped effective range")
 unittest {
-    // === diagnostics: marker search respects scope and reports it ===
     auto diag = buildMarkerDiagnostic(["hello world", "foo bar",
         "hello world"], "hello worl", scopeStart: 2, scopeEnd: 3);
     assert(diag["scope"]["start"].integer == 2, diag.toString);
@@ -1448,8 +1469,8 @@ unittest {
     assert(diag3["searchedLines"].integer == 0, diag3.toString);
 }
 
+@("block diagnostics respect scope with no closest match outside it")
 unittest {
-    // === diagnostics: block search respects scope (no match outside scope) ===
     auto diag = buildBlockDiagnostic(["foo", "bar", "baz", "end"], "foo\nbar",
             scopeStart: 3, scopeEnd: 4);
     assert(diag["scope"]["start"].integer == 3, diag.toString);
@@ -1458,31 +1479,31 @@ unittest {
     assert(!("closestMatch" in diag), diag.toString);
 }
 
+@("byContent append anchors after the matched block")
 unittest {
-    // === byContent + append anchors after the matched block ===
     string[] fileLines = ["a", "foo", "bar", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.append, "X", searchContent: "foo\nbar");
     assert(res.lines == ["a", "foo", "bar", "X", "b"], res.lines.to!string);
     assert(res.matched.matchedAt == 2);
 }
 
+@("byContent insert_after alias anchors after the block")
 unittest {
-    // === byContent + insert_after (alias) also anchors after the block ===
     string[] fileLines = ["a", "foo", "bar", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.insert_after, "X",
             searchContent: "foo\nbar");
     assert(res.lines == ["a", "foo", "bar", "X", "b"], res.lines.to!string);
 }
 
+@("byContent append on a block ending at EOF appends at the end")
 unittest {
-    // === byContent + append on a block that ends at EOF appends at end ===
     string[] fileLines = ["a", "foo", "bar"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.append, "X", searchContent: "foo\nbar");
     assert(res.lines == ["a", "foo", "bar", "X"], res.lines.to!string);
 }
 
+@("byContent replaceAll rejects an explicit count")
 unittest {
-    // === byContent replaceAll rejects an explicit count ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a", "foo", "b"], EditMode.replace, "x",
@@ -1494,8 +1515,8 @@ unittest {
     assert(threw);
 }
 
+@("autoCountUsed is set for byContent auto-derived and replaceAll counts, not explicit ones")
 unittest {
-    // === autoCountUsed is set for byContent auto-derived counts ===
     string[] fileLines = ["a", "foo", "bar", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "X", searchContent: "foo\nbar");
     assert(res.autoCountUsed, "count derived from block size");
@@ -1507,8 +1528,8 @@ unittest {
     assert(res3.autoCountUsed, "replaceAll uses block size");
 }
 
+@("explicit startLine 0 is invalid, not treated as absent")
 unittest {
-    // === error: explicit startLine 0 is invalid, not "absent" ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a", "b"], EditMode.replace, "x", startLine: 0);
@@ -1519,8 +1540,8 @@ unittest {
     assert(threw);
 }
 
+@("explicit startLine 0 with a marker is ambiguous, not ignored")
 unittest {
-    // === explicit startLine 0 + marker is ambiguous, not ignored ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a"], EditMode.replace, "x", startLine: 0, marker: "a");
@@ -1531,8 +1552,8 @@ unittest {
     assert(threw);
 }
 
+@("matchIndex 0 is invalid")
 unittest {
-    // === error: matchIndex 0 is invalid ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["a"], EditMode.replace, "x", marker: "a", matchIndex: 0);
@@ -1543,8 +1564,8 @@ unittest {
     assert(threw);
 }
 
+@("byLine remove deletes the line range")
 unittest {
-    // === byLine + remove: deletes the line range ===
     string[] fileLines = ["a", "b", "c", "d", "e"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.remove, "", startLine: 2, count: 2);
     assert(res.lines == ["a", "d", "e"], res.lines.to!string);
@@ -1555,8 +1576,8 @@ unittest {
     assert(!res.autoCountUsed);
 }
 
+@("byLine insert_before inserts content before the line")
 unittest {
-    // === byLine + insert_before: content inserted before the line ===
     string[] fileLines = ["a", "b", "c"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.insert_before, "X\nY", startLine: 2);
     assert(res.lines == ["a", "X", "Y", "b", "c"], res.lines.to!string);
@@ -1565,8 +1586,8 @@ unittest {
     assert(res.matched.matchedLines == 1);
 }
 
+@("byLine insert_after inserts content after the line")
 unittest {
-    // === byLine + insert_after (alias): content inserted after the line ===
     string[] fileLines = ["a", "b", "c"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.insert_after, "X", startLine: 2);
     assert(res.lines == ["a", "b", "X", "c"], res.lines.to!string);
@@ -1574,8 +1595,8 @@ unittest {
     assert(res.matched.matchedAt == 2);
 }
 
+@("byMarker remove deletes the marker line")
 unittest {
-    // === byMarker + remove: deletes the marker line ===
     string[] fileLines = ["a", "marker", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.remove, "", marker: "marker");
     assert(res.lines == ["a", "b"], res.lines.to!string);
@@ -1584,8 +1605,8 @@ unittest {
     assert(res.matched.matchedLines == 1);
 }
 
+@("byMarker insert_before inserts content before the marker line")
 unittest {
-    // === byMarker + insert_before: content before the marker line ===
     string[] fileLines = ["a", "marker", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.insert_before, "X", marker: "marker");
     assert(res.lines == ["a", "X", "marker", "b"], res.lines.to!string);
@@ -1593,8 +1614,8 @@ unittest {
     assert(res.matched.matchedLines == 1);
 }
 
+@("byMarker insert_after inserts content after the marker line")
 unittest {
-    // === byMarker + insert_after: content after the marker line ===
     string[] fileLines = ["a", "marker", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.insert_after, "X", marker: "marker");
     assert(res.lines == ["a", "marker", "X", "b"], res.lines.to!string);
@@ -1602,24 +1623,24 @@ unittest {
     assert(res.matched.matchedLines == 1);
 }
 
+@("duplicate markers target the first by default")
 unittest {
-    // === byMarker with duplicate markers targets the FIRST by default ===
     string[] fileLines = ["x", "marker", "marker", "z"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "X", marker: "marker");
     assert(res.lines == ["x", "X", "marker", "z"], res.lines.to!string);
     assert(res.matched.matchedAt == 2, res.matched.matchedAt.to!string);
 }
 
+@("duplicate blocks target the first by default")
 unittest {
-    // === byContent with duplicate blocks targets the FIRST by default ===
     string[] fileLines = ["a", "foo", "b", "foo", "c"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace, "X", searchContent: "foo");
     assert(res.lines == ["a", "X", "b", "foo", "c"], res.lines.to!string);
     assert(res.matched.matchedAt == 2, res.matched.matchedAt.to!string);
 }
 
+@("empty file with byMarker is not found")
 unittest {
-    // === empty file + byMarker → not found error ===
     bool threw = false;
     try {
         editFileUnifiedMemory(cast(string[])[], EditMode.replace, "x", marker: "m");
@@ -1630,8 +1651,8 @@ unittest {
     assert(threw);
 }
 
+@("empty file with byContent is not found")
 unittest {
-    // === empty file + byContent → not found error ===
     bool threw = false;
     try {
         editFileUnifiedMemory(cast(string[])[], EditMode.replace, "x", searchContent: "m");
@@ -1642,24 +1663,23 @@ unittest {
     assert(threw);
 }
 
+@("empty file with byLine insert_before creates content at the start")
 unittest {
-    // === empty file + byLine insert_before creates content at the start ===
     auto res = editFileUnifiedMemory(cast(string[])[], EditMode.insert_before, "a", startLine: 1);
     assert(res.lines == ["a"], res.lines.to!string);
     assert(res.linesChanged == 1, res.linesChanged.to!string);
 }
 
+@("single-line file byMarker replace with single-line content works")
 unittest {
-    // === single-line file + byMarker replace with single-line content ===
     auto res = editFileUnifiedMemory(["only"], EditMode.replace, "X", marker: "only");
     assert(res.lines == ["X"], res.lines.to!string);
     assert(!res.autoCountUsed);
     assert(res.matched.matchedAt == 1);
 }
 
+@("single-line file byMarker replace with multi-line content errors past EOF")
 unittest {
-    // === single-line file + byMarker replace with multi-line content:
-    // auto-count would exceed the file → clear error ===
     bool threw = false;
     try {
         editFileUnifiedMemory(["only"], EditMode.replace, "X\nY", marker: "only");
@@ -1670,24 +1690,23 @@ unittest {
     assert(threw, "auto-count beyond EOF on a single-line file must error");
 }
 
+@("single-line file byContent replace works")
 unittest {
-    // === single-line file + byContent replace ===
     auto res = editFileUnifiedMemory(["only"], EditMode.replace, "X", searchContent: "only");
     assert(res.lines == ["X"], res.lines.to!string);
     assert(res.matched.matchedAt == 1);
     assert(res.matched.matchedLines == 1);
 }
 
+@("single-line file byLine remove clears the file")
 unittest {
-    // === single-line file + byLine remove clears the file ===
     auto res = editFileUnifiedMemory(["only"], EditMode.remove, "", startLine: 1, count: 1);
     assert(res.lines.length == 0, res.lines.to!string);
     assert(res.linesChanged == -1, res.linesChanged.to!string);
 }
 
+@("multi-line content is preserved exactly through the unified path")
 unittest {
-    // === multi-line content preserved exactly through the unified path ===
-    // (no indentation or whitespace is added or removed)
     string[] fileLines = ["a", "marker", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.replace,
             "  keep\tindent\n\t\ttab", marker: "marker", count: 1);
@@ -1695,9 +1714,8 @@ unittest {
     assert(!res.autoCountUsed);
 }
 
+@("byContent append with explicit count still anchors after the whole block")
 unittest {
-    // === byContent + append + explicit count still anchors after the WHOLE block ===
-    // (count is ignored for insert modes; the anchor comes from the block only)
     string[] fileLines = ["a", "foo", "bar", "baz", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.append, "X",
             searchContent: "foo\nbar\nbaz", count: 1);
@@ -1705,8 +1723,8 @@ unittest {
     assert(res.matched.matchedLines == 3, res.matched.matchedLines.to!string);
 }
 
+@("byContent insert_before with explicit count anchors before the block")
 unittest {
-    // === byContent + insert_before + explicit count anchors before the block ===
     string[] fileLines = ["a", "foo", "bar", "baz", "b"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.insert_before, "X",
             searchContent: "foo\nbar\nbaz", count: 1);
@@ -1714,16 +1732,16 @@ unittest {
     assert(res.matched.matchedLines == 3, res.matched.matchedLines.to!string);
 }
 
+@("byMarker insert modes ignore an explicit count")
 unittest {
-    // === byMarker insert modes ignore an explicit count ===
     string[] fileLines = ["a", "marker", "b", "c"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.append, "X", marker: "marker", count: 3);
     assert(res.lines == ["a", "marker", "X", "b", "c"], res.lines.to!string);
     assert(res.matched.matchedLines == 1, res.matched.matchedLines.to!string);
 }
 
+@("byLine insert modes ignore an explicit count")
 unittest {
-    // === byLine insert modes also ignore an explicit count ===
     string[] fileLines = ["a", "b", "c"];
     auto res = editFileUnifiedMemory(fileLines, EditMode.insert_after, "X",
             startLine: 2, count: 3);
@@ -1731,10 +1749,8 @@ unittest {
     assert(res.matched.matchedLines == 1);
 }
 
+@("multi-hunk diff preserves the lines between hunks")
 unittest {
-    // Multi-hunk test: lines between hunks must be preserved
-    // This reproduces the bug where fileLineIdx is reset at each hunk,
-    // skipping lines between hunks
     auto content2 = [
         `writeln("Line 1");`, `writeln("Line 2");`, `writeln("Line 3");`,
         `writeln("Line 4");`, `writeln("Line 5");`, `writeln("Line 6");`,
@@ -1770,6 +1786,7 @@ unittest {
     assert(result2.hunksApplied == 2, "Multi-hunk: expected 2 hunks applied");
 }
 
+@("single-hunk diff with context and one replacement applies without warnings")
 unittest {
     // dfmt off
     auto content = [
@@ -1808,6 +1825,7 @@ unittest {
     assert(result.warnings.empty, "correct counts should produce no warnings");
 }
 
+@("single-hunk diff with context and one deletion applies without warnings")
 unittest {
     // dfmt off
     auto content = [
@@ -1844,6 +1862,7 @@ unittest {
     assert(result.warnings.empty, "correct counts should produce no warnings");
 }
 
+@("context-only hunk applies with no changes")
 unittest {
     auto content = ["line1", "line2", "line3",];
 
@@ -1861,8 +1880,8 @@ unittest {
     assert(result.warnings.empty, "correct counts should produce no warnings");
 }
 
+@("deletion-only hunk without context lines applies")
 unittest {
-    // Test: deletion only (no context lines)
     auto content3 = [`Line A`, `Line B`, `Line C`, `Line D`, `Line E`];
     auto diff3 = ["--- old.txt", "+++ new.txt", "@@ -3,1 +2,0 @@", `-Line C`];
     auto result3 = applyDiffMemory(content3, diff3);
@@ -1875,8 +1894,8 @@ unittest {
     assert(result3.warnings.empty, "correct counts should produce no warnings");
 }
 
+@("removal lines past EOF error instead of silently succeeding")
 unittest {
-    // Removal lines past EOF must error instead of silently "succeeding".
     auto content = ["only one line"];
     auto diff = [
         "--- a.txt", "+++ b.txt", "@@ -1,2 +1,0 @@", "-only one line", "-phantom"
@@ -1891,8 +1910,8 @@ unittest {
     assert(threw, "removal past EOF must throw");
 }
 
+@("multiple additions in one hunk apply")
 unittest {
-    // Test: multiple additions in one hunk
     auto content4 = [`A`, `B`, `C`];
     auto diff4 = [
         "--- old.txt", "+++ new.txt", "@@ -1,1 +1,3 @@", `-A`, `+A1`, `+A2`, `+A3`,
@@ -1908,10 +1927,8 @@ unittest {
     assert(result4.warnings.empty, "correct counts should produce no warnings");
 }
 
+@("advisory header counts: old and new mismatches apply with warnings")
 unittest {
-    // Test: hunk header declares 3 old lines, but only 2 removal lines are present.
-    // This simulates an LLM that forgets a context or deletion line.
-    // Header counts are advisory: the diff applies with a warning.
     auto content = ["line1", "line2", "line3", "line4", "line5"];
 
     auto diff = [
@@ -1930,8 +1947,8 @@ unittest {
     assert(res.hunksApplied == 2, "both hunks should be applied");
 }
 
+@("auto-count: declared 5 old lines but body has 6 warns and uses the body count")
 unittest {
-    // Auto-count: header declares 5 old lines but body has 6 → warning, uses body count
     auto content = ["a", "b", "c", "d", "e", "f"];
     auto diff = [
         "--- a.txt", "+++ b.txt", "@@ -1,5 +1,1 @@", "-a", "-b", "-c", "-d", "-e",
@@ -1946,8 +1963,8 @@ unittest {
     assert(res.hunksApplied == 1);
 }
 
+@("auto-count: declared 3 new lines but body has 4 warns and uses the body count")
 unittest {
-    // Auto-count: header declares 3 new lines but body has 4 → warning, uses body count
     auto content = ["a", "b", "c"];
     auto diff = [
         "--- a.txt", "+++ b.txt", "@@ -1,1 +1,3 @@", "-a", "+A1", "+A2", "+A3",
@@ -1964,8 +1981,8 @@ unittest {
     assert(res.hunksApplied == 1);
 }
 
+@("multi-hunk mix of correct and wrong counts applies all hunks with per-hunk warnings")
 unittest {
-    // Multi-hunk: mix of correct and wrong counts — all hunks apply, warnings per hunk
     auto content = ["l1", "l2", "l3", "l4", "l5", "l6", "l7"];
     auto diff = [
         "--- a.txt", "+++ b.txt", "@@ -1,2 +1,1 @@", // wrong: body has 1 old and 2 new
@@ -1989,9 +2006,8 @@ unittest {
     assert(res.hunksApplied == 3, "all hunks should be applied");
 }
 
+@("fuzzy matching tolerates extra leading space in context lines")
 unittest {
-    // Fuzzy matching (default): context line with extra leading space matches
-    // a file line with different indentation.
     auto content = ["    int a = 1;", "    int b = 2;"];
     auto diff = [
         "--- a.txt", "+++ b.txt", "@@ -1,2 +1,2 @@", "  int a = 1;", // diff context has extra leading space vs file line
@@ -2005,8 +2021,8 @@ unittest {
     assert(res.hunksApplied == 1);
 }
 
+@("fuzzy matching tolerates trailing whitespace in context lines")
 unittest {
-    // Fuzzy matching: context line with trailing whitespace matches.
     auto content = ["alpha", "beta", "gamma"];
     auto diff = [
         "--- a.txt", "+++ b.txt", "@@ -1,3 +1,3 @@", " alpha ", // trailing space in diff context line
@@ -2020,9 +2036,8 @@ unittest {
     assert(res.warnings.empty, res.warnings.to!string);
 }
 
+@("fuzzy matching preserves file lines and added lines verbatim")
 unittest {
-    // Fuzzy matching must NOT change what is written: file lines are preserved
-    // verbatim (only the matching is fuzzy). '+' lines are written as-is.
     auto content = ["  original indented", "keep"];
     auto diff = [
         "--- a.txt", "+++ b.txt", "@@ -1,2 +1,3 @@", " original indented", // diff context has 1 space, file has 2
@@ -2037,8 +2052,8 @@ unittest {
             "add line must be written exactly as provided: " ~ res.lines[2]);
 }
 
+@("fuzzy=false rejects whitespace differences in context lines")
 unittest {
-    // fuzzy=false: whitespace difference causes context mismatch error.
     auto content = ["    int a = 1;", "    int b = 2;"];
     auto diff = [
         "--- a.txt", "+++ b.txt", "@@ -1,2 +1,2 @@", "  int a = 1;", // extra leading space vs file line
@@ -2055,8 +2070,8 @@ unittest {
     assert(threw, "fuzzy=false must reject whitespace differences in context lines");
 }
 
+@("fuzzy=false with exact matches applies normally")
 unittest {
-    // fuzzy=false with exact matches still applies normally.
     auto content = ["line1", "line2", "line3"];
     auto diff = [
         "--- a.txt", "+++ b.txt", "@@ -1,3 +1,3 @@", " line1", "-line2", "+LINE2",
@@ -2068,9 +2083,8 @@ unittest {
     assert(res.hunksApplied == 1);
 }
 
+@("default fuzzy matching tolerates indentation drift in a real edit")
 unittest {
-    // Default (fuzzy=true) tolerates whitespace differences in a real edit:
-    // context lines matched fuzzily, replacement applied.
     auto content = ["void foo() {", "    bar(1);", "    bar(2);", "}"];
     auto diff = [
         "--- a.c", "+++ b.c", "@@ -1,4 +1,4 @@", " void foo() {",
@@ -2082,8 +2096,8 @@ unittest {
     assert(res.warnings.empty, res.warnings.to!string);
 }
 
+@("integration: editFile byLine replace writes the file and returns match metadata")
 unittest {
-    // Integration test: editFile byLine - replace mode with metadata
     auto ctx = makeTestContext("edit_byline_replace");
     scope (exit)
         ctx.teardown;
@@ -2105,8 +2119,8 @@ unittest {
     assert(content == "a\nX\nY\nd\ne\n", content);
 }
 
+@("integration: editFile byMarker replace rewrites the marker line")
 unittest {
-    // Integration test: editFile byMarker - replace mode (single-line content)
     auto ctx = makeTestContext("edit_marker_replace");
     scope (exit)
         ctx.teardown;
@@ -2121,8 +2135,8 @@ unittest {
     assert(content == "line1\nreplaced\nline3\n", content);
 }
 
+@("integration: editFile byMarker remove deletes the marker line")
 unittest {
-    // Integration test: editFile byMarker - remove mode
     auto ctx = makeTestContext("edit_marker_remove");
     scope (exit)
         ctx.teardown;
@@ -2137,8 +2151,8 @@ unittest {
     assert(content == "line1\nline3\n", content);
 }
 
+@("integration: editFile byMarker insert_before inserts before the marker line")
 unittest {
-    // Integration test: editFile byMarker - insert_before mode
     auto ctx = makeTestContext("edit_marker_insertbefore");
     scope (exit)
         ctx.teardown;
@@ -2153,8 +2167,8 @@ unittest {
     assert(content == "line1\ninserted\nhello world\nline3\n", content);
 }
 
+@("integration: editFile byMarker insert_after inserts after the marker line")
 unittest {
-    // Integration test: editFile byMarker - insert_after mode (alias for append)
     auto ctx = makeTestContext("edit_marker_insertafter");
     scope (exit)
         ctx.teardown;
@@ -2169,9 +2183,8 @@ unittest {
     assert(content == "line1\nhello world\ninserted\nline3\n", content);
 }
 
+@("integration: editFile byMarker auto-count replaces the marker plus following lines")
 unittest {
-    // Integration test: editFile byMarker - auto-count with multi-line content:
-    // 3-line content replaces the marker line plus the next 2 lines.
     auto ctx = makeTestContext("edit_marker_autocount");
     scope (exit)
         ctx.teardown;
@@ -2189,9 +2202,8 @@ unittest {
     assert(content == "line1\nnewA\nnewB\nnewC\nline5\n", content);
 }
 
+@("integration: editFile byMarker explicit count=1 replaces only the marker line")
 unittest {
-    // Integration test: editFile byMarker - explicit count=1 keeps the marker
-    // line as the only replaced line even with multi-line content.
     auto ctx = makeTestContext("edit_marker_count1");
     scope (exit)
         ctx.teardown;
@@ -2206,9 +2218,8 @@ unittest {
     assert(content == "line1\nnewA\nnewB\nnewC\nline3\n", content);
 }
 
+@("integration: editFile byMarker auto-count past EOF fails with a clear error")
 unittest {
-    // Integration test: editFile byMarker - auto-count exceeding file length
-    // must fail with a clear error (the old tool silently misbehaved here).
     auto ctx = makeTestContext("edit_marker_autocount_oob");
     scope (exit)
         ctx.teardown;
@@ -2221,8 +2232,8 @@ unittest {
     assert(result.msg.canFind("exceeds file length"), result.msg);
 }
 
+@("integration: editFile byMarker not found returns a failure JSON with diagnostic")
 unittest {
-    // Integration test: editFile byMarker - error: marker not found with diagnostic
     auto ctx = makeTestContext("edit_marker_notfound");
     scope (exit)
         ctx.teardown;
@@ -2239,8 +2250,8 @@ unittest {
     assert(json["diagnostic"]["searchedLines"].integer == 2, result.msg);
 }
 
+@("integration: editFile empty marker is a targeting error")
 unittest {
-    // Integration test: editFile - error: empty marker means no targeting
     auto ctx = makeTestContext("edit_marker_empty");
     scope (exit)
         ctx.teardown;
@@ -2253,8 +2264,8 @@ unittest {
     assert(result.msg.canFind("targeting"), result.msg);
 }
 
+@("integration: editFile ambiguous targeting is an error")
 unittest {
-    // Integration test: editFile - error: ambiguous targeting
     auto ctx = makeTestContext("edit_ambiguous");
     scope (exit)
         ctx.teardown;
@@ -2267,8 +2278,8 @@ unittest {
     assert(result.msg.canFind("ambiguous"), result.msg);
 }
 
+@("integration: editFile byContent replace rewrites the first matching block only")
 unittest {
-    // Integration test: editFile byContent - single line replace (first match only)
     auto ctx = makeTestContext("edit_content_single");
     scope (exit)
         ctx.teardown;
@@ -2289,8 +2300,8 @@ unittest {
     assert(!content.canFind("function foo()"), content);
 }
 
+@("integration: editFile byContent matches through trimmed equality across indentation")
 unittest {
-    // Integration test: editFile byContent - trimmed equality (whitespace tolerance)
     auto ctx = makeTestContext("edit_content_trimmed");
     scope (exit)
         ctx.teardown;
@@ -2307,8 +2318,8 @@ unittest {
     assert(content.canFind("int x = 100"), content);
 }
 
+@("integration: editFile byContent not found returns a failure JSON with diagnostic")
 unittest {
-    // Integration test: editFile byContent - error: search block not found
     auto ctx = makeTestContext("edit_content_notfound");
     scope (exit)
         ctx.teardown;
@@ -2325,8 +2336,8 @@ unittest {
     assert(json["diagnostic"]["searchLines"].array.length == 1, result.msg);
 }
 
+@("integration: editFile empty searchContent is a targeting error")
 unittest {
-    // Integration test: editFile - error: empty searchContent means no targeting
     auto ctx = makeTestContext("edit_content_empty");
     scope (exit)
         ctx.teardown;
@@ -2339,8 +2350,8 @@ unittest {
     assert(result.msg.canFind("targeting"), result.msg);
 }
 
+@("integration: editFile byContent replaceAll rewrites every occurrence")
 unittest {
-    // Integration test: editFile byContent replaceAll - multiple replacements
     auto ctx = makeTestContext("edit_content_all");
     scope (exit)
         ctx.teardown;
@@ -2359,8 +2370,8 @@ unittest {
     assert(content == "replaced\nbar\nreplaced\nbaz\nreplaced\n", content);
 }
 
+@("integration: editFile byMarker replaceAll rewrites every marker line")
 unittest {
-    // Integration test: editFile byMarker replaceAll - each marker line replaced
     auto ctx = makeTestContext("edit_marker_all");
     scope (exit)
         ctx.teardown;
@@ -2378,8 +2389,8 @@ unittest {
     assert(content == "a\nX\nb\nX\nc\n", content);
 }
 
+@("integration: editFile byContent replaceAll with zero matches is an error")
 unittest {
-    // Integration test: editFile byContent replaceAll - error: zero matches
     auto ctx = makeTestContext("edit_content_all_zero");
     scope (exit)
         ctx.teardown;
@@ -2392,8 +2403,8 @@ unittest {
     assert(result.msg.canFind("not found"), result.msg);
 }
 
+@("integration: editFile replaceAll with byLine is not supported")
 unittest {
-    // Integration test: editFile replaceAll with byLine - not supported
     auto ctx = makeTestContext("edit_byline_all");
     scope (exit)
         ctx.teardown;
@@ -2406,8 +2417,8 @@ unittest {
     assert(result.msg.canFind("replaceAll"), result.msg);
 }
 
+@("integration: editFile dryRun leaves the file untouched and returns the preview")
 unittest {
-    // Integration test: editFile dryRun - does NOT modify file, returns preview
     auto ctx = makeTestContext("edit_dryrun");
     scope (exit)
         ctx.teardown;
@@ -2428,9 +2439,8 @@ unittest {
     assert(json["matchedAt"].integer == 2, result.msg);
 }
 
+@("integration: editFile dryRun with multi-line content previews all inserted lines")
 unittest {
-    // Integration test: editFile dryRun with multi-line content and explicit
-    // count=1 - preview shows all inserted lines, file untouched.
     auto ctx = makeTestContext("edit_dryrun_fields");
     scope (exit)
         ctx.teardown;
@@ -2450,8 +2460,8 @@ unittest {
     assert(content == "line1\nhello world\nline3\n", content);
 }
 
+@("integration: editFile byLine dryRun previews without modifying the file")
 unittest {
-    // Integration test: editFile byLine dryRun - preview without modifying file
     auto ctx = makeTestContext("edit_byline_dryrun");
     scope (exit)
         ctx.teardown;
@@ -2469,8 +2479,8 @@ unittest {
     assert(content == "a\nb\nc\n", content);
 }
 
+@("integration: editFile byLine append inserts after the line")
 unittest {
-    // Integration test: editFile byLine append - content added after the line
     auto ctx = makeTestContext("edit_byline_append");
     scope (exit)
         ctx.teardown;
@@ -2485,8 +2495,8 @@ unittest {
     assert(content == "a\nb\nX\nc\n", content);
 }
 
+@("integration: editFile byContent explicit count extends the replaced range")
 unittest {
-    // Integration test: editFile byContent with explicit count extends the range
     auto ctx = makeTestContext("edit_content_count");
     scope (exit)
         ctx.teardown;
@@ -2504,8 +2514,8 @@ unittest {
     assert(content == "1\nX\n5\n", content);
 }
 
+@("integration: matchIndex=2 replaces the second occurrence")
 unittest {
-    // Integration test: matchIndex=2 targets the SECOND occurrence (byMarker)
     auto ctx = makeTestContext("edit_matchindex");
     scope (exit)
         ctx.teardown;
@@ -2523,8 +2533,9 @@ unittest {
     assert(content == "a\nx\n", content);
 }
 
+@(
+        "integration: matchIndex out of range reports the occurrence count with diagnostic and suggestion")
 unittest {
-    // Integration test: matchIndex OOB reports the actual occurrence count
     auto ctx = makeTestContext("edit_matchindex_oob");
     scope (exit)
         ctx.teardown;
@@ -2544,9 +2555,8 @@ unittest {
     assert(json["suggestion"].type == JSONType.string, result.msg);
 }
 
+@("integration: byContent matchIndex out of range reports the occurrence count in the JSON error")
 unittest {
-    // Integration test: matchIndex OOB with byContent reports the actual
-    // occurrence count in the tool-level JSON error.
     auto ctx = makeTestContext("edit_matchindex_content_oob");
     scope (exit)
         ctx.teardown;
@@ -2564,8 +2574,8 @@ unittest {
     assert(json["suggestion"].type == JSONType.string, result.msg);
 }
 
+@("integration: matchIndex greater than 1 with replaceAll is rejected")
 unittest {
-    // Integration test: matchIndex > 1 with replaceAll is rejected
     auto ctx = makeTestContext("edit_matchindex_replaceall");
     scope (exit)
         ctx.teardown;
@@ -2578,8 +2588,8 @@ unittest {
     assert(result.msg.canFind("matchIndex") && result.msg.canFind("replaceAll"), result.msg);
 }
 
+@("integration: matchIndex=2 replaces the second block with byContent")
 unittest {
-    // Integration test: matchIndex=2 targets the second block (byContent)
     auto ctx = makeTestContext("edit_matchindex_content");
     scope (exit)
         ctx.teardown;
@@ -2597,8 +2607,8 @@ unittest {
     assert(content == "foo\nbar\nX\nend\n", content);
 }
 
+@("integration: matchIndex is ignored with byLine targeting")
 unittest {
-    // Integration test: matchIndex is ignored with byLine targeting
     auto ctx = makeTestContext("edit_matchindex_bline");
     scope (exit)
         ctx.teardown;
@@ -2616,8 +2626,8 @@ unittest {
     assert(content == "a\nx\nc\n", content);
 }
 
+@("integration: byMarker targets the first of duplicate markers")
 unittest {
-    // Integration test: byMarker targets the FIRST of duplicate markers
     auto ctx = makeTestContext("edit_marker_duplicates");
     scope (exit)
         ctx.teardown;
@@ -2635,9 +2645,8 @@ unittest {
     assert(content == "x\nX\nmarker\nz\n", content);
 }
 
+@("integration: empty file byLine append creates content preserving the no-trailing-newline state")
 unittest {
-    // Integration test: empty file - byLine append creates content and
-    // preserves the original no-trailing-newline state.
     auto ctx = makeTestContext("edit_empty_append");
     scope (exit)
         ctx.teardown;
@@ -2652,8 +2661,8 @@ unittest {
     assert(content == "a\nb", content);
 }
 
+@("integration: single-line file byLine replace works")
 unittest {
-    // Integration test: single-line file - replace
     auto ctx = makeTestContext("edit_single_line");
     scope (exit)
         ctx.teardown;
@@ -2668,9 +2677,8 @@ unittest {
     assert(content == "X\n", content);
 }
 
+@("integration: trailing-newline state is preserved and the dryRun preview matches exact bytes")
 unittest {
-    // Integration test: trailing-newline state preserved; dryRun preview
-    // matches the exact bytes that would be written.
     auto ctx = makeTestContext("edit_no_trailing_nl");
     scope (exit)
         ctx.teardown;
@@ -2690,8 +2698,8 @@ unittest {
     assert(content == "a\nX", content);
 }
 
+@("integration: byContent append inserts after the whole matched block")
 unittest {
-    // Integration test: byContent append inserts after the whole matched block
     auto ctx = makeTestContext("edit_content_append");
     scope (exit)
         ctx.teardown;
@@ -2706,9 +2714,8 @@ unittest {
     assert(content == "a\nfoo\nbar\nX\nb\n", content);
 }
 
+@("integration: append with no targeting appends at the end preserving the trailing newline")
 unittest {
-    // Integration test: append with no targeting appends at the end of the
-    // file and preserves the file's trailing newline.
     auto ctx = makeTestContext("edit_append_no_targeting");
     scope (exit)
         ctx.teardown;
@@ -2768,8 +2775,8 @@ unittest {
     assert(json["linesChanged"].integer == 0, result.msg);
 }
 
+@("integration: byContent replaceAll with an explicit count is rejected")
 unittest {
-    // Integration test: byContent replaceAll with explicit count is rejected
     auto ctx = makeTestContext("edit_content_all_count");
     scope (exit)
         ctx.teardown;
@@ -2782,8 +2789,8 @@ unittest {
     assert(result.msg.canFind("count"), result.msg);
 }
 
+@("integration: matchIndex 0 is invalid")
 unittest {
-    // Integration test: matchIndex 0 is invalid
     auto ctx = makeTestContext("edit_matchindex_zero");
     scope (exit)
         ctx.teardown;
@@ -2796,10 +2803,9 @@ unittest {
     assert(result.msg.canFind("matchIndex"), result.msg);
 }
 
+@(
+        "integration: applyDiff fuzzy matching tolerates whitespace in dryRun, file unmodified, preview returned")
 unittest {
-    // Integration test: applyDiff fuzzy matching with dryRun — whitespace
-    // differences in context lines are tolerated (default fuzzy=true),
-    // file is not modified, preview shows the result.
     auto ctx = makeTestContext("difffuzzy");
     scope (exit)
         ctx.teardown;
@@ -2823,9 +2829,9 @@ unittest {
     assert(json["hunksApplied"].integer == 1, json.toString);
 }
 
+@(
+        "integration: applyDiff fuzzy=false fails a whitespace-differing context line with Context mismatch")
 unittest {
-    // Integration test: applyDiff fuzzy=false — whitespace difference in a
-    // context line fails with a diagnostic error.
     auto ctx = makeTestContext("difffuzzy_exact");
     scope (exit)
         ctx.teardown;
@@ -2839,8 +2845,9 @@ unittest {
     assert(result.msg.canFind("Context mismatch"), result.msg);
 }
 
+@(
+        "integration: applyDiff dryRun does not modify the file, preview shows the edit, linesChanged is 0")
 unittest {
-    // Integration test: applyDiffDryRun - does NOT modify file
     auto ctx = makeTestContext("diffdryrun");
     scope (exit)
         ctx.teardown;
@@ -2865,8 +2872,8 @@ unittest {
     assert(json["linesChanged"].integer == 0, "expected 0 lines changed");
 }
 
+@("integration: applyDiff with wrong hunk counts applies with old-lines and new-lines warnings")
 unittest {
-    // Integration test: applyDiff with wrong hunk counts - applies with warnings
     auto ctx = makeTestContext("diffwarn");
     scope (exit)
         ctx.teardown;
@@ -2890,8 +2897,8 @@ unittest {
     assert(content == "line1a\nline1b\nline1c\nline3\nline4\n", content);
 }
 
+@("integration: applyDiff with an empty diff errors")
 unittest {
-    // Integration test: applyDiffDryRun - error: empty diff
     auto ctx = makeTestContext("diffdryrun_empty");
     scope (exit)
         ctx.teardown;
@@ -2903,8 +2910,8 @@ unittest {
     assert(result.msg.canFind("empty"), result.msg);
 }
 
+@("integration: workarea confinement rejects an absolute path")
 unittest {
-    // Integration test: workarea confinement - absolute path rejected
     auto ctx = makeTestContext("workarea");
     scope (exit)
         ctx.teardown;
@@ -2917,8 +2924,8 @@ unittest {
     assert(result.msg.canFind("absolute"), result.msg);
 }
 
+@("integration: workarea confinement rejects path traversal")
 unittest {
-    // Integration test: workarea confinement - path traversal rejected
     auto ctx = makeTestContext("workarea_traversal");
     scope (exit)
         ctx.teardown;
@@ -2931,8 +2938,8 @@ unittest {
     assert(result.msg.canFind("workarea") || result.msg.canFind("outside"), result.msg);
 }
 
+@("integration: editFile with an invalid mode errors")
 unittest {
-    // Integration test: editFile - invalid mode
     auto ctx = makeTestContext("invalidmode");
     scope (exit)
         ctx.teardown;
@@ -2945,8 +2952,8 @@ unittest {
     assert(result.msg.canFind("invalid"), result.msg);
 }
 
+@("integration: editFile with whitespace-only searchContent errors")
 unittest {
-    // Integration test: editFile - whitespace-only search content
     auto ctx = makeTestContext("whitespaceonly");
     scope (exit)
         ctx.teardown;
@@ -2959,8 +2966,8 @@ unittest {
     assert(result.msg.canFind("non-empty"), result.msg);
 }
 
+@("integration: editFile remove mode with non-empty content errors")
 unittest {
-    // Integration test: editFile - remove mode with non-empty content
     auto ctx = makeTestContext("remove_content");
     scope (exit)
         ctx.teardown;
@@ -2973,8 +2980,8 @@ unittest {
     assert(result.msg.canFind("remove"), result.msg);
 }
 
+@("integration: editFile with a nonexistent path errors")
 unittest {
-    // Integration test: editFile - missing path (file does not exist)
     auto ctx = makeTestContext("missing_path");
     scope (exit)
         ctx.teardown;
@@ -2984,8 +2991,8 @@ unittest {
     assert(!result.success);
 }
 
+@("integration: editFile scope finds a byMarker within the scope")
 unittest {
-    // Integration test: editFile scope - byMarker found within scope
     auto ctx = makeTestContext("scope_marker_in");
     scope (exit)
         ctx.teardown;
@@ -3003,9 +3010,8 @@ unittest {
     assert(content == "a\nX\nb\nmarker\nc\n", content);
 }
 
+@("integration: editFile scope not-found outside the scope mentions the scope in the error and diagnostic, file untouched")
 unittest {
-    // Integration test: editFile scope - marker outside scope errors with scope
-    // mention, diagnostic includes the scope, file untouched
     auto ctx = makeTestContext("scope_marker_out");
     scope (exit)
         ctx.teardown;
@@ -3026,8 +3032,8 @@ unittest {
     assert(content == "a\nmarker\nb\n", content);
 }
 
+@("integration: editFile scope replaces the in-scope byContent block")
 unittest {
-    // Integration test: editFile scope - byContent with scopeStart/scopeEnd
     auto ctx = makeTestContext("scope_content");
     scope (exit)
         ctx.teardown;
@@ -3045,8 +3051,8 @@ unittest {
     assert(content == "foo\nbar\nX\nend\n", content);
 }
 
+@("integration: editFile scope is ignored for byLine")
 unittest {
-    // Integration test: editFile scope - byLine ignores scope
     auto ctx = makeTestContext("scope_byline_ignored");
     scope (exit)
         ctx.teardown;
@@ -3061,8 +3067,8 @@ unittest {
     assert(content == "a\nX\nc\n", content);
 }
 
+@("integration: editFile scope inverted range is a validation error")
 unittest {
-    // Integration test: editFile scope - validation error for inverted range
     auto ctx = makeTestContext("scope_invalid");
     scope (exit)
         ctx.teardown;
@@ -3075,9 +3081,8 @@ unittest {
     assert(result.msg.canFind("scopeStart"), result.msg);
 }
 
+@("integration: editFile scope plus dryRun previews without modifying the file")
 unittest {
-    // Integration test: editFile scope + dryRun - preview limited to scope,
-    // file untouched
     auto ctx = makeTestContext("scope_dryrun");
     scope (exit)
         ctx.teardown;
@@ -3097,7 +3102,7 @@ unittest {
     assert(content == original, content); // dryRun never writes
 }
 
-// === verifyContent match — edit proceeds normally ===
+@("byLine with verifyContent match: the edit proceeds and linesChanged reflects the replacement")
 unittest {
     string[] fileLines = ["header", "line1", "line2", "line3", "footer"];
     auto outcome = executeByLine(fileLines, EditMode.replace, "new", 2, 2, false, "line1\nline2");
@@ -3105,7 +3110,7 @@ unittest {
     assert(outcome.linesChanged == -1); // 1 content line replaces 2 lines
 }
 
-// === verifyContent mismatch — throws with actual content ===
+@("byLine with verifyContent mismatch throws with the actual and expected content in the error")
 unittest {
     string[] fileLines = ["header", "line1", "line2", "line3", "footer"];
     bool threw = false;
@@ -3120,7 +3125,7 @@ unittest {
     assert(threw);
 }
 
-// === verifyContent with startLine past end of file ===
+@("byLine verifyContent with startLine past the file end throws beyond end of file")
 unittest {
     string[] fileLines = ["header"];
     bool threw = false;
@@ -3153,9 +3158,8 @@ unittest {
     assert(outcome4.linesChanged == 2);
 }
 
-// === empty-line symmetric matching — file has blank line, search does not ===
+@("empty-line symmetric matching: a file blank line is skipped when absent from the search")
 unittest {
-    // File has empty line between "foo" and "bar", search skips it
     string[] fileLines = ["foo", "", "bar"];
     string[] searchLines = ["foo", "bar"];
     auto result = findCodeBlock(fileLines, searchLines);
@@ -3164,9 +3168,8 @@ unittest {
     assert(result.end == 3); // range includes the empty line
 }
 
-// === empty-line symmetric matching — search has blank line, file does not ===
+@("empty-line symmetric matching: a search blank line is skipped when absent from the file")
 unittest {
-    // Search has empty line, file doesn't — empty search line is skipped
     string[] fileLines = ["foo", "bar"];
     string[] searchLines = ["foo", "", "bar"];
     auto result = findCodeBlock(fileLines, searchLines);
@@ -3175,7 +3178,7 @@ unittest {
     assert(result.end == 2);
 }
 
-// === empty-line symmetric matching — both have blank lines ===
+@("empty-line symmetric matching: blank lines in both match")
 unittest {
     string[] fileLines = ["foo", "", "bar"];
     string[] searchLines = ["foo", "", "bar"];
@@ -3186,8 +3189,8 @@ unittest {
 }
 
 // === empty-line symmetric matching — asymmetric blanks ===
+@("empty-line symmetric matching: asymmetric blank lines are all skipped")
 unittest {
-    // Two empty lines in file, one in search — all skipped
     string[] fileLines = ["foo", "", "", "bar"];
     string[] searchLines = ["foo", "", "bar"];
     auto result = findCodeBlock(fileLines, searchLines);
@@ -3196,16 +3199,15 @@ unittest {
     assert(result.end == 4); // range includes both empty lines
 }
 
-// === empty-line symmetric matching — non-matching file line after skipped empties ===
+@("empty-line symmetric matching: a non-empty mismatch after skipped blanks fails")
 unittest {
-    // The second non-empty file line doesn't match search — should fail
     string[] fileLines = ["foo", "", "wrong", "bar"];
     string[] searchLines = ["foo", "bar"];
     auto result = findCodeBlock(fileLines, searchLines);
     assert(!result.found); // "wrong" != "bar" — no false match
 }
 
-// === multi-line marker success — 3-line marker matches consecutive file lines ===
+@("multi-line marker success: a 2-line marker is replaced with auto-count and matchedLines 2")
 unittest {
     string[] fileLines = [
         "header", "void setTimer(int ms) {", "    // TODO: implement",
@@ -3224,10 +3226,9 @@ unittest {
     assert(outcome.linesChanged == 1); // 3 content lines replace 2 matched lines
 }
 
-// === multi-line marker partial fail — first line found, second line doesn't match ===
+@(
+        "multi-line marker partial fail: a mismatching second line continues the search and ends not found")
 unittest {
-    // First marker line "foo" matches at index 1; second marker line "wrong" does
-    // NOT match "bar" → continues search. Eventually no full match is found.
     string[] fileLines = ["a", "foo", "bar", "foo", "baz", "end"];
     bool threw = false;
     try {
@@ -3239,7 +3240,7 @@ unittest {
     assert(threw);
 }
 
-// === multi-line marker not found — first anchor line never found ===
+@("multi-line marker not found: the first anchor line is never found")
 unittest {
     string[] fileLines = ["a", "b", "c"];
     bool threw = false;
@@ -3252,7 +3253,7 @@ unittest {
     assert(threw);
 }
 
-// === multi-line marker with replaceAll — only full-anchor positions replaced ===
+@("multi-line marker replaceAll replaces only the full-anchor positions")
 unittest {
     // Three "foo" lines, but only two have the matching second line "bar".
     // The middle "foo" has "baz" as the next line, so it is skipped.
@@ -3263,7 +3264,7 @@ unittest {
     assert(outcome.operations == 2);
 }
 
-// === multi-line marker with scope — search limited to scope, anchor inside ===
+@("multi-line marker with scope limits the anchor search to the scope")
 unittest {
     // "foo\nbar" appears at lines 1-2 and 4-5. scopeStart=3, scopeEnd=5
     // restricts the anchor search to [2..5) (0-based), so only the second
@@ -3275,7 +3276,7 @@ unittest {
     assert(outcome.matched.matchedAt == 4);
 }
 
-// === multi-line marker > 20 lines — rejected ===
+@("multi-line marker over 20 lines is rejected")
 unittest {
     import std.algorithm : map;
     import std.array : join;
@@ -3294,9 +3295,8 @@ unittest {
     assert(threw);
 }
 
-// === auto-count note — note describes marker-line auto-count ===
+@("auto-count note describes the marker line count auto-count")
 unittest {
-    // Multi-line marker: count auto-derived from marker line count (2 lines)
     string[] fileLines = ["a", "step1", "    // details", "b"];
     auto outcome = editFileUnifiedMemory(fileLines, EditMode.replace,
             "new line", marker: "step1\n    // details");
@@ -3305,9 +3305,8 @@ unittest {
     assert(outcome.matched.matchedLines == 2);
 }
 
-// === auto-count note — note describes content-line auto-count ===
+@("auto-count note describes the content line count auto-count")
 unittest {
-    // Single-line marker with 2-line content: count auto-derived from content
     string[] fileLines = ["a", "marker", "old1", "old2", "b"];
     auto outcome = editFileUnifiedMemory(fileLines, EditMode.replace,
             "new1\nnew2", marker: "marker");
@@ -3316,7 +3315,7 @@ unittest {
     assert(outcome.matched.matchedLines == 2);
 }
 
-// === byLine count missing — error message includes suggestion ===
+@("byLine without count errors with a suggestion to use byMarker or byContent")
 unittest {
     bool threw = false;
     try {
@@ -3331,7 +3330,7 @@ unittest {
     assert(threw);
 }
 
-// === multi-line marker with explicit count — autoCountUsed is false ===
+@("multi-line marker with an explicit count has autoCountUsed false and no note")
 unittest {
     string[] fileLines = ["a", "step1", "    // details", "extra", "b"];
     auto outcome = editFileUnifiedMemory(fileLines, EditMode.replace, "X\nY",
@@ -3341,14 +3340,12 @@ unittest {
     assert(outcome.matched.matchedLines == 3);
 }
 
-// === Bug 4: session-scoped file dirtiness tracking ===
-//
 // Direct state-machine tests below use TestFileContext (which mixes in
 // FileDirtyTracking); the end-to-end tests drive the tools themselves so the
 // observable behavior (dirty enforcement, error message, clearing) is covered.
 
+@("a fresh context starts with empty dirty-tracking state")
 unittest {
-    // A fresh context starts with empty dirty-tracking state.
     auto ctx = makeTestContext("dirty_fresh_empty");
     scope (exit)
         ctx.teardown;
@@ -3360,9 +3357,8 @@ unittest {
     assert(ctx.observedHash(p) == -1, "fresh context: no snapshot recorded");
 }
 
+@("dirty tracking keys are canonical AbsolutePath, so relative and ./ spellings share one entry")
 unittest {
-    // The tracking key is the canonical AbsolutePath, so "./a.md" and
-    // "a.md" share one entry.
     auto ctx = makeTestContext("dirty_canonical_key");
     scope (exit)
         ctx.teardown;
@@ -3384,9 +3380,8 @@ unittest {
     assert(ctx.isDirty(viaRelative), "both spellings share one dirty entry");
 }
 
+@("markDirty flags the path and records the snapshot, observe clears the flag and refreshes it")
 unittest {
-    // markDirty/observe semantics: markDirty flags the path and records the
-    // snapshot; observe clears the flag and refreshes the snapshot.
     auto ctx = makeTestContext("dirty_mark_observe");
     scope (exit)
         ctx.teardown;
@@ -3407,6 +3402,7 @@ unittest {
     assert(ctx.observedHash(p) == computeContentHash("line1\n"), "observe records the snapshot");
 }
 
+@("dirty eviction drops only the oldest clean entries and never evicts dirty entries")
 unittest {
     // The tracked state is bounded; eviction drops the OLDEST CLEAN
     // entries only, and dirty entries are never evicted.
@@ -3455,10 +3451,9 @@ unittest {
     }
 }
 
+@(
+        "end-to-end: a successful edit marks dirty, a stale byLine fails with re-read guidance, readFile clears it")
 unittest {
-    // End-to-end: a successful edit marks the path dirty; a byLine edit on
-    // stale numbers fails with the re-read guidance; readFile clears the flag
-    // and refreshes the snapshot so the retry succeeds.
     import llm.tool_call.io.functions : ReadFileParams, readFile;
 
     auto ctx = makeTestContext("dirty_stale_byline");
@@ -3484,9 +3479,8 @@ unittest {
     assert(retry.success, retry.msg);
 }
 
+@("end-to-end: a dryRun does not mark dirty, so the following byLine succeeds")
 unittest {
-    // End-to-end: a dryRun edit does NOT mark the path dirty, so a
-    // following byLine edit with fresh numbers succeeds.
     auto ctx = makeTestContext("dirty_dryrun_no_mark");
     scope (exit)
         ctx.teardown;
@@ -3502,9 +3496,8 @@ unittest {
     assert(after.success, after.msg);
 }
 
+@("end-to-end: a failed edit does not mark dirty, so the following byLine succeeds")
 unittest {
-    // End-to-end: a failed edit does NOT mark the path dirty, so a
-    // following byLine edit with fresh numbers succeeds.
     auto ctx = makeTestContext("dirty_failed_no_mark");
     scope (exit)
         ctx.teardown;
@@ -3520,10 +3513,9 @@ unittest {
     assert(after.success, after.msg);
 }
 
+@(
+        "end-to-end: an external write is caught by the snapshot cross-check, readFile refresh lets the retry succeed")
 unittest {
-    // A change the context did not make (external write) is caught by the
-    // best-effort snapshot cross-check; readFile refreshes the snapshot so
-    // the retry succeeds.
     import std.file : write;
 
     import llm.tool_call.io.functions : ReadFileParams, readFile;
@@ -3556,9 +3548,9 @@ unittest {
     assert(retry.success, retry.msg);
 }
 
+@(
+        "a file removed outside the tools is not flagged stale, the existence check reports the real problem")
 unittest {
-    // A file removed outside the tools is not flagged stale; the existence
-    // check reports the real problem instead.
     import std.file : remove;
 
     import llm.tool_call.utility : pathToWorkarea;
@@ -3579,7 +3571,7 @@ unittest {
     assert(!result.msg.canFind("stale"), result.msg);
 }
 
+@("classifyEditError maps the stale byLine target message to stale_byline_target")
 unittest {
-    // Bug 4: the stale-byLine-target failure has its own error class.
     assert(classifyEditError("Path 'a.md' was modified by a successful edit earlier in this session; line numbers may be stale — re-read it with readFile, then retry with fresh startLine/count, or switch to byMarker/byContent targeting.") == "stale_byline_target");
 }

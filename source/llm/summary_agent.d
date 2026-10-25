@@ -1093,6 +1093,8 @@ version (unittest) {
 // turnEnd (NOT the live currentTurnId) and carries the turn range in
 // save_data for the router. This keeps the ordering intact: the summary
 // sits at index 1 before the kept X/Y tail, whose ids are >= turnEnd.
+@(
+        "buildMergedSummary stamps the summary with the slice turnEnd and carries the turn range in saveData")
 unittest {
     auto agent = makeTestSummaryAgent();
     auto summary = agent.buildMergedSummary("- summary line", 3, 7);
@@ -1107,6 +1109,7 @@ unittest {
 // replacementFor copies the original's saveData and turnId onto the
 // replacement Message; the ToolMessage original exercises the type erasure
 // (ToolMessage -> Message) documented as a no-behavior-change boundary.
+@("replacementFor copies the original saveData and turnId onto the replacement Message")
 unittest {
     auto agent = makeTestSummaryAgent();
     auto tm = ToolMessage("think", JSONValue([makeToolCall("toolB", "call1")]),
@@ -1130,6 +1133,7 @@ unittest {
 // the kept Y messages retain their original TurnIDs and the history stays
 // (turn_id, position)-sorted. Payload arrays are .dup'd copies: mutating
 // history after the event does not affect them.
+@("evicting turns fires exactly one checkpoint with the right range, slice, and sessionId, and the payload is a dup copy")
 unittest {
     import std.array : replicate;
 
@@ -1206,6 +1210,7 @@ unittest {
 // floor returns without compressing. (b) A chat whose candidate pool fits X
 // entirely is still rewritten by setHistory but discards nothing, so no
 // checkpoint fires.
+@("compression below the floor or with nothing evicted fires no checkpoint")
 unittest {
     int events = 0;
     auto agent = makeTestSummaryAgent();
@@ -1242,6 +1247,8 @@ unittest {
 // plus the ToolResponses whose call IDs matched. Kept messages retain their
 // original TurnIDs and the partially purged ToolMessage keeps its surviving
 // call.
+@(
+        "a purged-tools compression reports pre-removal copies in evictedPurged and kept messages retain their TurnIDs")
 unittest {
     Chat chat;
     chat.setSystemPrompt("sys");
@@ -1319,6 +1326,8 @@ unittest {
 // unreachable, the original is returned unchanged. Nothing was evicted: no
 // checkpoint may fire and the message must stay byte-identical in history.
 // (~3.5 s of request retry backoff, same as the replacement test.)
+@(
+        "the in-place capture fires only on a real replacement; a borderline message stays verbatim with no checkpoint")
 unittest {
     import std.array : replicate;
 
@@ -1361,6 +1370,8 @@ unittest {
 // the compression floor, compress returns WITHOUT setHistory — the purge was
 // applied only to the local copy, so nothing was actually evicted and no
 // checkpoint fires.
+@(
+        "when the purge empties the chat below the floor, compress returns without setHistory and fires no checkpoint")
 unittest {
     Chat chat;
     chat.setSystemPrompt("sys");
@@ -1384,8 +1395,8 @@ unittest {
     assert(chat.getMessages.length == 5); // untouched by the local purge
 }
 
-// Default path: with no listener registered the checkpoint falls back to
-// a structured trace dump and compression completes normally.
+@(
+        "with no listener registered the checkpoint falls back to the trace dump and compression completes")
 unittest {
     import std.array : replicate;
 
@@ -1414,6 +1425,7 @@ unittest {
 // metadata-loss bug is fixed). The LLM is unreachable (empty URL), so the
 // replacement comes from the truncation path — the request retry backoff
 // (~3.5s) dominates this test's runtime.
+@("an oversized Y message is replaced in place, the original is reported in evictedInPlace, and saveData and turnId survive")
 unittest {
     import std.array : replicate;
 
@@ -1482,6 +1494,7 @@ unittest {
 // (turn_id, position) ordering. Each survivor is a kept copy of a
 // pre-compression message (matched by marker) and must carry the same stamp
 // it had before; the purge must not shift or re-stamp anything.
+@("a purge-tools compression preserves every survivor TurnID and the turn_id position ordering")
 unittest {
     Chat chat;
     chat.setSystemPrompt("sys");
@@ -1592,6 +1605,8 @@ private struct SpikeCheckpointRecord {
 // timestamps non-decreasing, and each payload internally in canonical order.
 // The consumer's dump (counts, summary text, session ids) mirrors the first
 // step an indexer takes.
+@(
+        "one session compressed twice delivers every checkpoint in order with strictly advancing contiguous turn ranges")
 unittest {
     import std.array : replicate;
 
@@ -1723,6 +1738,7 @@ unittest {
 // behind the listener interface, private to this module) with a synthetic
 // checkpoint carrying non-empty summary text and all three evicted arrays.
 // No indexing: the consumer only records what it received.
+@("fireCheckpoint delivers every payload field of a synthetic checkpoint to the consumer intact")
 unittest {
     auto agent = makeTestSummaryAgent();
 
@@ -1773,6 +1789,8 @@ unittest {
 // remaining listeners. The delegate type is non-nothrow precisely so a real
 // throw can be exercised here; fireCheckpoint catches each listener (item 1).
 // The throwing listener is registered first so it fires before the recorder.
+@(
+        "a throwing checkpoint listener is caught and does not break compression or the remaining listeners")
 unittest {
     import std.array : replicate;
 
@@ -1813,6 +1831,8 @@ unittest {
 // the kept tail. Step 4 pulls the call into X (one message past the
 // budget) so the pair is kept together; the final history carries the
 // intact pair and nothing for the balance guard to erase.
+@(
+        "a budget break between a ToolMessage and its response pulls the call into X so the pair stays intact")
 unittest {
     import std.array : replicate;
 
@@ -1861,6 +1881,8 @@ unittest {
 // ToolMessage along: summarizing one side type-erases it into a plain
 // Message, so the partner is erased in place too. Both originals reach the
 // checkpoint as evictedInPlace, and no tool traffic survives.
+@(
+        "an oversized ToolResponse in Y pulls its preceding ToolMessage along and both reach evictedInPlace")
 unittest {
     import std.array : replicate;
 
@@ -1925,6 +1947,8 @@ unittest {
 // split case Step 4 does not cover): the partner = -2 sentinel erases the
 // X-side call in place, so both sides of the pair are erased together and
 // the checkpoint carries both originals.
+@(
+        "an oversized ToolResponse at Y[0] erases its X-side call in place and both originals reach the checkpoint")
 unittest {
     import std.array : replicate;
 

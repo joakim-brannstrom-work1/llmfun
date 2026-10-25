@@ -67,6 +67,8 @@ private AgentStatus modelHandler(ref AgentApp app, string arg) {
     return AgentStatus.active;
 }
 
+@(
+        "bare /model dispatches to the handler to list models, and the three help lines keep their registration order")
 unittest {
     import llm.app_config : UserConfig;
     import std.algorithm.searching : canFind;
@@ -97,6 +99,7 @@ unittest {
     assert(help.indexOf("   /model <index>") < help.indexOf("   /model <name>"));
 }
 
+@("a non-numeric /model arg takes the name-match branch and an out-of-range index takes the error branch without touching the agent")
 unittest {
     // The signed `long idx` makes the name-match branch reachable. A
     // non-numeric arg (e.g. a model name) must take the `selectModelByName`

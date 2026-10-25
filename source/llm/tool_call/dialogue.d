@@ -319,7 +319,7 @@ version (unittest) {
     }
 }
 
-// --- Test: parameter validation rejects bad input without crashing ---
+@("queryDialogueHistory rejects empty queries and invalid session ids explicitly without crashing")
 unittest {
     auto testDir = testArea("param_validation");
     scope (exit)
@@ -359,7 +359,7 @@ unittest {
     assert(!r.success && r.msg.startsWith("error:"), r.msg);
 }
 
-// --- Test: graceful no-history and missing-dependency responses ---
+@("missing history, dialogue index, or RAG each return explicit graceful responses, not crashes")
 unittest {
     auto testDir = testArea("graceful_no_history");
     scope (exit)
@@ -395,7 +395,8 @@ unittest {
     assert(!r.success && r.msg.canFind("RAG not available"), r.msg);
 }
 
-// --- Test: embedder failure on the vector path is an error, not a no-history ---
+@(
+        "an embedder failure on the vector path is an error, and the combined query falls back to the text path")
 unittest {
     auto testDir = testArea("embedder_failure");
     scope (exit)
@@ -423,7 +424,7 @@ unittest {
     assert(r.msg.canFind("5432"), r.msg);
 }
 
-// --- Test: indexed session with no hits reports no matches (not an error) ---
+@("an indexed session with no hits reports a successful search with No matches found")
 unittest {
     auto testDir = testArea("indexed_no_matches");
     scope (exit)
@@ -445,7 +446,7 @@ unittest {
     assert(r.msg.canFind(TestSessionId), r.msg);
 }
 
-// --- Test: unified dispatch over a seeded DB (text-only, vector-only, combined) ---
+@("unified dispatch over a seeded DB works for text-only, vector-only, and combined fusion queries")
 unittest {
     auto testDir = testArea("unified_dispatch");
     scope (exit)
@@ -487,7 +488,7 @@ unittest {
     assert(r.msg.indexOf("turns 10-10") < r.msg.indexOf("turns 1-1"), r.msg);
 }
 
-// --- Test: maxTurnAge windowing (0 and negative mean no filter) ---
+@("maxTurnAge windowing keeps only recent turns, with 0 and negative meaning no filter")
 unittest {
     auto testDir = testArea("max_turn_age");
     scope (exit)
@@ -528,8 +529,8 @@ unittest {
     assert(r.msg.canFind("turns 10-10"), r.msg);
 }
 
-// --- Test: multi-noun FTS recall - every episode containing all exact nouns
-// is returned verbatim ---
+@(
+        "multi-noun FTS recall returns every episode containing all exact nouns verbatim, subset-only episodes excluded")
 unittest {
     auto testDir = testArea("multi_noun_fts_recall");
     scope (exit)
@@ -573,7 +574,7 @@ unittest {
     assert(!r.msg.canFind("turns 20-20"), r.msg);
 }
 
-// --- Test: topK caps the rendered matches AFTER the headroom over-fetch ---
+@("topK caps the rendered matches after the headroom over-fetch, including the default topK of 5")
 unittest {
     auto testDir = testArea("topk_cap");
     scope (exit)
@@ -607,7 +608,7 @@ unittest {
     assert(r.msg.canFind("--- Match 5") && !r.msg.canFind("--- Match 6"), r.msg);
 }
 
-// --- Test: windowed query with older candidates (headroom sanity) ---
+@("windowed queries do not starve under the headroom over-fetch and topK applies within the window")
 unittest {
     auto testDir = testArea("windowed_headroom");
     scope (exit)
@@ -659,7 +660,8 @@ unittest {
             && !r.msg.canFind("turns 8-8"), r.msg);
 }
 
-// --- Test: rendering carries turn range, timestamp, session id, verbatim text ---
+@(
+        "rendering carries the turn range, timestamp, session id, and verbatim text in the exact header shape")
 unittest {
     import std.regex : match, regex;
 
@@ -686,7 +688,7 @@ unittest {
     assert(r.msg.canFind("PostgreSQL default port is 5432."), r.msg);
 }
 
-// --- Test: integration - compression checkpoint -> worker indexing -> tool query ---
+@("integration: a compression checkpoint flows through worker indexing to a successful tool query")
 unittest {
     auto testDir = testArea("integration_checkpoint_index_query");
     scope (exit)
@@ -754,6 +756,7 @@ unittest {
 //     engine error, disjoint from the "error:" form
 //   * embed failure on a session WITH history -> "error:" prefix
 //   * dispose() is idempotent and safe before/after
+@("the tool boundary surface: real compression round trip, empty params, no-history vs error prefix, and idempotent dispose")
 unittest {
     import std.stdio : File;
 
@@ -841,7 +844,8 @@ unittest {
     di.dispose();
 }
 
-// --- the dialogue projection keeps ToolResponse messages out ---
+@(
+        "the dialogue projection keeps ToolResponse messages out, preserving user queries and the final answer")
 unittest {
     auto chat = Chat();
     chat.setSystemPrompt("sys");
@@ -868,7 +872,8 @@ unittest {
     }
 }
 
-// --- Test: tool registration and JSON parameter parsing ---
+@(
+        "queryDialogueHistory is registered exactly once and its JSON params parse with defaults, rejecting unknown keys")
 unittest {
     // Registered exactly once, with a distinct name (no queryBestMatch clash).
     int n = 0;
@@ -905,8 +910,8 @@ unittest {
     assert(!badParams.errorMsg.empty);
 }
 
-// --- Test: cross-session E2E - per-session isolation, explicit targeting,
-// per-DB maxTurn independence ---
+@(
+        "cross-session E2E: per-session isolation, explicit session targeting, and per-DB maxTurn independence")
 unittest {
     auto testDir = testArea("cross_session_e2e");
     scope (exit)

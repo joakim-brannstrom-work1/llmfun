@@ -187,6 +187,8 @@ int compareVersions(string sourceVersion, string destVersion) @safe {
     return 0;
 }
 
+@(
+        "parseSemVer accepts X.Y.Z, partial forms, v/V prefixes, pre-release and build suffixes, and rejects invalid forms")
 unittest {
     // Basic format: X.Y.Z
     auto v1 = parseSemVer("1.2.3");
@@ -265,6 +267,8 @@ unittest {
     assert(!v13.valid);
 }
 
+@(
+        "compareVersions orders newer, older, and equal versions, handling empty and unparseable operands per the contract")
 unittest {
     // Equal versions
     assert(compareVersions("1.0.0", "1.0.0") == 0);

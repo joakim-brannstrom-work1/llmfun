@@ -182,7 +182,7 @@ version (unittest) {
     }
 }
 
-/// Test: getEnvironment returns value for known tag.
+@("getEnvironment returns the backend for a known tag")
 unittest {
     import llm.environment.config : ContainerConfig, EnvironmentConfig, CommandJoinMode;
 
@@ -201,7 +201,7 @@ unittest {
     assert(result.description == "Test sandbox");
 }
 
-/// Test: getEnvironment returns init for unknown tag.
+@("getEnvironment returns init for an unknown tag")
 unittest {
     auto ctx = new MockEnvironmentContext();
 
@@ -210,7 +210,7 @@ unittest {
     assert(result.tag == "");
 }
 
-/// Test: listEnvironments returns all backends.
+@("listEnvironments returns all registered backends")
 unittest {
     import llm.environment.config : ContainerConfig, HostConfig,
         EnvironmentConfig, CommandJoinMode;
@@ -237,7 +237,7 @@ unittest {
     assert(result[1].tag == "native");
 }
 
-/// Test: listEnvironments returns empty array when no backends.
+@("listEnvironments returns an empty array when no backends are registered")
 unittest {
     auto ctx = new MockEnvironmentContext();
 
@@ -246,7 +246,7 @@ unittest {
     assert(result.length == 0);
 }
 
-/// Test: cast from Context to EnvironmentContext succeeds.
+@("a cast from Context to EnvironmentContext succeeds")
 unittest {
     auto ctx = cast(Context) new MockEnvironmentContext();
     auto specific = cast(EnvironmentContext) ctx;
@@ -254,7 +254,7 @@ unittest {
     assert(specific.listEnvironments().length == 0);
 }
 
-/// Test: listEnvironments tool returns JSON with only safe fields.
+@("the listEnvironments tool returns JSON with only the safe fields and no infrastructure fields")
 unittest {
     import llm.environment.config : ContainerConfig, HostConfig,
         EnvironmentConfig, CommandJoinMode;
@@ -304,7 +304,7 @@ unittest {
     assert(json.array[0]["timeoutSeconds"].integer == 60);
 }
 
-/// Test: listEnvironments tool returns empty array when no environments.
+@("the listEnvironments tool returns an empty JSON array when no environments exist")
 unittest {
     import std.json : parseJSON;
 
@@ -317,7 +317,7 @@ unittest {
     assert(json.array.length == 0);
 }
 
-/// Test: listEnvironments tool with single entry.
+@("the listEnvironments tool with a single entry reports its fields")
 unittest {
     import llm.environment.config : ContainerConfig, EnvironmentConfig, CommandJoinMode;
     import std.json : parseJSON;
@@ -341,7 +341,7 @@ unittest {
     assert(json.array[0]["capabilities"].array.length == 0);
 }
 
-/// Test: executeCommand with empty command returns error.
+@("executeCommand with an empty command returns an error")
 unittest {
     auto ctx = new MockEnvironmentContext();
     ctx.workAreaPath = AbsolutePath("/workarea");
@@ -353,7 +353,7 @@ unittest {
     assert(result.msg == "error: command must not be empty.");
 }
 
-/// Test: executeCommand with unknown tag returns error.
+@("executeCommand with an unknown tag returns a not-found error")
 unittest {
     auto ctx = new MockEnvironmentContext();
     ctx.workAreaPath = AbsolutePath("/workarea");
@@ -367,7 +367,7 @@ unittest {
             == "error: Environment 'nonexistent' not found. Call listEnvironments() to see available options.");
 }
 
-/// Test: executeCommand with empty tag uses default environment.
+@("executeCommand with an empty tag uses the default environment")
 unittest {
     import llm.environment.config : ContainerConfig, EnvironmentConfig, CommandJoinMode;
     import std.algorithm : canFind;
@@ -395,7 +395,7 @@ unittest {
     }
 }
 
-/// Test: executeCommand with no environments returns error.
+@("executeCommand with no environments returns a not-found error")
 unittest {
     import std.algorithm : canFind;
 
@@ -409,7 +409,7 @@ unittest {
     assert(result.msg.canFind("not found"));
 }
 
-/// Test: executeCommand with empty tag and no default returns clear error.
+@("executeCommand with an empty tag and no default returns a clear error")
 unittest {
     auto ctx = new MockEnvironmentContext();
     ctx.workAreaPath = AbsolutePath("/workarea");
@@ -420,7 +420,7 @@ unittest {
     assert(!result.success);
 }
 
-/// Test: executeCommand with sessionId parameter (ignored).
+@("executeCommand accepts the sessionId parameter and ignores it")
 unittest {
     import llm.environment.config : ContainerConfig, EnvironmentConfig, CommandJoinMode;
     import std.algorithm : canFind;
@@ -445,7 +445,7 @@ unittest {
     }
 }
 
-/// Test: executeCommand with HostConfig creates HostRunner.
+@("executeCommand with a HostConfig environment creates a HostRunner")
 unittest {
     import llm.environment.config : HostConfig, EnvironmentConfig, CommandJoinMode;
     import std.algorithm : canFind;

@@ -158,7 +158,7 @@ version (unittest) {
     }
 }
 
-// Built-in registration surface: the REAL command set on a bare registry. Checks that the modules register as expected.
+@("registerBuiltinCommands registers the full built-in set with the expected arg modes")
 unittest {
     SlashCommandRegistry reg;
     registerBuiltinCommands(reg);
@@ -186,6 +186,8 @@ unittest {
 // - bare `/plan`/`/code` take the unknown path.
 //
 // Constructs a real AgentApp for the blocked UiMessenger.
+@(
+        "built-in dispatch: aliases terminate, unknown commands are safe, bare /plan and /code take the unknown path")
 unittest {
     auto app = AgentApp(UserConfig.AgentChatConfig.init);
     SlashCommandRegistry reg;

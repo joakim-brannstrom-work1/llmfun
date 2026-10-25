@@ -591,7 +591,8 @@ unittest {
     assert(!isRetrievalToolName(""));
 }
 
-// renderTrace tests
+@(
+        "renderTrace: a thinking message becomes one exact-shaped thinking line and content-only messages are skipped")
 unittest {
     // Message with thinking → single thinking line, exact expected shape.
     auto m = Message(Role.assistant, false, "", "thinking body");
@@ -609,6 +610,7 @@ unittest {
             "content-only Message must produce no line");
 }
 
+@("renderTrace: a ToolMessage yields a tool_calls line then the thinking line, in that order")
 unittest {
     // ToolMessage → tool_calls line THEN thinking line (order matters).
     JSONValue fcall;
@@ -637,6 +639,7 @@ unittest {
             "unexpected line: " ~ lines2[0].text);
 }
 
+@("renderTrace: a ToolResponse yields one tool line carrying the summarized response")
 unittest {
     // ToolResponse → tool line with the summarized response.
     auto tr = ToolResponse("file contents here", "call_1", "readFile", true);
@@ -647,6 +650,7 @@ unittest {
             "unexpected line: " ~ lines[0].text);
 }
 
+@("renderTrace: over-long thinking is hard-cut to exactly ThinkingMaxChars")
 unittest {
     // Caps: over-long thinking is hard-cut to ThinkingMaxChars.
     string longThinking;
@@ -726,6 +730,8 @@ unittest {
             "oldest kept line must be t2: " ~ textLines[1][0 .. 24]);
 }
 
+@(
+        "onCheckpoint: a degenerate budget smaller than one line hard-caps the singleton line to the budget")
 unittest {
     // Degenerate budget (ctx 9000 → 1616 chars < one line): the singleton
     // line is hard-capped to exactly the budget.
@@ -828,6 +834,8 @@ unittest {
             "traceText must carry exactly the included lines, got: " ~ capStore.job.traceText);
 }
 
+@(
+        "onCheckpoint: retrieval-artifact eras are excluded and the survivor's range spans only included lines")
 unittest {
     auto s = setupTest("reasoning_on_checkpoint_retrieval_guard_test");
     scope (exit)
@@ -875,6 +883,7 @@ unittest {
             "all retrieval-artifact eras must be excluded, got: " ~ capStore.job.traceText);
 }
 
+@("onCheckpoint: an invalid session id or an all-filtered checkpoint sends no RiJob at all")
 unittest {
     // Invalid sid and all-filtered checkpoints → NO RiJob (silent for the
     // all-filtered case; the invalid-sid case logs a warning).
@@ -915,6 +924,8 @@ unittest {
     assert(!capStore.got, "invalid session and all-filtered checkpoints must not send an RiJob");
 }
 
+@(
+        "onCheckpoint: context at or below AnswerReserve skips with a warning because the budget would wrap")
 unittest {
     // Degenerate context (effectiveContext <= AnswerReserve): the int
     // budget would be non-positive (wrapping to a huge size_t that never
@@ -960,7 +971,8 @@ unittest {
     }
 }
 
-// query tests (TestArea + fake embedder; seeded DBs)
+@(
+        "query: a mixed d_ + r_ DB surfaces only r_ matches and a d_-only term returns hasHistory with zero matches")
 unittest {
     // Mixed DB (d_ + r_ topics): only r_ matches surface; a d_-only query
     // term yields hasHistory true with zero matches (kind filter).
@@ -990,6 +1002,7 @@ unittest {
     assert(dResult.message == "");
 }
 
+@("query: a d_-only DB reports no reasoning history for the session")
 unittest {
     // d_-only DB → no reasoning history (kind-specific detection).
     auto s = setupTest("reasoning_query_donly_db_test");
@@ -1007,6 +1020,7 @@ unittest {
     assert(result.matches.empty);
 }
 
+@("query: the maxTurnAge window drops old r_ records and keeps the recent one")
 unittest {
     // maxTurnAge window: with maxTurn 10 and maxTurnAge 2, the turnEnd-5
     // r_ record is dropped, the turnEnd-10 one survives.
@@ -1032,6 +1046,7 @@ unittest {
             windowed.matches[0].episode.turnEnd)".text);
 }
 
+@("query: null embedder, invalid sid, and missing DB each return the no-history or error path")
 unittest {
     // Error / no-history paths: null embedder, invalid sid, missing DB.
     auto s = setupTest("reasoning_query_error_paths_test");
@@ -1055,7 +1070,7 @@ unittest {
     assert(missingDb.message == "No reasoning history indexed for this session yet.");
 }
 
-// DialogueIndex ctor forwarding (worker contract, dialogue_index.d)
+@("DialogueIndex actor ctor with defaults: the worker starts and drains cleanly")
 unittest {
     // Actor ctor with defaults (sys + factory only): every optional param
     // defaults to its neutral value — the worker starts and drains cleanly.
@@ -1077,6 +1092,8 @@ unittest {
     gate.close();
 }
 
+@(
+        "DialogueIndex ctor: a caller-supplied SummarizerFn reaches the worker and its record is indexed under an r_ topic")
 unittest {
     // Actor ctor: a caller-supplied SummarizerFn must reach the worker
     // (RiJob → fake record indexed under an r_ topic verbatim).
@@ -1132,7 +1149,7 @@ unittest {
             meta.turnEnd)".text);
 }
 
-// defaultReasoningPrompt sanity
+@("defaultReasoningPrompt carries the four section headings in order plus the hard constraints")
 unittest {
     // The built-in prompt must carry the four section headings in order and
     // the hard constraints; the shipped prompt file is IDENTICAL to it and
@@ -1150,7 +1167,8 @@ unittest {
             "per-turn justification constraint must be present");
 }
 
-// Shipped prompt file + loadReasoningPrompt
+@(
+        "shipped REASONING_SUMMARY.md is byte-identical to the built-in constant and loadReasoningPrompt prefers the file")
 unittest {
     // The shipped llmfun/config/prompt/REASONING_SUMMARY.md must be
     // byte-identical to the built-in constant, so the file-present and the
@@ -1178,6 +1196,8 @@ unittest {
         assert(shipped.canFind(header), "section header missing from shipped file: " ~ header);
 }
 
+@(
+        "missing prompt file: loadReasoningPrompt falls back to the built-in default with a warning and startup never fails")
 unittest {
     // Missing file: readPromptFile throws, loadReasoningPrompt falls back to
     // the built-in default with a warning — startup never hard-fails on this
@@ -1209,6 +1229,7 @@ unittest {
             "fallback must surface its decision as data: " ~ warnings.join("\n"));
 }
 
+@("present custom prompt file: loadReasoningPrompt returns it verbatim")
 unittest {
     // Present custom file: loadReasoningPrompt returns the file verbatim.
     import std.file : write;
@@ -1284,6 +1305,7 @@ version (unittest) {
     }
 }
 
+@("E2E: crafted checkpoints flow onCheckpoint to worker to fake summarizer to r_ record, retrievable with failure isolation")
 unittest {
     // E2E: crafted checkpoints (thinking + tool traffic) → onCheckpoint →
     // shared worker → spawned fake → RiRecord → r_ record; retrieval via

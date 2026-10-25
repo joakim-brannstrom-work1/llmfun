@@ -619,6 +619,7 @@ version (unittest) {
     }
 }
 
+@("seeded dialogue dir: session stats report source counts and turn ranges, invalid names are filtered, the report exits 0")
 unittest {
     // Seeded dialogue directory: two valid sessions, one invalid file name.
     // sessionStats must report the per-session source counts and the turn
@@ -686,6 +687,8 @@ unittest {
     assert(dialogueReport(conf) == 0);
 }
 
+@(
+        "files with invalid UTF-8 read with U+FFFD replacement and are indexable, valid files round-trip byte-identical")
 unittest {
     // A file with invalid UTF-8 must be readable (U+FFFD replaces the bad
     // sequences) and indexable, where readText throws UTFException.
@@ -741,6 +744,7 @@ unittest {
     assert(readFileUtf8(f2) == "valid \xC3\xA9 content\n");
 }
 
+@("a missing dialogue directory makes dialogueReport print an info line and exit 0")
 unittest {
     // Missing dialogue directory: info line, exit 0.
     import my.path : Path;
@@ -750,6 +754,7 @@ unittest {
     assert(dialogueReport(conf) == 0);
 }
 
+@("an existing but empty dialogue directory makes dialogueReport print an info line and exit 0")
 unittest {
     // Existing but empty directory: info line, exit 0.
     import my.path : AbsolutePath, Path;

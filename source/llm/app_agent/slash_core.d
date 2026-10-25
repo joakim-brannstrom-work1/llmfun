@@ -74,6 +74,7 @@ private AgentStatus continueHandler(ref AgentApp app, string arg) {
     return AgentStatus.active;
 }
 
+@("core commands: /quit and its aliases terminate, the other handlers dispatch safely, and the help text renders in order")
 unittest {
     import llm.app_config : UserConfig;
     import std.algorithm.searching : canFind;

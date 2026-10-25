@@ -43,6 +43,7 @@ version (unittest) {
 
 // --- Test: create() generates valid id and writes file ---
 
+@("create() generates a valid-format id and writes a session file with initialized meta fields")
 unittest {
     auto tmpDir = makeTempDir("create");
     scope (exit)
@@ -69,8 +70,7 @@ unittest {
     assert(meta.userMessageCount == 0, "userMessageCount should be 0");
 }
 
-// --- Test: create() id uniqueness ---
-
+@("create() produces unique ids across 100 consecutive creations")
 unittest {
     auto tmpDir = makeTempDir("create_unique");
     scope (exit)
@@ -86,8 +86,7 @@ unittest {
     }
 }
 
-// --- Test: load() round-trip with create ---
-
+@("load() round-trips a freshly created session with its id, title, and object document")
 unittest {
     auto tmpDir = makeTempDir("load_roundtrip");
     scope (exit)
@@ -104,8 +103,7 @@ unittest {
     assert(sf.doc.type == JSONType.object, "doc should be an object");
 }
 
-// --- Test: load() returns none for missing file ---
-
+@("load() returns none for a missing session file")
 unittest {
     auto tmpDir = makeTempDir("load_missing");
     scope (exit)
@@ -116,8 +114,7 @@ unittest {
     assert(!hasValue(loadOpt), "load should return none for missing file");
 }
 
-// --- Test: save() with messages ---
-
+@("save() with user and assistant messages updates the counts, preview, and updatedAt")
 unittest {
     auto tmpDir = makeTempDir("save_messages");
     scope (exit)
@@ -148,8 +145,7 @@ unittest {
     assert(savedMeta.updatedAt >= savedMeta.createdAt, "updatedAt should be >= createdAt");
 }
 
-// --- Test: rename() rejects empty title ---
-
+@("rename() rejects an empty title")
 unittest {
     auto tmpDir = makeTempDir("rename_empty");
     scope (exit)
@@ -162,8 +158,7 @@ unittest {
     assert(!hasValue(result), "rename should reject empty title");
 }
 
-// --- Test: rename() preserves updatedAt ---
-
+@("rename() updates the title while preserving updatedAt")
 unittest {
     auto tmpDir = makeTempDir("rename_preserve");
     scope (exit)
@@ -180,8 +175,7 @@ unittest {
     assert(renamedMeta.updatedAt == originalUpdatedAt, "updatedAt should be preserved");
 }
 
-// --- Test: rename() fails for missing session ---
-
+@("rename() fails for a missing session")
 unittest {
     auto tmpDir = makeTempDir("rename_missing");
     scope (exit)
@@ -192,8 +186,7 @@ unittest {
     assert(!hasValue(result), "rename should fail for missing session");
 }
 
-// --- Test: remove() works for existing file ---
-
+@("remove() deletes the file of an existing session")
 unittest {
     auto tmpDir = makeTempDir("remove_existing");
     scope (exit)
@@ -208,8 +201,7 @@ unittest {
     assert(!exists(filePath), "file should be removed");
 }
 
-// --- Test: remove() is no-op for missing file (valid-format and invalid ids) ---
-
+@("remove() is a no-op for missing files, both invalid and valid-format ids")
 unittest {
     auto tmpDir = makeTempDir("remove_missing");
     scope (exit)
@@ -220,8 +212,7 @@ unittest {
     store.remove(SessionId("20250101-120000-abcd")); // valid format, file absent: silent no-op
 }
 
-// --- Test: list() returns sorted by updatedAt desc ---
-
+@("list() returns sessions sorted by updatedAt descending")
 unittest {
     auto tmpDir = makeTempDir("list_sorted");
     scope (exit)
@@ -239,8 +230,7 @@ unittest {
     assert(sessions[0].updatedAt >= sessions[1].updatedAt, "should be sorted descending");
 }
 
-// --- Test: list() skips corrupt files ---
-
+@("list() skips corrupt session files and lists only the valid one")
 unittest {
     auto tmpDir = makeTempDir("list_corrupt");
     scope (exit)
@@ -257,8 +247,8 @@ unittest {
     assert(sessions[0].id == meta.id, "should only list valid session");
 }
 
-// --- Test: ID validation rejects invalid formats ---
-
+@(
+        "ID validation accepts well-formed ids and rejects empty, wrong-length, path traversal, and uppercase forms")
 unittest {
     assert(isValidId(SessionId("20250101-120000-abcd")), "valid id should pass");
     assert(isValidId(SessionId("20250101-120000-0000")), "zero suffix should pass");
@@ -273,8 +263,7 @@ unittest {
     assert(!isValidId(SessionId("20250101-120000-ABCD")), "uppercase hex should fail");
 }
 
-// --- Test: save() rejects an invalid id ---
-
+@("save() with an invalid id leaves the session meta unchanged")
 unittest {
     auto tmpDir = makeTempDir("save_invalid_id");
     scope (exit)
@@ -291,8 +280,7 @@ unittest {
     assert(savedMeta.id == meta.id, "meta should be unchanged for invalid id");
 }
 
-// --- Test: preview truncation to PreviewMaxChars ---
-
+@("preview is truncated to exactly PreviewMaxChars")
 unittest {
     auto tmpDir = makeTempDir("preview_truncate");
     scope (exit)
@@ -318,8 +306,7 @@ unittest {
             "preview should be exactly truncated: got '" ~ savedMeta.preview ~ "'");
 }
 
-// --- Test: preview with no user messages ---
-
+@("preview is empty when the session has no user messages")
 unittest {
     auto tmpDir = makeTempDir("preview_no_user");
     scope (exit)
@@ -341,8 +328,7 @@ unittest {
     assert(savedMeta.preview == "", "preview should be empty with no user messages");
 }
 
-// --- Test: preview skips non-string content ---
-
+@("preview skips non-string content and uses the next string user message")
 unittest {
     auto tmpDir = makeTempDir("preview_nonstring");
     scope (exit)
@@ -371,8 +357,7 @@ unittest {
             "preview should skip non-string content and find next user message");
 }
 
-// --- Test: preview truncation is grapheme-safe ---
-
+@("preview truncation is grapheme-safe, keeping multi-byte and combining graphemes intact")
 unittest {
     auto tmpDir = makeTempDir("preview_grapheme");
     scope (exit)
@@ -418,8 +403,7 @@ unittest {
             "combining grapheme must stay whole: got '" ~ savedMeta2.preview ~ "'");
 }
 
-// --- Test: preview normalizes newlines/tabs/control bytes to spaces ---
-
+@("preview normalizes newlines, tabs, and control bytes to single spaces")
 unittest {
     auto tmpDir = makeTempDir("preview_single_line");
     scope (exit)
@@ -446,8 +430,7 @@ unittest {
             "control bytes should become spaces: got '" ~ preview ~ "'");
 }
 
-// --- Test: sweepEmptySessions removes empty non-kept sessions only ---
-
+@("sweepEmptySessions removes only the empty non-kept session, sparing active and non-empty ones")
 unittest {
     auto tmpDir = makeTempDir("sweep_empty");
     scope (exit)
@@ -481,8 +464,7 @@ unittest {
     assert(exists(buildPath(tmpDir, nonEmpty.id.get ~ ".json")), "non-empty session must survive");
 }
 
-// --- Test: sweepEmptySessions never touches corrupt files ---
-
+@("sweepEmptySessions never touches corrupt session files")
 unittest {
     auto tmpDir = makeTempDir("sweep_corrupt");
     scope (exit)
@@ -501,8 +483,7 @@ unittest {
             "corrupt file must never be swept");
 }
 
-// --- Test: sweepEmptySessions on an empty store ---
-
+@("sweepEmptySessions on an empty store removes nothing")
 unittest {
     auto tmpDir = makeTempDir("sweep_empty_store");
     scope (exit)
@@ -513,8 +494,7 @@ unittest {
     assert(removed.length == 0, "no sessions to sweep");
 }
 
-// --- Test: extra key preservation round-trip ---
-
+@("extra JSON keys are preserved through a load and save round-trip")
 unittest {
     auto tmpDir = makeTempDir("extra_keys");
     scope (exit)
@@ -550,8 +530,7 @@ unittest {
     assert(sf2.meta.extra["customKey"].str == "customValue", "extra key should survive save");
 }
 
-// --- Test: .tmp sweep removes stale files ---
-
+@("the constructor sweeps stale .tmp files from the session directory")
 unittest {
     auto tmpDir = makeTempDir("tmp_sweep");
     scope (exit)
@@ -566,8 +545,7 @@ unittest {
             "stale .tmp file should be removed");
 }
 
-// --- Test: constructor throws on unusable directory ---
-
+@("the constructor throws for an unusable session directory")
 unittest {
     // Use a path that should not be writable (e.g., under /proc)
     auto badPath = "/proc/nonexistent_session_dir/chat".Path;
@@ -580,8 +558,7 @@ unittest {
     assert(threw, "constructor should throw for unwritable directory");
 }
 
-// --- Test: resolveSessionRef index precedence ---
-
+@("resolveSessionRef resolves 1-based index references to sessions")
 unittest {
     SessionMeta s1, s2, s3;
     s1.id = SessionId("id1");
@@ -605,8 +582,7 @@ unittest {
             "index 3 should return third session");
 }
 
-// --- Test: resolveSessionRef id precedence over title ---
-
+@("resolveSessionRef gives id matches precedence over title matches")
 unittest {
     SessionMeta s1, s2;
     s1.id = SessionId("myid");
@@ -621,8 +597,7 @@ unittest {
     assert(orElse(result, SessionId.init) == SessionId("myid"), "id match should take precedence");
 }
 
-// --- Test: resolveSessionRef case-insensitive title match ---
-
+@("resolveSessionRef matches titles case-insensitively")
 unittest {
     SessionMeta s1;
     s1.id = SessionId("id1");
@@ -634,8 +609,7 @@ unittest {
     assert(orElse(result, SessionId.init) == SessionId("id1"), "should return correct id");
 }
 
-// --- Test: resolveSessionRef returns none for no match ---
-
+@("resolveSessionRef returns none when nothing matches the reference")
 unittest {
     SessionMeta s1;
     s1.id = SessionId("id1");
@@ -646,16 +620,14 @@ unittest {
     assert(!hasValue(result), "should return none for no match");
 }
 
-// --- Test: resolveSessionRef empty sessions array ---
-
+@("resolveSessionRef returns none for an empty session list")
 unittest {
     SessionMeta[] sessions;
     auto result = resolveSessionRef(sessions, "1");
     assert(!hasValue(result), "should return none for empty array");
 }
 
-// --- Test: resolveSessionRef out of range index ---
-
+@("resolveSessionRef returns none for an out-of-range index")
 unittest {
     SessionMeta s1;
     s1.id = SessionId("id1");

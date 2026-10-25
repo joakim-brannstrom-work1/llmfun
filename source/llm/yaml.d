@@ -155,7 +155,7 @@ JSONValue loadYamlValue(Path filePath) {
     }
 }
 
-/// Test: JSON-syntax YAML input round-trips to the same JSONValue as std.json.parseJSON.
+@("JSON-syntax YAML input round-trips to the same JSONValue as std.json.parseJSON")
 unittest {
     import std.conv : to;
     import std.file : mkdirRecurse, rmdirRecurse;
@@ -176,7 +176,7 @@ unittest {
     assert(got == expected, "YAML round trip differs from std.json.parseJSON");
 }
 
-/// Test: every node type maps to the expected JSONValue.
+@("every node type maps to the expected JSONValue")
 unittest {
     import std.json : JSONType, parseJSON;
 
@@ -212,7 +212,7 @@ binVal: !!binary aGVsbG8=
     assert(probe["b"].type == JSONType.true_);
 }
 
-/// Test: merge keys (`<<`) are flattened by the composer at load time.
+@("merge keys are flattened by the composer at load time")
 unittest {
     immutable content = `
 base: &b
@@ -228,7 +228,7 @@ derived:
     assert(json["derived"]["z"].integer == 3);
 }
 
-/// Test: multi-document stream is rejected with a descriptive message including the path.
+@("multi-document stream is rejected with a descriptive message including the path")
 unittest {
     import std.conv : to;
     import std.file : mkdirRecurse, rmdirRecurse;
@@ -254,7 +254,7 @@ unittest {
     assert(caught, "multi-document stream must throw");
 }
 
-/// Test: empty file is rejected with a descriptive message including the path.
+@("empty file is rejected with a descriptive message including the path")
 unittest {
     import std.conv : to;
     import std.file : mkdirRecurse, rmdirRecurse;
@@ -280,7 +280,7 @@ unittest {
     assert(caught, "empty file must throw");
 }
 
-/// Test: comment-only file is rejected like an empty file.
+@("comment-only file is rejected like an empty file")
 unittest {
     import std.conv : to;
     import std.file : mkdirRecurse, rmdirRecurse;
@@ -306,7 +306,7 @@ unittest {
     assert(caught, "comment-only file must throw");
 }
 
-/// Test: read failure (nonexistent file) mentions the path and the read phase.
+@("read failure on a nonexistent file mentions the path and the read phase")
 unittest {
     import std.algorithm.searching : canFind;
 
@@ -322,7 +322,7 @@ unittest {
     assert(caught, "nonexistent file must throw");
 }
 
-/// Test: parse failure (`@`-leading plain scalar) mentions the path and the parse phase.
+@("parse failure on an at-leading plain scalar mentions the path and the parse phase")
 unittest {
     import std.conv : to;
     import std.file : mkdirRecurse, rmdirRecurse;
@@ -349,7 +349,7 @@ unittest {
     assert(caught, "parse error must throw");
 }
 
-/// Test: non-mapping root is rejected with the file path.
+@("non-mapping root is rejected with the file path")
 unittest {
     import std.conv : to;
     import std.file : mkdirRecurse, rmdirRecurse;
@@ -375,7 +375,7 @@ unittest {
     assert(caught, "scalar root must throw");
 }
 
-/// Test: conversion failure is wrapped with the file path.
+@("conversion failure on a complex mapping key is wrapped with the file path")
 unittest {
     import std.conv : to;
     import std.file : mkdirRecurse, rmdirRecurse;
@@ -404,7 +404,7 @@ unittest {
     assert(caught, "conversion failure must throw with path");
 }
 
-/// Test: alias-expansion bomb is bounded by the conversion node cap.
+@("alias-expansion bomb is bounded by the conversion node cap")
 unittest {
     import std.conv : to;
     import std.algorithm.searching : canFind;
