@@ -149,7 +149,12 @@ public:
         }
 
         glfwMakeContextCurrent(window);
-        glfwSwapInterval(1);
+
+        // Must not use V-SYNC. V-SYNC lead to the GUI thread locking in the
+        // GLFW backend when the screensaver/lockscreen is activated in
+        // wayland. It is OK with a bit of screen tearing in a GUI app because
+        // the frames do not "differ" as much as in an FPS game.
+        glfwSwapInterval(0);
 
         if (!ImGui_ImplGlfw_InitForOpenGL(window, true)) {
             error = "ImGui_ImplGlfw_InitForOpenGL failed";
