@@ -1906,6 +1906,84 @@ std::string goldenText(const char* name, const Grid& grid) {
     return text;
 }
 
+// maxlong: a finished six-response turn, maximal. 6 content rows (1 step each) and 12
+// settled calls (2 each) = 30 steps. The group is folded, so only its header draws.
+void buildMaxLong(ThreadFixture& f) {
+    f.state.chat.threadMinimalMode = false;
+    f.seed.upsertTurn(1, TuiTurnState_Done, 12);
+    f.seed.upsertBlock(1, "query", "1#q", TuiBlockKind_Prose, TuiBlockStatus_None, "user",
+                       "refactor the whole tree, module by module");
+    for (int r = 0; r < 6; ++r) { // upsertBlock(..., title, durationMs)
+        const std::string t = std::to_string(r);
+        f.seed.upsertBlock(1, "content#" + t, "1#" + t, TuiBlockKind_Prose, TuiBlockStatus_None,
+                           "assistant", "step " + t + " done", nullptr, 1200);
+        f.seed.upsertBlock(1, "call#a" + t, "1#" + t, TuiBlockKind_Tool, TuiBlockStatus_Ok, "ok",
+                           "ls -R", "bash", 1100);
+        f.seed.upsertBlock(1, "call#b" + t, "1#" + t, TuiBlockKind_Tool, TuiBlockStatus_Ok, "ok",
+                           "grep -r needle", "grep", 1200);
+    }
+    f.seed.upsertBlock(1, "answer", "1#5", TuiBlockKind_Answer, TuiBlockStatus_None, nullptr,
+                       "the refactor is done: ...");
+}
+
+// --- maxlonglive: the same turn mid-run. Batches 0 and 1 settled, batch 2 live (owner open,
+// thinking + content + one running card).
+void buildMaxLongLive(ThreadFixture& f) {
+    f.state.chat.threadMinimalMode = false;
+    f.seed.runStart("refactor the whole tree, module by module");
+    for (int r = 0; r < 2; ++r) {
+        const std::string t = std::to_string(r);
+        f.seed.upsertBlock(1, "content#" + t, "1#" + t, TuiBlockKind_Prose, TuiBlockStatus_None,
+                           "assistant", "step " + t + " done", nullptr, 1100 + 100 * r);
+        f.seed.upsertBlock(1, "call#a" + t, "1#" + t, TuiBlockKind_Tool, TuiBlockStatus_Ok, "ok",
+                           "ls -R", "bash", 1100);
+        f.seed.upsertBlock(1, "call#b" + t, "1#" + t, TuiBlockKind_Tool, TuiBlockStatus_Ok, "ok",
+                           "grep -r needle", "grep", 1200);
+        f.seed.nextBatch();
+    }
+    // The live batch's ids carry the batch index (the wire's naming): "content#0" here would
+    // be batch 0's settled content row again, and the upsert merges into that slot in place -
+    // the row would move to the live batch and lose the 1.1 s duration its owner prints.
+    f.seed.upsertBlock(1, "reasoning#2", "1#2", TuiBlockKind_Reasoning, TuiBlockStatus_None,
+                       nullptr, "rebasing the parser onto the new loader ...");
+    f.seed.upsertBlock(1, "content#2", "1#2", TuiBlockKind_Prose, TuiBlockStatus_None, "assistant",
+                       "Next I will move the loader out of core.");
+    f.seed.upsertBlock(1, "call#0", "1#2", TuiBlockKind_Tool, TuiBlockStatus_Running, nullptr,
+                       "dub test", "execute_command", 0);
+}
+
+// --- maxnotice: a LIVE turn, two batches. Batch 0 settled (its owner folds), batch 1 live (its
+// owner is open), and the notice sits BETWEEN two rows of batch 1.
+void buildMaxNotice(ThreadFixture& f) {
+    f.state.chat.threadMinimalMode = false;
+    f.seed.runStart("sweep the tree");
+    f.seed.upsertBlock(1, "content#0", "1#0", TuiBlockKind_Prose, TuiBlockStatus_None, "assistant",
+                       "I will list the tree first.", nullptr, 1100);
+    f.seed.upsertBlock(1, "call#0", "1#0", TuiBlockKind_Tool, TuiBlockStatus_Ok, "42 lines",
+                       "ls -R", "bash", 1100);
+    f.seed.nextBatch();
+    f.seed.upsertBlock(1, "content#1", "1#1", TuiBlockKind_Prose, TuiBlockStatus_None, "assistant",
+                       "now the count");
+    f.seed.upsertBlock(1, "notice#1", "1#q", TuiBlockKind_Notice, TuiBlockStatus_None, nullptr,
+                       "context compacted");
+    f.seed.upsertBlock(1, "call#1", "1#1", TuiBlockKind_Tool, TuiBlockStatus_Running, nullptr,
+                       "wc -l", "bash", 0);
+}
+
+// --- maxchips: a settled batch of four distinct tools -> "[a] [b] [c] +1", duration from the
+// response's content row (the owner carries it, DD-8).
+void buildMaxChips(ThreadFixture& f) {
+    f.state.chat.threadMinimalMode = false;
+    f.seed.upsertTurn(1, TuiTurnState_Done, 9);
+    f.seed.upsertBlock(1, "query", "1#q", TuiBlockKind_Prose, TuiBlockStatus_None, "user", "go");
+    f.seed.upsertBlock(1, "content#0", "1#0", TuiBlockKind_Prose, TuiBlockStatus_None, "assistant",
+                       "doing four things", nullptr, 1200);
+    const char* names[] = {"bash", "grep", "read_file", "write_file"};
+    for (int i = 0; i < 4; ++i)
+        f.seed.upsertBlock(1, "call#" + std::to_string(i), "1#0", TuiBlockKind_Tool,
+                           TuiBlockStatus_Ok, "ok", names[i], names[i], 1200);
+}
+
 /// One fixture per message type: the screen a golden pins.
 struct Scene {
     const char* name;
@@ -2037,6 +2115,13 @@ std::vector<Scene> scenes() {
                         f.seed.upsertBlock(1, "tool#1", "1#0", TuiBlockKind_Tool,
                                            TuiBlockStatus_Cancelled, nullptr, "ls -R", "bash", 0);
                     }});
+    // The maximal-mode fold's four target scenes: a long finished turn, the same
+    // turn mid-run, a notice between a live batch's rows, and the four-chip
+    // chips line. checkOwnerShape pins their target rows as checks.
+    list.push_back({"maxlong", &buildMaxLong});
+    list.push_back({"maxlonglive", &buildMaxLongLive});
+    list.push_back({"maxnotice", &buildMaxNotice});
+    list.push_back({"maxchips", &buildMaxChips});
     list.push_back({"toolcall", [](ThreadFixture& f) {
                         f.add(message(1, MsgKind::ToolCall,
                                       "[1] tool call: readFile proof.qed [2.0s]",
@@ -2197,6 +2282,63 @@ void checkSeederBatches() {
           "a notice rides the query batch, never a response batch");
 }
 
+/// The row a substring draws on, -1 when nothing on the screen carries it: the
+/// shape checks read the drawn grid, so a row's absence is an answer too.
+int rowOfSub(const Grid& g, const std::string& needle) {
+    for (int y = 0; y < g.ny; ++y)
+        if (g.rowText(y).find(needle) != std::string::npos)
+            return y;
+    return -1;
+}
+
+/// The response-owned fold's target shape, as assertions over the four
+/// builders above. Every check here is red until the task that owns it lands:
+/// T7/T8/T9/T10 the projection, T11/T13 the view, T15 the live edge.
+void checkOwnerShape() {
+    { // maxlong (T10, T13): a folded group draws its header, no owner, no card, then the answer
+        ThreadFixture f;
+        buildMaxLong(f);
+        const Grid g = f.draw();
+        check(g.contains("WORK - 30 steps"), "maxlong: the folded header announces 30 steps");
+        check(!g.contains("AGENT"), "maxlong: a closed group draws no owner row");
+        check(!g.contains("TOOL"), "maxlong: a closed group draws no card");
+        check(g.contains("ANSWER") && g.contains("the refactor is done: ..."),
+              "maxlong: the answer closes the turn");
+    }
+    { // maxlonglive (T7, T10, T11, T13)
+        ThreadFixture f;
+        buildMaxLongLive(f);
+        const Grid g = f.draw();
+        check(g.contains("> 1.1 s - [bash] [grep]"),
+              "maxlonglive: a settled owner folds with its duration and chips");
+        check(g.contains("v AGENT - [execute_command]"),
+              "maxlonglive: the live owner draws open, no duration yet");
+        check(g.contains("v Thinking"), "maxlonglive: the live batch's reasoning draws");
+        check(g.contains("Next I will move the loader out of core."),
+              "maxlonglive: its content draws");
+        check(g.contains("TOOL  execute_command"), "maxlonglive: its live card draws");
+    }
+    { // maxnotice (T8): the batch block first, the interleaved notice after it
+        ThreadFixture f;
+        buildMaxNotice(f);
+        const Grid g = f.draw();
+        const int owner = rowOfSub(g, "v AGENT");
+        const int content = rowOfSub(g, "now the count");
+        const int notice = rowOfSub(g, "context compacted");
+        check(owner >= 0, "maxnotice: the live owner row is drawn open");
+        check(owner >= 0 && content > owner, "maxnotice: its content draws under it");
+        check(content >= 0 && notice > content,
+              "maxnotice: the notice is emitted after the batch block");
+    }
+    { // maxchips (T9, T13)
+        ThreadFixture f;
+        buildMaxChips(f);
+        const Grid g = f.draw();
+        check(g.contains("> 1.2 s - [bash] [grep] [read_file] +1"),
+              "maxchips: chips drop to three and a +N");
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2245,6 +2387,7 @@ int main(int argc, char** argv) {
     checkMenuKeepsTheFocusedBlock();
     checkEmptyGroupHeaderless();
     checkSeederBatches();
+    checkOwnerShape();
     checkGoldens(update);
 
     ImTui_ImplText_Shutdown();
