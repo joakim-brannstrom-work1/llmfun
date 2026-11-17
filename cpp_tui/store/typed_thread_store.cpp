@@ -11,10 +11,7 @@ namespace llmfun::tui::store {
 bool blockDisplayable(const TypedBlock& b) {
     if (b.kind != kBlockKindTool)
         return true;
-    for (std::string_view name : kHiddenToolNames)
-        if (b.title == name)
-            return false;
-    return true;
+    return (b.flags & kBlockFlagHidden) == 0;
 }
 
 void TypedThreadStore::setTurns(std::vector<TypedTurn> turns, std::vector<TypedBlock> blocks) {

@@ -3764,6 +3764,160 @@ unittest {
     assert(sink3.blockUpserts[$ - 1].id == "c1" && sink3.blockUpserts[$ - 1].status == TuiBlockStatus_Cancelled,
             "the interrupted call is Cancelled, never a fabricated Ok");
 }
+// Displayability rides the wire: every typed tool upsert the D side writes
+// folds the config's isHiddenTool verdict into the block's flags - a hidden
+// tool's block carries TuiBlockFlag_Hidden, a visible tool's exactly
+// kToolBlockFlags - and the receiver hides from the flag alone, never the
+// name. All six upsert paths of one turn, checked.
+@("typed hidden tool flags: all six upsert paths ride the wire")
+unittest {
+    import std.datetime : dur;
+    import std.json : JSONValue;
+    import std.path : buildPath;
+
+    import llm.chat;
+    import llm.types : ServerStat;
+
+    auto tmpDir = testArea("app_agent_typed_hidden_flags");
+    scope (exit)
+        tmpDir.cleanup;
+    TuiRecordingSink sink;
+    auto app = typedTestApp(new SessionStore(buildPath(tmpDir, "chat").Path), tmpDir, sink);
+    assert(app.llmConf.isHiddenTool("pipeline_output") && app.llmConf.isHiddenTool("task_done"),
+            "the default config hides the plumbing tools on both axes");
+
+    auto f = TypedFixture.make();
+
+    // Paths 1+2: the live tick's Pending upsert and the stream-done Running
+    // flip - a hidden call next to a visible one, same batch.
+    app.agent_.chat.add(f.q);
+    app.emitTurnStartTyped("q");
+    auto updater = cast(TypedStreamMessageUpdater) app.makeTypedStreamCallback();
+    ServerStat stat;
+    updater.messageUpdate(StreamMessage("assistant", "C", "T"), [
+        StreamToolCall(toolName: "pipeline_output", arguments: `{"out":"x"}`, id: "c1"),
+        StreamToolCall(toolName: "grep_files", arguments: `{"pattern":"x"}`, id: "c2")
+    ], stat);
+    assert((sink.blockUpserts[3].flags & TuiBlockFlag_Hidden) != 0,
+            "the hidden call's Pending upsert carries the Hidden bit");
+    assert(sink.blockUpserts[4].flags == kToolBlockFlags,
+            "the visible call's block carries exactly the tool flags");
+    updater.streamMessageDone();
+    assert((sink.blockUpserts[5].flags & TuiBlockFlag_Hidden) != 0,
+            "the Running flip keeps the Hidden bit");
+    assert(sink.blockUpserts[6].flags == kToolBlockFlags);
+
+    // Paths 4+5: the step walk's merged card and the standalone orphan.
+    ProcessResult result;
+    result.chat = [
+        Chat.MessageT(f.tm), Chat.MessageT(f.tr), Chat.MessageT(f.tr2),
+        Chat.MessageT(f.orphan)
+    ];
+    app.emitStepTyped(result);
+    assert(sink.blockUpserts.length == 12, "+reasoning#0, c1 merged, c2 merged, answer, the orphan");
+    assert(sink.blockUpserts[11].id == "answer", "the answer block is last");
+    assert(sink.blockUpserts[8].flags == kToolBlockFlags,
+            "the merged grep_files card stays visible");
+    assert(sink.blockUpserts[10].title == "pipeline_output"
+            && sink.blockUpserts[10].status == TuiBlockStatus_Ok
+            && (sink.blockUpserts[10].flags & TuiBlockFlag_Hidden) != 0,
+            "the orphan result rides Hidden");
+
+    // Path 3: the replay snapshot rebuilds the same flags from the history -
+    // with its own hidden call whose call AND result are in the history.
+    JSONValue hc;
+    hc["id"] = "ch";
+    hc["type"] = "function";
+    JSONValue hfn;
+    hfn["name"] = "pipeline_output";
+    hfn["arguments"] = `{"out":"x"}`;
+    hc["function"] = hfn;
+    auto htm = ToolMessage("TH", JSONValue([hc]), JSONValue.init, JSONValue.init);
+    auto htr = ToolResponse("ok-h", "ch", "pipeline_output", true);
+
+    auto tmpDir2 = testArea("app_agent_typed_hidden_flags_replay");
+    scope (exit)
+        tmpDir2.cleanup;
+    TuiRecordingSink sink2;
+    auto app2 = typedTestApp(new SessionStore(buildPath(tmpDir2, "chat").Path), tmpDir2, sink2);
+    app2.agent_.chat.add(f.q);
+    app2.agent_.chat.add(f.tm);
+    app2.agent_.chat.add(f.tr);
+    app2.agent_.chat.add(f.tr2);
+    app2.agent_.chat.add(htm);
+    app2.agent_.chat.add(htr);
+    app2.emitReplayTyped();
+    size_t hiddenSeen, visibleSeen;
+    foreach (b; sink2.setTurnsSnapshots[$ - 1].blocks) {
+        if (b.kind != TuiBlockKind_Tool)
+            continue;
+        if (b.title == "pipeline_output") {
+            hiddenSeen++;
+            assert((b.flags & TuiBlockFlag_Hidden) != 0,
+                    "replay carries Hidden for the hidden call");
+        } else {
+            visibleSeen++;
+            assert(b.flags == kToolBlockFlags);
+        }
+    }
+    assert(hiddenSeen == 1 && visibleSeen == 2, "c1, c2 visible; ch hidden");
+
+    // Path 6: the stop flip.
+    auto tmpDir3 = testArea("app_agent_typed_hidden_flags_stop");
+    scope (exit)
+        tmpDir3.cleanup;
+    TuiRecordingSink sink3;
+    auto app3 = typedTestApp(new SessionStore(buildPath(tmpDir3, "chat").Path), tmpDir3, sink3);
+    app3.agent_.chat.add(Message(Role.user, true, "q3", null));
+    app3.emitTurnStartTyped("q3");
+    auto up3 = cast(TypedStreamMessageUpdater) app3.makeTypedStreamCallback();
+    up3.messageUpdate(StreamMessage("assistant", "", ""), [
+        StreamToolCall(toolName: "pipeline_output", arguments: `{`, id: "c1")
+    ], ServerStat.init);
+    app3.emitStopTyped();
+    assert(sink3.blockUpserts[$ - 1].status == TuiBlockStatus_Cancelled
+            && (sink3.blockUpserts[$ - 1].flags & TuiBlockFlag_Hidden) != 0,
+            "the stop flip keeps the Hidden bit");
+}
+
+// The empty hiddenTools config: no upsert path ever sets the Hidden bit -
+// every tool block on the wire carries exactly kToolBlockFlags.
+@("typed hidden tool flags: an empty hiddenTools config hides nothing")
+unittest {
+    import std.datetime : dur;
+    import std.path : buildPath;
+
+    import llm.chat;
+    import llm.types : ServerStat;
+
+    auto tmpDir = testArea("app_agent_typed_no_hidden");
+    scope (exit)
+        tmpDir.cleanup;
+    TuiRecordingSink sink;
+    auto app = typedTestApp(new SessionStore(buildPath(tmpDir, "chat").Path), tmpDir, sink);
+    app.llmConf.hiddenTools = [];
+
+    auto f = TypedFixture.make();
+    app.agent_.chat.add(f.q);
+    app.emitTurnStartTyped("q");
+    auto updater = cast(TypedStreamMessageUpdater) app.makeTypedStreamCallback();
+    ServerStat stat;
+    updater.messageUpdate(StreamMessage("assistant", "C", "T"), [
+        StreamToolCall(toolName: "pipeline_output", arguments: `{"out":"x"}`, id: "c1")
+    ], stat);
+    updater.streamMessageDone();
+    ProcessResult result;
+    result.chat = [
+        Chat.MessageT(f.tm), Chat.MessageT(f.tr), Chat.MessageT(f.tr2),
+        Chat.MessageT(f.orphan)
+    ];
+    app.emitStepTyped(result);
+    foreach (b; sink.blockUpserts)
+        if (b.kind == TuiBlockKind_Tool)
+            assert(b.flags == kToolBlockFlags,
+                    "no Hidden bit anywhere: " ~ b.title ~ " flags " ~ text(b.flags));
+    assert((sink.blockUpserts[$ - 1].flags & TuiBlockFlag_Hidden) == 0);
+}
 
 // the streamed call's body is arguments only - the streaming path builds
 // the same shape the completed path does, no name( wrapper, no repeated prefix.
@@ -4241,6 +4395,42 @@ unittest {
     assert(got[6] == "tool result ✅: grep_files ok-1");
     assert(got[7] == "tool result ❌: write_file bad-2");
     assert(got[8] == "assistant: Compressing... 1/2 : x", "notices print verbatim");
+}
+
+// The console hides from the flag alone: a tool block carrying
+// TuiBlockFlag_Hidden prints nothing (and buffers nothing), while the same
+// block without the flag prints today's call/result lines.
+@("console formatter: the Hidden flag, not the name, hides a tool block")
+unittest {
+    import std.array : join;
+
+    import llm.tui : UiTurnData;
+
+    auto hidden = makeBlockData(1, "c1", "1#0", TuiBlockKind_Tool, TuiBlockStatus_Ok,
+            kToolBlockFlags | TuiBlockFlag_Hidden, "pipeline_output", "out", "body", 0);
+    auto fmt = new ConsoleFormatter();
+    assert(fmt.onBlockUpsert(hidden).empty);
+    assert(fmt.onTurnUpsert(UiTurnData(1, TuiTurnState_Done, 1)).empty,
+            "a flagged-hidden block never reaches the console, buffer included");
+
+    // The config's other verdict rides the same flag: the default hiddenTools
+    // rule taskDone hidden (config.d:637), so a flagged taskDone call prints
+    // nothing either.
+    auto taskDoneHidden = hidden;
+    taskDoneHidden.title = "taskDone";
+    auto fmt3 = new ConsoleFormatter();
+    assert(fmt3.onBlockUpsert(taskDoneHidden).empty);
+    assert(fmt3.onTurnUpsert(UiTurnData(1, TuiTurnState_Done, 1)).empty,
+            "the config's taskDone verdict rides the same flag: nothing prints");
+
+    auto visible = hidden;
+    visible.flags = kToolBlockFlags;
+    auto fmt2 = new ConsoleFormatter();
+    assert(fmt2.onBlockUpsert(visible).empty, "the block buffers until the batch ends");
+    const got = fmt2.onTurnUpsert(UiTurnData(1, TuiTurnState_Done, 1));
+    assert(got == [
+        "tool call: pipeline_output(body)", "tool result ✅: pipeline_output out"
+    ], "the same block without the flag prints today's lines: " ~ got.join(" | "));
 }
 
 // FR-11 run exits: a stop interrupts through emitStopTyped (honest Cancelled

@@ -311,7 +311,7 @@ SeedMsg message(size_t id, MsgKind type, const std::string& summary, const std::
 struct ThreadFixture {
     tui::TuiState state;
     typed_seed::Seeder seed{&state, 1}; ///< the typed store's turns
-    std::string batchId = "content#0";  ///< the newest turn's next content-block id
+    int responseBatch = 0;              ///< the newest turn's next response-batch index
 
     ThreadFixture() {
         state.readyStatus = true;
@@ -373,7 +373,7 @@ struct ThreadFixture {
             seed.upsertTurn(turn, TuiTurnState_Done, 1);
             seed.upsertBlock(turn, "query", std::to_string(turn) + "#q", TuiBlockKind_Prose,
                              TuiBlockStatus_None, "user", msg.text, nullptr, durationMs);
-            batchId = "content#0";
+            responseBatch = 0;
             return;
         }
         if (seed.turnSeq == 0) { // an answer with no turn yet: open one, like a
@@ -381,34 +381,42 @@ struct ThreadFixture {
             seed.upsertTurn(1, TuiTurnState_Done, 1);
         }
         const std::int64_t turn = seed.turnSeq;
+        // One batch per response (the wire's shape): an Assistant message and
+        // a tool message each open the turn's next batch. The exchange's
+        // result and answer ride that batch's ids.
+        int bi = -1;
+        if (msg.type == MsgKind::Assistant || msg.type == MsgKind::ToolCall)
+            bi = responseBatch++;
+        const std::string batch =
+            std::to_string(turn) + "#" + std::to_string(bi >= 0 ? bi : responseBatch);
         if (!msg.thinking.empty())
-            seed.upsertBlock(turn, "reasoning#0", std::to_string(turn) + "#0",
-                             TuiBlockKind_Reasoning, TuiBlockStatus_None, nullptr, msg.thinking,
-                             nullptr, durationMs);
+            seed.upsertBlock(turn, "reasoning#" + std::to_string(bi >= 0 ? bi : responseBatch),
+                             batch, TuiBlockKind_Reasoning, TuiBlockStatus_None, nullptr,
+                             msg.thinking, nullptr, durationMs);
         switch (msg.type) {
         case MsgKind::FinalAnswer:
-            seed.upsertBlock(turn, "answer", std::to_string(turn) + "#a", TuiBlockKind_Answer,
-                             TuiBlockStatus_None, nullptr, msg.text, nullptr, durationMs);
+            seed.upsertBlock(
+                turn, "answer", std::to_string(turn) + "#" + std::to_string(responseBatch),
+                TuiBlockKind_Answer, TuiBlockStatus_None, nullptr, msg.text, nullptr, durationMs);
             break;
         case MsgKind::Assistant:
-            seed.upsertBlock(turn, batchId, std::to_string(turn) + "#c", TuiBlockKind_Prose,
+            seed.upsertBlock(turn, "content#" + std::to_string(bi), batch, TuiBlockKind_Prose,
                              TuiBlockStatus_None, "assistant", msg.text, nullptr, durationMs);
-            batchId = "content#" + std::to_string(std::stoul(batchId.substr(8)) + 1);
             break;
         case MsgKind::ToolCall:
             // The call and, later, its result are ONE card (the merged tool row):
             // the same block id, and the title the summary carries.
-            seed.upsertBlock(turn, "tool#0", std::to_string(turn) + "#t", TuiBlockKind_Tool,
-                             TuiBlockStatus_Pending, nullptr, msg.text, toolTitleOf(msg).c_str(),
-                             durationMs);
+            seed.upsertBlock(turn, "tool#0", batch, TuiBlockKind_Tool, TuiBlockStatus_Pending,
+                             nullptr, msg.text, toolTitleOf(msg).c_str(), durationMs);
             break;
         case MsgKind::ToolResponse:
-            seed.upsertBlock(turn, "tool#0", std::to_string(turn) + "#t", TuiBlockKind_Tool,
-                             TuiBlockStatus_Ok, nullptr, msg.text, toolTitleOf(msg).c_str(),
-                             durationMs);
+            seed.upsertBlock(turn, "tool#0",
+                             std::to_string(turn) + "#" + std::to_string(responseBatch),
+                             TuiBlockKind_Tool, TuiBlockStatus_Ok, nullptr, msg.text,
+                             toolTitleOf(msg).c_str(), durationMs);
             break;
         default:
-            seed.upsertBlock(turn, "notice#" + std::to_string(turn), std::to_string(turn) + "#n",
+            seed.upsertBlock(turn, "notice#" + std::to_string(turn), std::to_string(turn) + "#q",
                              TuiBlockKind_Notice, TuiBlockStatus_None, nullptr, msg.text, nullptr,
                              durationMs);
             break;
@@ -424,8 +432,9 @@ struct ThreadFixture {
         if (!text.empty())
             seed.updateStream(text);
         if (!thinking.empty())
-            seed.upsertBlock(seed.liveTurnId, "reasoning#0", std::to_string(seed.liveTurnId) + "#0",
-                             TuiBlockKind_Reasoning, TuiBlockStatus_None, nullptr, thinking);
+            seed.upsertBlock(seed.liveTurnId, "reasoning#" + std::to_string(seed.liveBatch),
+                             seed.batchId(), TuiBlockKind_Reasoning, TuiBlockStatus_None, nullptr,
+                             thinking);
         (void)type;
     }
 
@@ -1306,7 +1315,7 @@ void checkCrossGroupIdentity() {
     check(storedThinking >= 0, "the stored message 3 thinking row is on screen");
     Grid afterStoredThinking = clickRow(storedThinking);
     check(fixture.state.ui.thread.focus == model::BlockId{1,
-                                                          std::hash<std::string>{}("reasoning#0"),
+                                                          std::hash<std::string>{}("reasoning#1"),
                                                           model::BlockKind::Thinking},
           "the stored thinking focuses the Thinking kind");
     check(copyRows(afterStoredThinking) == 1,
@@ -1927,13 +1936,13 @@ std::vector<Scene> scenes() {
     // pending one draws dim.
     list.push_back({"livebatch", [](ThreadFixture& f) {
                         f.seed.runStart("sweep the tree");
-                        f.seed.upsertBlock(f.seed.liveTurnId, "tool#1", "1#1", TuiBlockKind_Tool,
+                        f.seed.upsertBlock(f.seed.liveTurnId, "tool#1", "1#0", TuiBlockKind_Tool,
                                            TuiBlockStatus_Ok, "42 lines", "ls -R", "bash", 1100, 0,
                                            0, {}, "42 lines", 0);
-                        f.seed.upsertBlock(f.seed.liveTurnId, "tool#2", "1#2", TuiBlockKind_Tool,
+                        f.seed.upsertBlock(f.seed.liveTurnId, "tool#2", "1#0", TuiBlockKind_Tool,
                                            TuiBlockStatus_Running, nullptr,
                                            "needle in the haystack", "grep", 0);
-                        f.seed.upsertBlock(f.seed.liveTurnId, "tool#3", "1#3", TuiBlockKind_Tool,
+                        f.seed.upsertBlock(f.seed.liveTurnId, "tool#3", "1#0", TuiBlockKind_Tool,
                                            TuiBlockStatus_Pending, nullptr, "notes.md", "writeFile",
                                            0);
                     }});
@@ -2025,7 +2034,7 @@ std::vector<Scene> scenes() {
                         f.seed.runStop();
                         // D's stop marks the in-flight call Cancelled: the same
                         // call id re-upserts with the honest status.
-                        f.seed.upsertBlock(1, "tool#1", "1#1", TuiBlockKind_Tool,
+                        f.seed.upsertBlock(1, "tool#1", "1#0", TuiBlockKind_Tool,
                                            TuiBlockStatus_Cancelled, nullptr, "ls -R", "bash", 0);
                     }});
     list.push_back({"toolcall", [](ThreadFixture& f) {
@@ -2157,6 +2166,37 @@ void checkGoldens(bool update) {
     ui::applyTheme(ui::ThemeId::Graphite, ui::ColorDepth::TrueColor);
 }
 
+/// The seeder's batch lifecycle (the wire's shape, stated once): a live run's
+/// steps share ONE batch until `nextBatch`, and the next response - its
+/// content and calls - opens the following batch.
+void checkSeederBatches() {
+    tui::TuiState state;
+    typed_seed::Seeder seed{&state, 1};
+    seed.runStart("sweep the tree");
+    seed.tool("grep", "needle in the haystack", TuiBlockStatus_Running);
+    seed.tool("bash", "ls -R", TuiBlockStatus_Ok, "42 lines", 1100);
+    check(seed.batchId() == "1#0", "the live run's first batch is <turn>#0");
+    check(state.chat.typedTurns.blockCount(1) == 3,
+          "runStart -> tool -> tool = the query plus ONE batch's two cards");
+    const store::TypedBlock& first = state.chat.typedTurns.blockAt(1, 1);
+    const store::TypedBlock& second = state.chat.typedTurns.blockAt(1, 2);
+    check(first.id == "tool#1" && second.id == "tool#2", "the two cards keep their own call ids");
+    check(first.batchId == "1#0" && second.batchId == "1#0",
+          "both cards ride the same response batch");
+    seed.nextBatch();
+    seed.content("the tree has 3 files");
+    check(seed.batchId() == "1#1", "nextBatch opens the next response's batch");
+    const store::TypedBlock& prose = state.chat.typedTurns.blockAt(1, 3);
+    check(state.chat.typedTurns.blockCount(1) == 4 && prose.id == "content#1" &&
+              prose.batchId == "1#1",
+          "the next response's content lands on the second batch");
+    seed.notice("a passing thought");
+    const store::TypedBlock& note = state.chat.typedTurns.blockAt(1, 4);
+    check(state.chat.typedTurns.blockCount(1) == 5 && note.id == "notice#1" && note.turnId == 1 &&
+              note.batchId == "1#q" && note.kind == TuiBlockKind_Notice,
+          "a notice rides the query batch, never a response batch");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2204,6 +2244,7 @@ int main(int argc, char** argv) {
     checkBlockMenuOwnership();
     checkMenuKeepsTheFocusedBlock();
     checkEmptyGroupHeaderless();
+    checkSeederBatches();
     checkGoldens(update);
 
     ImTui_ImplText_Shutdown();

@@ -39,6 +39,8 @@ struct Seeder {
     std::int64_t turnSeq = 0;
     std::int64_t liveTurnId = 0; ///< the in-flight run's turn (0 = none)
     int liveBatch = 0;           ///< the live run's batch counter
+    int callSeq = 0;             ///< the live run's call counter (unique call ids)
+    int noticeSeq = 0;           ///< the notice counter (unique notice ids)
 
     void upsertTurn(std::int64_t id, int state, int messageCount) {
         TuiTurn t{};
@@ -148,18 +150,51 @@ struct Seeder {
     /// title, the result summary the meta - and the RESULT
     /// transport: the summary feeds the packed fallback line when the card
     /// carries no pairs, the pairs ride the per-pair render when they do.
+    /// The card joins the LIVE batch - the wire's shape: a response's calls
+    /// share its batch. The id is the call's identity, unique per seeder.
     void tool(const std::string& name, const std::string& body, int status,
               const std::string& meta = std::string(), std::int64_t durationMs = 0,
               const std::vector<std::pair<std::string, std::string>>& resultPairs = {},
               std::uint32_t resultMore = 0) {
+        tool(batchId(), name, body, status, meta, durationMs, resultPairs, resultMore);
+    }
+
+    /// The card at an explicit batch: `batch` is the exact "<turnId>#<batch>"
+    /// the wire's upsert carries, so a scene can seed any wire shape.
+    void tool(const std::string& batch, const std::string& name, const std::string& body,
+              int status, const std::string& meta = std::string(), std::int64_t durationMs = 0,
+              const std::vector<std::pair<std::string, std::string>>& resultPairs = {},
+              std::uint32_t resultMore = 0) {
         if (liveTurnId == 0)
             return;
-        ++liveBatch; // one merged card per call (F5): a second call never
-                     // overwrites the first - the id is the call's identity
-        upsertBlock(liveTurnId, "tool#" + std::to_string(liveBatch),
-                    std::to_string(liveTurnId) + "#" + std::to_string(liveBatch), TuiBlockKind_Tool,
+        upsertBlock(liveTurnId, "tool#" + std::to_string(++callSeq), batch, TuiBlockKind_Tool,
                     status, meta.empty() ? nullptr : meta.c_str(), body, name.c_str(), durationMs,
                     0, 0, resultPairs, meta, resultMore);
+    }
+
+    /// The batch id helpers: "<turnId>#<batchIndex>" for a response batch, the
+    /// turn-level "<turnId>#q" for the query/notice rows.
+    std::string batchId() const {
+        return std::to_string(liveTurnId) + "#" + std::to_string(liveBatch);
+    }
+    std::string queryBatchId() const { return std::to_string(liveTurnId) + "#q"; }
+
+    /// The next response batch: the wire's batch counter advances once per
+    /// response, so the next response's content/calls share the new batch.
+    void nextBatch() { ++liveBatch; }
+
+    /// The live batch's content block (the response's content-so-far).
+    void content(const std::string& text) {
+        if (liveTurnId == 0)
+            return;
+        upsertBlock(liveTurnId, "content#" + std::to_string(liveBatch), batchId(),
+                    TuiBlockKind_Prose, TuiBlockStatus_None, "assistant", text);
+    }
+
+    /// A notice line: its own block on the query batch.
+    void notice(const std::string& text) {
+        upsertBlock(liveTurnId, "notice#" + std::to_string(++noticeSeq), queryBatchId(),
+                    TuiBlockKind_Notice, TuiBlockStatus_None, nullptr, text);
     }
 };
 

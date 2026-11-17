@@ -68,7 +68,7 @@ private struct TypedTurns {
 // responses merge by call id in one pre-pass, so replay never depends on
 // adjacency. An interrupted turn replays its in-flight calls as Cancelled
 // (never a fabricated Ok).
-private TypedTurns buildTypedTurns(Chat.MessageT[] history) {
+private TypedTurns buildTypedTurns(Chat.MessageT[] history, ToolFlags flags) {
     // Pass 1: pair every stored response with its call id (last write wins -
     // the store's upsert-merge semantics for a duplicate call id).
     ToolResponse[string] responseByCallId;
@@ -156,8 +156,8 @@ private TypedTurns buildTypedTurns(Chat.MessageT[] history) {
                 }
                 // idx is 1-based over arr, and the body entries align with arr.
                 const body_ = idx <= calls.length ? calls[idx - 1] : null;
-                out_.blocks ~= withResultPairs(makeBlockData(a.turnId, callId, bid, TuiBlockKind_Tool,
-                    status, kToolBlockFlags, name, meta, body_, callDur), pairs);
+                out_.blocks ~= withResultPairs(makeBlockData(a.turnId, callId, bid,
+                    TuiBlockKind_Tool, status, flags.of(name), name, meta, body_, callDur), pairs);
             }
             if (a.isFinalAnswer())
                 out_.blocks ~= makeBlockData(a.turnId, "answer", bid, TuiBlockKind_Answer,
@@ -1005,8 +1005,15 @@ struct AgentApp {
     /// snapshot with already-merged blocks. A live turn still in flight is
     /// not persisted yet: the switch replay drops its context, so neither its
     /// turn nor its blocks enter the snapshot.
+    /// The config's displayability, folded into every tool block the typed
+    /// emissions write (ToolFlags.of): hidden tools ride the wire as
+    /// TuiBlockFlag_Hidden so the receiver hides them from the flag alone.
+    private ToolFlags currentToolFlags() {
+        return ToolFlags((in string name) => this.llmConf.isHiddenTool(name));
+    }
+
     package void emitReplayTyped() {
-        auto built = buildTypedTurns(agent_.chat.getMessages());
+        auto built = buildTypedTurns(agent_.chat.getMessages(), currentToolFlags());
         if (typedCtx_ !is null) {
             built.turns = built.turns.filter!(t => t.id != typedCtx_.turnId).array;
             built.blocks = built.blocks.filter!(b => b.turnId != typedCtx_.turnId).array;
@@ -1022,6 +1029,7 @@ struct AgentApp {
         const turnId = agent_.chat.currentTurnId();
         typedCtx_ = new TypedEmitContext;
         typedCtx_.turnId = turnId;
+        typedCtx_.toolFlags = currentToolFlags();
         typedCtx_.messageCount = 0;
         typedEmittedTurnIds_ ~= turnId;
         uiMsg.turnUpsert(UiTurnData(turnId, TuiTurnState_Running, 0));
@@ -1038,6 +1046,7 @@ struct AgentApp {
         if (typedCtx_ is null) {
             typedCtx_ = new TypedEmitContext;
             typedCtx_.turnId = agent_.chat.currentTurnId();
+            typedCtx_.toolFlags = currentToolFlags();
         }
         auto ctx = typedCtx_;
 
@@ -1115,9 +1124,9 @@ struct AgentApp {
                     }
                     // idx is 1-based over arr, and the body entries align with arr.
                     const body_ = idx <= calls.length ? calls[idx - 1] : null;
-                    uiMsg.blockUpsert(withResultPairs(makeBlockData(a.turnId != 0 ? a.turnId : ctx.turnId,
-                        callId, bid, TuiBlockKind_Tool, status,
-                        kToolBlockFlags, name, meta, body_, callDur), pairs));
+                    uiMsg.blockUpsert(withResultPairs(makeBlockData(a.turnId != 0 ? a.turnId
+                        : ctx.turnId, callId, bid, TuiBlockKind_Tool, status,
+                        ctx.toolFlags.of(name), name, meta, body_, callDur), pairs));
                     ctx.clearLiveCall(callId); // merged: the stream-done flip list shrinks
                 }
                 ctx.messageCount += cast(int) arr.length;
@@ -1139,10 +1148,9 @@ struct AgentApp {
                 const bi = ctx.batchIndex++;
                 uiMsg.blockUpsert(withResultPairs(makeBlockData(a.turnId != 0
                     ? a.turnId : ctx.turnId, a.toolCallId, responseBatchId(ctx.turnId, bi),
-                    TuiBlockKind_Tool, a.success() ? TuiBlockStatus_Ok
-                    : TuiBlockStatus_Failed, kToolBlockFlags, a.toolName,
-                    summarizeToolResponse(a, 1000), null, durationMsOf(a.processTime())),
-                    unpackToolResultPairs(a)));
+                    TuiBlockKind_Tool, a.success() ? TuiBlockStatus_Ok : TuiBlockStatus_Failed,
+                    ctx.toolFlags.of(a.toolName), a.toolName, summarizeToolResponse(a,
+                    1000), null, durationMsOf(a.processTime())), unpackToolResultPairs(a)));
                 ctx.clearLiveCall(a.toolCallId); // a landed live call never stays live
             }, (VisionMessage a) {
                 uiMsg.blockUpsert(makeBlockData(ctx.turnId, "vision#" ~ to!string(++ctx.visionSeq),
@@ -1167,8 +1175,9 @@ struct AgentApp {
         if (ctx is null)
             return;
         foreach (call; ctx.liveCalls)
-            uiMsg.blockUpsert(makeBlockData(call.turnId, call.id, call.batchId, TuiBlockKind_Tool,
-                    TuiBlockStatus_Cancelled, kToolBlockFlags, call.title, null, call.body, 0));
+            uiMsg.blockUpsert(makeBlockData(call.turnId, call.id, call.batchId,
+                    TuiBlockKind_Tool, TuiBlockStatus_Cancelled,
+                    ctx.toolFlags.of(call.title), call.title, null, call.body, 0));
         ctx.liveCalls = null;
         uiMsg.turnUpsert(UiTurnData(ctx.turnId, TuiTurnState_Interrupted, ctx.messageCount));
     }
@@ -1211,7 +1220,7 @@ struct AgentApp {
     /// upsert has not happened yet (the query echo is sent after doCompress),
     /// so a snapshot cannot kill live state.
     package void emitCompressionTyped() {
-        auto built = buildTypedTurns(agent_.chat.getMessages());
+        auto built = buildTypedTurns(agent_.chat.getMessages(), currentToolFlags());
         uiMsg.setTurns(built.turns, built.blocks);
         typedEmittedTurnIds_ = built.turns.map!(t => t.id).array;
         noticeSeq_ = 0;
@@ -1224,6 +1233,7 @@ struct AgentApp {
         if (typedCtx_ is null) {
             typedCtx_ = new TypedEmitContext;
             typedCtx_.turnId = agent_.chat.currentTurnId();
+            typedCtx_.toolFlags = currentToolFlags();
         }
         return new TypedStreamMessageUpdater(uiMsg, agent_.modelContextSize,
                 llmConf.activeModelDisplayName, typedCtx_);

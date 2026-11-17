@@ -137,7 +137,7 @@ void scenario3_scrollAndApiVersion() {
     expect(state.autoScroll == true, "auto-scroll on stays on across a clear");
 
     // Documentation-only marker: the clear contract must not bump it.
-    static_assert(TUI_API_VERSION == 14, "TUI_API_VERSION must stay at the current generation");
+    static_assert(TUI_API_VERSION == 15, "TUI_API_VERSION must stay at the current generation");
 }
 
 // Scenario 4: the C-API clear is a no-op on a NULL state.

@@ -58,8 +58,9 @@
 //
 // Headless — run from the build dir:  ./test_tui_api_v4
 
-#include "imtui/imtui.h" // ImGui:: context bookkeeping points
-#include "tui.h"         // llmfun::tui::debugIsFrameThread (cancel-flag case)
+#include "imtui/imtui.h"              // ImGui:: context bookkeeping points
+#include "store/typed_thread_store.h" // kBlockFlagHidden mirrors the wire flag
+#include "tui.h"                      // llmfun::tui::debugIsFrameThread (cancel-flag case)
 #include "tui_api.h"
 
 #include <array>
@@ -1026,8 +1027,10 @@ void casePipelineLaneFields() {
     static_assert(sizeof(PipelineChatMessage::contextUsed) == 8 &&
                       sizeof(PipelineChatMessage::contextMax) == 8,
                   "the context numbers are 64-bit");
-    static_assert(TUI_API_VERSION == 14,
+    static_assert(TUI_API_VERSION == 15,
                   "the lane contract changed; bump one version per ABI event");
+    static_assert(llmfun::tui::store::kBlockFlagHidden == TuiBlockFlag_Hidden,
+                  "the store's flag mirror must track the wire flag it mirrors");
     static_assert(sizeof(SessionItem) == 80, "SessionItem is unaffected by the lane fields");
 
     // The tool-call pair's wire pins: three Strings for a call. The result's
@@ -1156,8 +1159,8 @@ void casePipelineLaneFields() {
 void caseThreadTurnBlockFields() {
     g_where = "case: v5 turn/block layout";
 
-    static_assert(TUI_API_VERSION == 14,
-                  "this case pins the current generation (v14); bump one version per ABI event");
+    static_assert(TUI_API_VERSION == 15,
+                  "this case pins the current generation (v15); bump one version per ABI event");
 
     // TuiTurn: int64 + 3x int32 (+ a 4-byte tail pad) = 24 bytes on the 64-bit
     // ABI. The state and the message count follow the id; the reserved word
@@ -1662,8 +1665,8 @@ int main(int argc, char** argv) {
             (void)std::remove("llmfun_ui_log.txt");
     });
 
-    static_assert(TUI_API_VERSION == 14,
-                  "this contract test pins the current API generation (v14)");
+    static_assert(TUI_API_VERSION == 15,
+                  "this contract test pins the current API generation (v15)");
 
     caseNoneStateInert();
     caseLogRecords();

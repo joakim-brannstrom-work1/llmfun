@@ -43,18 +43,13 @@ struct TypedBlock {
     std::uint32_t resultMore = 0;
 };
 
-// Displayability (D3/D10): ONE predicate, shared by weights, thread rendering,
-// drill-down, and the console formatter. A Tool block is hidden iff its tool
-// name is in kHiddenToolNames; every other block kind is displayable.
-// kHiddenToolNames mirrors today's D-side hiddenTools (config.d:423) on the
-// wire's snake_case names; verified against today's isDisplayable behavior
-// (source/llm/app_agent/package.d:1051-1057) - see the unit test for the pin,
-// including the deliberate task_done divergence (v5 renders the task_done step;
-// its answer body arrives as the Answer block). The tool name rides `title` on
-// Tool blocks (TuiBlockKind_Tool == 2 on the wire). Hidden blocks: not
-// rendered, weight 0.
+// Displayability: ONE predicate, shared by weights, thread rendering,
+// drill-down, and the console formatter. A Tool block is hidden iff its wire
+// flags carry TuiBlockFlag_Hidden - the sender folds the config's display
+// verdict (isHiddenTool) into the flags, so the receiver hides from the flag
+// alone, never the name. Every other block kind is displayable. Hidden blocks:
+// not rendered, weight 0.
 bool blockDisplayable(const TypedBlock& b);
-inline constexpr std::array<std::string_view, 1> kHiddenToolNames{"pipeline_output"};
 
 // The wire's vocabulary
 inline constexpr int kBlockKindProse = 0;       // TuiBlockKind_Prose
@@ -68,6 +63,7 @@ inline constexpr int kBlockStatusRunning = 2;   // TuiBlockStatus_Running
 inline constexpr int kBlockStatusOk = 3;        // TuiBlockStatus_Ok
 inline constexpr int kBlockStatusFailed = 4;    // TuiBlockStatus_Failed
 inline constexpr int kBlockStatusCancelled = 5; // TuiBlockStatus_Cancelled
+inline constexpr int kBlockFlagHidden = 8;      // TuiBlockFlag_Hidden
 
 // The wire's turn states (TuiTurnState on the ABI): a turn is Running from the
 // upsert that opens it until the done/stop upsert closes it, and the *running*
@@ -79,9 +75,10 @@ inline constexpr int kTurnStateInterrupted = 2; // TuiTurnState_Interrupted
 // Step-count weights (D4), by status — N = the LLM messages the group covers:
 //   Tool: Ok/Failed = 2 (call + result), Pending/Running/Cancelled = 1;
 //   Prose (response content) = 1; Reasoning = 0 (rides the content message);
-//   turn-opening Prose (user query) = 0; Answer = 0 (counted in its task_done
-//   tool block); Notice = 1; hidden = 0. A result-only block (unknown callId)
-//   has Ok/Failed status, so it weights 2; the call's upsert merges in later.
+//   turn-opening Prose (user query) = 0; Answer = 0 (counted in the tool block
+//   whose result carried the answer); Notice = 1; hidden = 0. A result-only
+//   block (unknown callId) has Ok/Failed status, so it weights 2; the call's
+//   upsert merges in later.
 //
 // Implementations of the prose rule and the gaps the table leaves open (both
 // documented in the .cpp, pinned in the unit test): the turn's FIRST Prose

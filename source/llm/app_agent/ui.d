@@ -603,11 +603,6 @@ class PipelineStreamMessageUpdater : IStreamCallback, IStepEventEmitter, IRunDon
     }
 }
 
-// TODO: this is really bad, hidden dependency between the tools and rendering.
-// Refactor so this is not needed. If the tool name change, more hidden tools
-// are added etc then this needs to be updated.
-package immutable string[] kHiddenToolNames = ["pipeline_output"];
-
 package bool blockDisplayable(UiBlockData b) {
     if (b.kind != TuiBlockKind_Tool)
         return true;
@@ -616,15 +611,25 @@ package bool blockDisplayable(UiBlockData b) {
     // ended (Cancelled), so an un-merged live call renders nothing yet.
     if (b.status == TuiBlockStatus_Pending || b.status == TuiBlockStatus_Running)
         return false;
-    foreach (hidden; kHiddenToolNames)
-        if (b.title == hidden)
-            return false;
-    return true;
+    return (b.flags & TuiBlockFlag_Hidden) == 0;
 }
 
 // Tool blocks are collapsible, open by default, selectable.
 enum int kToolBlockFlags = TuiBlockFlag_Collapsible | TuiBlockFlag_DefaultOpen
     | TuiBlockFlag_Selectable;
+
+/// The config's displayability, resolved once per turn: `isHidden` is the
+/// config's dual-axis predicate (`LlmConfig.isHiddenTool`), null when the
+/// config hides nothing. `of` folds it into the block's wire flags - a hidden
+/// tool's block carries TuiBlockFlag_Hidden, and the receiver (C++ store,
+/// console) decides displayability from the flag alone, never the name.
+struct ToolFlags {
+    bool delegate(in string) isHidden;
+
+    int of(string name) const {
+        return kToolBlockFlags | (isHidden !is null && isHidden(name) ? TuiBlockFlag_Hidden : 0);
+    }
+}
 
 // Stable block ids / batch ids. Batch ids are "<turnId>#<batchIndex>" (0-based
 // per-response index within the turn, recomputed deterministically on replay);
@@ -714,6 +719,8 @@ package final class TypedEmitContext {
     bool closedByAnswer;
     /// The role the streamed content blocks carry.
     string role = "assistant";
+    /// The config's displayability for this turn's tool blocks (see ToolFlags).
+    ToolFlags toolFlags;
 
     /// One in-flight tool call of the live batch: what the Pending upsert
     /// carried, kept so stream-done can flip the whole batch to Running and a
@@ -787,8 +794,9 @@ package final class TypedStreamMessageUpdater : IStreamCallback {
 
         foreach (tool; tools.filter!(a => !a.id.empty)) {
             const body_ = summarizedCallBody(tool.arguments);
-            uiMsg.blockUpsert(makeBlockData(ctx.turnId, tool.id, ctx.batchId, TuiBlockKind_Tool,
-                    TuiBlockStatus_Pending, kToolBlockFlags, tool.toolName, null, body_, 0));
+            uiMsg.blockUpsert(makeBlockData(ctx.turnId, tool.id, ctx.batchId,
+                    TuiBlockKind_Tool, TuiBlockStatus_Pending,
+                    ctx.toolFlags.of(tool.toolName), tool.toolName, null, body_, 0));
             ctx.recordLiveCall(tool.id, tool.toolName, body_);
         }
     }
@@ -796,8 +804,9 @@ package final class TypedStreamMessageUpdater : IStreamCallback {
     override void streamMessageDone() {
         // The batch's Pending -> Running flip rides the stream-done: re-upsert every call the ticks upserted, status Running.
         foreach (call; ctx.liveCalls) {
-            uiMsg.blockUpsert(makeBlockData(call.turnId, call.id, call.batchId, TuiBlockKind_Tool,
-                    TuiBlockStatus_Running, kToolBlockFlags, call.title, null, call.body, 0));
+            uiMsg.blockUpsert(makeBlockData(call.turnId, call.id, call.batchId,
+                    TuiBlockKind_Tool, TuiBlockStatus_Running,
+                    ctx.toolFlags.of(call.title), call.title, null, call.body, 0));
         }
     }
 

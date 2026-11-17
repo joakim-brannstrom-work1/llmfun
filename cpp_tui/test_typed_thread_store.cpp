@@ -137,20 +137,23 @@ int main(int argc, char** argv) {
 
     // --- Displayability (D3) and the step-count weights (D4) --------------------
     {
-        check(tui::store::kHiddenToolNames.size() == 1 &&
-                  tui::store::kHiddenToolNames[0] == "pipeline_output",
-              "the hidden set is exactly the v5 wire name (pipeline_output)");
         TypedBlock prose = block(1, "p", 0, 0);
         check(tui::store::blockDisplayable(prose), "non-Tool blocks are always displayable (D3)");
         TypedBlock tool = block(1, "t", 2, 3, "grep");
         check(tui::store::blockDisplayable(tool),
-              "a Tool block outside the hidden set is displayable");
-        tool.title = "pipeline_output";
-        check(!tui::store::blockDisplayable(tool), "a Tool block in the hidden set is not (D3)");
+              "a Tool block without the Hidden flag is displayable");
+        tool.flags |= tui::store::kBlockFlagHidden;
+        check(!tui::store::blockDisplayable(tool),
+              "a Tool block carrying TuiBlockFlag_Hidden is not (D3)");
+        TypedBlock titled = block(1, "t2", 2, 3, "pipeline_output");
+        check(tui::store::blockDisplayable(titled),
+              "displayability is flag-only: the hidden NAME alone is displayable (D3)");
 
         TypedThreadStore store;
         store.turnUpsert(turn(100)); // hidden tool: weight 0
-        store.blockUpsert(block(100, "h", 2, 3, "pipeline_output", "..."));
+        TypedBlock hidden = block(100, "h", 2, 3, "anything", "...");
+        hidden.flags |= tui::store::kBlockFlagHidden;
+        store.blockUpsert(hidden);
         check(tui::store::stepCount(store, 100) == 0, "a hidden tool block weighs 0 (D3)");
 
         store.turnUpsert(turn(101)); // task_done's card + its Answer: 2 + 0
@@ -158,6 +161,15 @@ int main(int argc, char** argv) {
         store.blockUpsert(block(101, "ans", 3, 0, "", "the answer"));
         check(tui::store::stepCount(store, 101) == 2,
               "task_done is rendered: its card weighs 2 and its Answer rides it (D3/D4)");
+
+        store.turnUpsert(turn(104)); // a real run's shape: the config's verdict
+        // flags task_done hidden, so its card weighs 0 and the Answer rides alone.
+        TypedBlock flaggedDone = block(104, "td", 2, 3, "task_done", "the answer");
+        flaggedDone.flags |= tui::store::kBlockFlagHidden;
+        store.blockUpsert(flaggedDone);
+        store.blockUpsert(block(104, "ans", 3, 0, "", "the answer"));
+        check(tui::store::stepCount(store, 104) == 0,
+              "a flagged task_done card weighs 0: the Answer rides alone");
 
         store.turnUpsert(turn(102)); // the turn-opening query + reasoning: 0 + 0
         store.blockUpsert(block(102, "q", 0, 0, "", "what is v5?"));
@@ -287,9 +299,12 @@ int main(int argc, char** argv) {
         tui::store::ThreadStoreAdapter thread(state);
         thread.bind(state);
         state.chat.typedTurns.turnUpsert(turn(42, 1, 3));
-        state.chat.typedTurns.blockUpsert(block(42, "q", 0, 0, "", "what is v5?"));
-        state.chat.typedTurns.blockUpsert(block(42, "call-1", 2, 3, "grep", "call body", "", 1500));
-        state.chat.typedTurns.blockUpsert(block(42, "hid", 2, 3, "pipeline_output", "secret"));
+        state.chat.typedTurns.blockUpsert(block(42, "q", 0, 0, "", "what is v5?", "42#q"));
+        state.chat.typedTurns.blockUpsert(
+            block(42, "call-1", 2, 3, "grep", "call body", "42#0", 1500));
+        TypedBlock hid = block(42, "hid", 2, 3, "pipeline_output", "secret", "42#0");
+        hid.flags |= tui::store::kBlockFlagHidden;
+        state.chat.typedTurns.blockUpsert(hid);
 
         check(thread.groupCount() == 1, "typed: one stored turn is one group");
         check(thread.groupAt(0).id == 42,
@@ -321,13 +336,14 @@ int main(int argc, char** argv) {
         // A rebuild observes the change: the revision moves, so a height hint
         // keyed on the old revision is stale (the v4 guard's job, typed).
         const std::uint64_t rev0 = thread.groupAt(0).revision;
-        state.chat.typedTurns.blockUpsert(block(42, "call-1", 2, 3, "grep", "call body v2"));
+        state.chat.typedTurns.blockUpsert(
+            block(42, "call-1", 2, 3, "grep", "call body v2", "42#0"));
         check(thread.groupAt(0).revision == rev0 + 1,
               "typed: a block merge bumps the group's revision (the hint guard sees it)");
         check(thread.blockCount(0) == 2, "typed: the merge stayed in its slot");
 
         // An unknown wire kind draws as a system notice, never as a neighbour's row.
-        state.chat.typedTurns.blockUpsert(block(42, "odd", 9, 0, "", "mystery"));
+        state.chat.typedTurns.blockUpsert(block(42, "odd", 9, 0, "", "mystery", "42#0"));
         check(thread.blockCount(0) == 3, "typed: an unknown kind is still a row");
         check(thread.blockAt(0, 2).kind == tui::model::BlockKind::System &&
                   thread.blockAt(0, 2).label == "SYSTEM",
