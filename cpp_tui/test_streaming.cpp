@@ -355,12 +355,18 @@ struct Fixture {
     store::GroupView streamGroup() const { return state.threadAdapter.groupAt(streamGroupIndex()); }
 
     /// The stream group's content row: the `Assistant`-kind block D's stream updater
-    /// merges the answer into (the query block is a `User` row, the reasoning a `Thinking` one).
+    /// merges the answer into (`content#0`; the query block is a `User` row, the
+    /// reasoning a `Thinking` one). The batch's synthetic owner row (DD-13) is
+    /// an `Assistant` row too, so the owner's namespaced key is skipped - the
+    /// helper names the streamed body's row, never the owner's.
     size_t streamBodyRow() const {
         const size_t blocks = state.threadAdapter.blockCount(streamGroupIndex());
+        const std::size_t ownerKey = std::hash<std::string>{}(
+            "batch#" + std::to_string(seed.liveTurnId) + "#" + std::to_string(seed.liveBatch));
         for (size_t b = 1; b < blocks; ++b)
             if (state.threadAdapter.blockAt(streamGroupIndex(), b).kind ==
-                model::BlockKind::Assistant)
+                    model::BlockKind::Assistant &&
+                state.threadAdapter.blockAt(streamGroupIndex(), b).key != ownerKey)
                 return b;
         return blocks - 1;
     }
@@ -527,8 +533,9 @@ void checkThrottle() {
           "300 ticks merge into one rebuild of the group (got " +
               std::to_string(fast.state.threadAdapter.groupBuilds() - buildsBefore) + ")");
     const size_t group = fast.streamGroupIndex();
-    check(fast.state.threadAdapter.blockCount(group) == 2,
-          "the storm still leaves the turn its header and one content block (got " +
+    check(fast.state.threadAdapter.blockCount(group) == 3,
+          "the storm still leaves the turn its header, the batch's owner row and one "
+          "content block (got " +
               std::to_string(fast.state.threadAdapter.blockCount(group)) + ")");
     check(grid.contains("chunk 300"), "the drawn body is the newest tick");
 
@@ -670,22 +677,22 @@ void checkHeader() {
     phase("header");
     Fixture fixture;
     fixture.stream("", "Let me think", kT0);
-    check(headerOf(fixture, 2) == "Thinking",
+    check(headerOf(fixture, 3) == "Thinking",
           "a reasoning row's header is the bare word while it streams (got '" +
-              headerOf(fixture, 2) + "')");
+              headerOf(fixture, 3) + "')");
     check(headerOf(fixture, 0) == "WORK - 1 step",
           "and the live turn's header is the work group's (got '" + headerOf(fixture, 0) + "')");
 
     // The answer's text arrives: the reasoning row holds still (D stamps the duration
     // at completion), and seconds passing move nothing.
     fixture.stream("The answer", "Let me think", kT0 + 12000);
-    check(headerOf(fixture, 2) == "Thinking",
-          "the reasoning row holds still while the answer streams (got '" + headerOf(fixture, 2) +
+    check(headerOf(fixture, 3) == "Thinking",
+          "the reasoning row holds still while the answer streams (got '" + headerOf(fixture, 3) +
               "')");
     fixture.tick(kT0 + 13000);
     fixture.tick(kT0 + 14000);
     fixture.tick(kT0 + 15000);
-    check(headerOf(fixture, 2) == "Thinking",
+    check(headerOf(fixture, 3) == "Thinking",
           "and holds still across three seconds of ticking (flicker-free)");
 
     // A stop closes the turn; the group is stored (the thread's only group) and keeps
@@ -695,9 +702,9 @@ void checkHeader() {
     check(fixture.state.threadAdapter.blockAt(group, 0).label == "WORK",
           "the stored turn keeps its work header (got '" +
               fixture.state.threadAdapter.blockAt(group, 0).label + "')");
-    check(fixture.state.threadAdapter.blockAt(group, 2).label == "Thinking",
+    check(fixture.state.threadAdapter.blockAt(group, 3).label == "Thinking",
           "and the reasoning row's header, still unstamped (got '" +
-              fixture.state.threadAdapter.blockAt(group, 2).label + "')");
+              fixture.state.threadAdapter.blockAt(group, 3).label + "')");
 
     // The header is the block's, so a completed block keeps its own shape: the Answer
     // block D stamps at completion prints its duration.
@@ -713,7 +720,7 @@ void checkHeader() {
     // A stamped reasoning keeps its duration too.
     stored.seed.upsertBlock(1, "reasoning#0", "1#0", TuiBlockKind_Reasoning, TuiBlockStatus_None,
                             nullptr, "the reasoning", nullptr, 2500);
-    const model::BlockDesc reasoning = stored.state.threadAdapter.blockAt(0, 1);
+    const model::BlockDesc reasoning = stored.state.threadAdapter.blockAt(0, 2);
     check(reasoning.kind == model::BlockKind::Thinking, "a turn's reasoning is its own block");
     check(views::blockHeaderText(reasoning, views::BlockDraw{true, false}, true) ==
               "Thinking - 2.5 s",

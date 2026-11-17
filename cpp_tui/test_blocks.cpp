@@ -1069,14 +1069,18 @@ void checkStreaming() {
     check(g_clipboard == "STREAM-THINKING",
           "`y` on the reasoning copies the reasoning (got '" + g_clipboard + "')");
 
-    // The body row is its own target: `y` there copies the prose. Its row is *below* the
-    // reasoning body, so it is found in the captured grid rather than assumed.
+    // The body row is its own target: `y` there copies the prose. The batch's
+    // owner row (DD-13) prints AGENT above it, so the row is the AGENT header
+    // directly above the body text - found in the captured grid, never assumed.
+    const int bodyText = rowOf(grid, "STREAM-PROSE");
     int agentRow = -1;
-    for (int y = 0; y < grid.ny; ++y)
-        if (grid.rowText(y).find("AGENT") != std::string::npos && agentRow < 0)
+    for (int y = bodyText; y >= 0; --y)
+        if (grid.rowText(y).find("AGENT") != std::string::npos) {
             agentRow = y;
-    check(agentRow > 0,
-          "the body row is below the reasoning row (row " + std::to_string(agentRow) + ")");
+            break;
+        }
+    check(agentRow >= 0,
+          "the body row sits under its own AGENT header (row " + std::to_string(agentRow) + ")");
     clickRow(static_cast<float>(agentRow));
     check(both.state.ui.thread.focus ==
               model::BlockId{1, std::hash<std::string>{}("content#0"), model::BlockKind::Assistant},
@@ -1170,9 +1174,10 @@ void checkFocusAndCopy() {
     code.add(message(2, MsgKind::Assistant, "[2] here [1.0s]", "```\nint x = 1;\n```"));
     code.openNewestGroup();
     code.draw();
-    // The code block is the *fourth* row of its work group (header, query, query
-    // body, code row), so the focus has to be put on the row that holds the body.
-    code.draw(true, [](ImGuiIO& in) { in.AddMousePosEvent(2.0f, 3.0f); });
+    // The code block is the *fifth* row of its work group (header, query, query
+    // body, the batch's owner row, code row), so the focus has to be put on the
+    // row that holds the body.
+    code.draw(true, [](ImGuiIO& in) { in.AddMousePosEvent(2.0f, 4.0f); });
     code.draw(true, [](ImGuiIO& in) { in.AddMouseButtonEvent(0, true); });
     code.draw(true, [](ImGuiIO& in) { in.AddMouseButtonEvent(0, false); });
     code.draw(true); // the click's answer is drawn on the next frame
@@ -1215,7 +1220,7 @@ void checkStreamReasoningDefault() {
     fixture.seed.runStart("stream this");
     fixture.addStream(MsgKind::Assistant, "prose", "reasoning");
     fixture.draw();
-    const size_t bodyRow = 2; // header, content, reasoning
+    const size_t bodyRow = 3; // header, the batch's owner row, content, reasoning
     check(!fixture.state.threadAdapter.blockExpanded(0, bodyRow),
           "a new stream's reasoning starts folded (its preview is the header's)");
 
@@ -1294,8 +1299,16 @@ void checkCrossGroupIdentity() {
     };
 
     // The stored Assistant body: the turn's second prose block ("content#1" -
-    // the first was message 2's). Its 2.0 s timing is unique here.
-    const int storedBody = rowOf(grid, "AGENT - 2.0 s");
+    // the first was message 2's). Its 2.0 s timing is unique here - but the
+    // batch's owner row (DD-13) prints the batch's duration too, so the row is
+    // the AGENT header directly above the body text, never the header alone.
+    const int storedBodyText = rowOf(grid, "stored-three");
+    int storedBody = -1;
+    for (int y = storedBodyText; y >= 0; --y)
+        if (grid.rowText(y).find("AGENT") != std::string::npos) {
+            storedBody = y;
+            break;
+        }
     check(storedBody >= 0, "the stored message 3 body row is on screen");
     Grid afterStoredBody = clickRow(storedBody);
     check(fixture.state.ui.thread.focus ==
@@ -1513,7 +1526,18 @@ void checkCopyFromEveryBlock() {
         build(keyboard);
         keyboard.openNewestGroup(); // the case's row is work: minimal folds it
         Grid grid = keyboard.draw();
-        const int row = findRow(grid, c.label);
+        // A streamed body draws verbatim, so its header is the case's label row
+        // directly above it. Walking up from the body matters for the streamed
+        // Thinking case: the live edge also draws a folded "Thinking" shadow
+        // line under the group's rows, which a bottom-up label search would
+        // hit first - and the shadow is not a focusable row.
+        const int bodyRow = c.stream ? findRow(grid, c.want) : -1;
+        int row = -1;
+        for (int y = bodyRow; bodyRow >= 0 && y >= 0 && row < 0; --y)
+            if (grid.rowText(y).find(c.label) != std::string::npos)
+                row = y;
+        if (row < 0)
+            row = findRow(grid, c.label, /*fromBottom=*/true);
         check(row >= 0, what + ": its row is on screen");
         if (row < 0)
             continue;
@@ -1535,7 +1559,15 @@ void checkCopyFromEveryBlock() {
         build(pointer);
         pointer.openNewestGroup();
         const Grid before = pointer.draw();
-        const int menuRow = findRow(before, c.label);
+        // Same body-relative lookup as above: the streamed Thinking case's
+        // label row sits above its body, under the live-edge shadow line.
+        const int beforeBody = c.stream ? findRow(before, c.want) : -1;
+        int menuRow = -1;
+        for (int y = beforeBody; beforeBody >= 0 && y >= 0 && menuRow < 0; --y)
+            if (before.rowText(y).find(c.label) != std::string::npos)
+                menuRow = y;
+        if (menuRow < 0)
+            menuRow = findRow(before, c.label, /*fromBottom=*/true);
         check(menuRow >= 0, what + ": its row is on screen for the menu");
         if (menuRow < 0)
             continue;

@@ -33,6 +33,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace llmfun::tui::store {
@@ -165,6 +166,34 @@ static std::uint64_t typedTurnFingerprint(const store::TypedThreadStore& typed,
     return h.value();
 }
 
+// The one chips composer (DD-18, FR-23): distinct names in first-occurrence
+// order, empty names never chip, the first three drawn then `+N` for the rest.
+std::string chipsText(const std::vector<std::string>& toolNames) {
+    std::vector<std::string> names;
+    for (const std::string& name : toolNames) {
+        if (name.empty())
+            continue;
+        if (std::find(names.begin(), names.end(), name) == names.end())
+            names.push_back(name);
+    }
+    if (names.empty())
+        return std::string();
+    const std::size_t shown = std::min<std::size_t>(names.size(), 3);
+    std::string out;
+    for (std::size_t i = 0; i < shown; ++i) {
+        if (i != 0)
+            out.push_back(' ');
+        out.push_back('[');
+        out += names[i];
+        out.push_back(']');
+    }
+    if (names.size() > shown) {
+        out += " +";
+        out += std::to_string(names.size() - shown);
+    }
+    return out;
+}
+
 // The typed-backed rebuild (v5, task 2): one group per stored turn, one row per
 // displayed block, through the same Entry/BlockEntry machinery the v4 body
 // fills - the GroupView/BlockDesc consumers cannot tell the paths apart. The
@@ -206,6 +235,9 @@ void ThreadStoreAdapter::syncTyped() const {
         entry.view.kind = GroupKind::AssistantWork;
         entry.view.revision = typedRevision_[turn.id];
         entry.view.typedTurn = true;
+        // The turn's live state off the wire: Running from the upsert that
+        // opens the turn until the done/stop upsert closes it (§4.3).
+        entry.turnLive = turn.state == store::kTurnStateRunning;
         const int steps = stepCount(typed, turn.id);
         entry.view.oneLineSummary = "WORK";
         entry.view.oneLineSummary.append(roleSeparator());
@@ -232,22 +264,35 @@ void ThreadStoreAdapter::syncTyped() const {
         // agent role as meta instead, so it renders as assistant work inside
         // the group, never as the turn's query.
         std::string queryId;
+        std::string queryBatchId; // the query row's batch - not a response batch (DD-4)
         std::string firstProseId;
+        std::string firstProseBatchId;
         bool sawProseMeta = false;
         for (std::size_t b = 0; b < blockN; ++b) {
             const store::TypedBlock& block = typed.blockAt(turn.id, b);
             if (block.kind != store::kBlockKindProse)
                 continue;
-            if (firstProseId.empty())
+            if (firstProseId.empty()) {
                 firstProseId = block.id;
+                firstProseBatchId = block.batchId;
+            }
+            // TODO: meta should not be a string but an enum, if possible, to
+            // avoid coupling strings in D and C++ with each other.
             if (block.meta == "user") {
                 queryId = block.id;
+                queryBatchId = block.batchId;
                 break; // the first user-tagged prose wins
             }
             sawProseMeta = sawProseMeta || !block.meta.empty();
         }
-        if (queryId.empty() && !sawProseMeta)
+        if (queryId.empty() && !sawProseMeta) {
             queryId = firstProseId; // the pre-meta fallback
+            queryBatchId = firstProseBatchId;
+        }
+        // The rows in wire order first: the bucketing below reads them whole,
+        // and the emission walks them by wire index (the owner row's anchor).
+        std::vector<BlockEntry> rows;
+        rows.reserve(blockN);
         for (std::size_t b = 0; b < blockN; ++b) {
             const store::TypedBlock& block = typed.blockAt(turn.id, b);
             if (!blockDisplayable(block))
@@ -327,9 +372,103 @@ void ThreadStoreAdapter::syncTyped() const {
                 entry.answerRow = std::move(row);
                 entry.hasAnswer = true;
             } else {
-                entry.blocks.push_back(std::move(row));
+                rows.push_back(std::move(row));
             }
         }
+        // The bucketing (task 7): the rows group by batch id - every batch but
+        // the query's is a response batch (DD-4; ids are opaque, nothing parses
+        // them). The rows keep their wire order; each records the bucket it
+        // joined, and the batch accumulates the facts its owner row (DD-13)
+        // and the tests read. Nothing is dropped or re-ordered here (DD-5 and
+        // DD-15 are task 8's).
+        std::unordered_map<std::string, std::size_t> bucketOf;
+        std::vector<std::vector<std::string>> batchCalls; // per batch: call names, in call order
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            BlockEntry& row = rows[i];
+            if (entry.hasQuery && row.typedBatchId == queryBatchId)
+                continue; // the query batch's rows stay plain - its notice rides along
+            std::size_t slot;
+            const auto found = bucketOf.find(row.typedBatchId);
+            if (found == bucketOf.end()) {
+                slot = entry.batches.size();
+                bucketOf.emplace(row.typedBatchId, slot);
+                BatchEntry batch;
+                batch.batchId = row.typedBatchId;
+                batch.firstRow = i;
+                entry.batches.push_back(std::move(batch));
+                batchCalls.emplace_back();
+            } else {
+                slot = found->second;
+            }
+            BatchEntry& batch = entry.batches[slot];
+            row.batch = slot;
+            row.batchOwned = true;
+            batch.hasReasoning = batch.hasReasoning || row.kind == model::BlockKind::Thinking;
+            batch.hasContent = batch.hasContent || row.kind == model::BlockKind::Assistant;
+            if (row.kind == model::BlockKind::ToolStep) {
+                batchCalls[slot].push_back(row.typedTitle);
+                if (row.state == model::BlockState::Failed) {
+                    batch.failedCalls += 1;
+                    batch.anyFailed = true;
+                }
+                if (row.state != model::BlockState::Ok && row.state != model::BlockState::Failed &&
+                    row.state != model::BlockState::Cancelled)
+                    batch.allSettled = false;
+            }
+            // The batch's duration is the content block's (DD-8), read before
+            // any drop - a live content block says 0s until it ticks.
+            if (row.kind == model::BlockKind::Assistant && row.timingS > 0.0 &&
+                batch.durationS == 0.0)
+                batch.durationS = row.timingS;
+        }
+        // I-12: the turn's last bucket is the newest.
+        if (!entry.batches.empty())
+            entry.batches.back().isNewest = true;
+        // I-7: buckets are created at their first row's visit, so the vector's
+        // order IS the first-row order - a bucket born later always sits later.
+        for (std::size_t i = 1; i < entry.batches.size(); ++i)
+            assert(entry.batches[i - 1].firstRow < entry.batches[i].firstRow);
+        // The batch's chips line (FR-23), composed by the one chips composer.
+        for (std::size_t i = 0; i < entry.batches.size(); ++i)
+            entry.batches[i].chips = chipsText(batchCalls[i]);
+
+        // The emission: the wire order, with one owner row (DD-13) inserted
+        // before each response batch's first row. Later batch rows stay where
+        // the wire put them - ordering, drops and placement are task 8's.
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            BlockEntry row = std::move(rows[i]);
+            if (row.batch != kNoBatch && entry.batches[row.batch].firstRow == i) {
+                const BatchEntry& batch = entry.batches[row.batch];
+                BlockEntry owner;
+                owner.kind = model::BlockKind::Assistant; // the AGENT row (blockAt labels it)
+                owner.timingS = batch.durationS;
+                owner.expandable = true;
+                // Pre-cutover keying, same as the wire rows: the owner's
+                // namespaced id's hash - stable, but not injective.
+                owner.key = std::hash<std::string>{}("batch#" + batch.batchId);
+                owner.typedTurnId = turn.id;
+                owner.typedBlockId = "batch#" + batch.batchId;
+                owner.typedBatchId = batch.batchId;
+                owner.batch = row.batch;
+                owner.ownsBatch = true;
+                // The state stays None (I-8): no wire status is written by the
+                // C++ side - the FAIL word and the chips are the batch's own
+                // facts, and the tasks that draw them read `Entry::batches`.
+                entry.blocks.push_back(std::move(owner));
+            }
+            entry.blocks.push_back(std::move(row));
+        }
+        // I-6: a turn's row ids never repeat - the owner namespace (`batch#...`)
+        // colliding with a wire block id would silently merge two rows.
+#ifndef NDEBUG
+        {
+            std::set<std::string> ids;
+            for (const BlockEntry& row : entry.blocks) {
+                const auto inserted = ids.insert(row.typedBlockId);
+                assert(inserted.second && "I-6: a turn's row ids never repeat");
+            }
+        }
+#endif
         // The batch's thinking meta (F5): the disclosure names its response's
         // tool count - "Thinking · N tool calls" - counted over the Tool rows
         // that share its batch id. A tool-less batch leaves the meta 0, and
@@ -568,6 +707,13 @@ std::size_t ThreadStoreAdapter::blockCount(size_t k) const {
     if (k >= groups_.size())
         return 0;
     return groups_[k].blocks.size();
+}
+
+std::size_t ThreadStoreAdapter::batchCount(size_t k) const {
+    sync();
+    if (k >= groups_.size())
+        return 0;
+    return groups_[k].batches.size();
 }
 
 model::BlockDesc ThreadStoreAdapter::blockAt(size_t k, std::size_t b) const {

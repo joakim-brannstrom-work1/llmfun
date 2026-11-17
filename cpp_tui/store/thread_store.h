@@ -92,6 +92,11 @@ enum class GroupOverride { ForceOpen, ForceClosed };
 inline constexpr std::size_t kQueryRow = static_cast<std::size_t>(-1);
 inline constexpr std::size_t kAnswerRow = static_cast<std::size_t>(-2);
 
+/// The row vocabulary's batch sentinel: a plain row's `batch` - the query
+/// batch's rows and any batch the projection did not bucket. Not an index
+/// into anything: only "is this row a response-batch row" is read off it.
+inline constexpr std::size_t kNoBatch = static_cast<std::size_t>(-1);
+
 /// One group of the thread, as a view sees it.
 ///
 /// `id` is the group's id - the persisted turn id (never reused). `revision` is
@@ -250,6 +255,12 @@ public:
     /// such a block answers a descriptor with `group == 0`.
     model::BlockDesc blockAt(size_t k, std::size_t b) const;
 
+    /// How many response batches the turn projects (0 out of range) - a
+    /// read-only count over the turn's bucketed batches, so the tests can pin
+    /// the bucketing without reaching into the adapter. The query's batch is
+    /// not a response batch and is never counted (DD-4).
+    std::size_t batchCount(size_t k) const;
+
     /// Whether block `b` shows its body. Group and row blocks read the very sets
     /// the store keeps (`openWorkGroups` / `typedRowOpen_`), so a click and a read
     /// cannot disagree (D-GROUPID); a thinking disclosure is the view's own and lives
@@ -354,6 +365,32 @@ public:
     size_t renderCalls() const { return renderCalls_; }
 
 private:
+    /// One response batch of a turn (task 7): the facts the projection buckets
+    /// per `batchId`. Built while the turn's rows are bucketed - the query's
+    /// batch is not a response batch and gets none (DD-4). `firstRow` is the
+    /// wire index of the batch's first row, so the owner row (DD-13) emits
+    /// before it and the bucket vector's order is the first-row order (I-7).
+    /// The facts read the batch's *displayed* rows; nothing is dropped or
+    /// re-ordered here (DD-15/DD-5 are task 8's).
+    struct BatchEntry {
+        std::string batchId;
+        std::size_t firstRow = 0;
+        bool isNewest = false; ///< the turn's last bucket (I-12)
+        bool hasReasoning = false;
+        bool hasContent = false;
+        bool anyFailed = false;
+        /// the batch's calls have all settled (Ok/Failed/Cancelled) - the
+        /// still-running and pending states clear it
+        bool allSettled = true;
+        int failedCalls = 0;
+        /// the batch's chips line (FR-23): composed once per rebuild by
+        /// `chipsText()` over the batch's tool names, ready to draw
+        std::string chips;
+        /// the batch's duration: the content block's `durationMs` (DD-8) -
+        /// a settled batch says "1.2s" in its header
+        double durationS = 0.0;
+    };
+
     /// One block of a group (design §4.5, task 26): the group's own header row, a
     /// message's body row, or a message's thinking disclosure.
     ///
@@ -381,6 +418,14 @@ private:
         /// The typed block's batch id: the response's blocks share it, which is
         /// how a thinking disclosure counts its batch's tool cards (F5).
         std::string typedBatchId;
+        /// The batch bookkeeping the projection fills (task 7): `batch` is the
+        /// row's slot in `Entry::batches` (`kNoBatch` for a plain row - the
+        /// query batch's rows and anything not bucketed); `batchOwned` says the
+        /// row joined a response batch (a bucket child); `ownsBatch` marks the
+        /// synthetic owner row itself (DD-13) - the wire never sends it.
+        std::size_t batch = kNoBatch;
+        bool batchOwned = false;
+        bool ownsBatch = false;
         /// The batch's tool-card count (F5): filled for a Thinking row by
         /// counting the Tool rows that share its `typedBatchId`.
         int batchTools = 0;
@@ -406,6 +451,13 @@ private:
         bool hasQuery = false;
         BlockEntry answerRow;
         bool hasAnswer = false;
+        /// The turn's live state off the wire (`TypedTurn::state`): Running from
+        /// the upsert that opens the turn until the done/stop upsert closes it.
+        bool turnLive = false;
+        /// The turn's response batches, in first-row order (I-7): one per
+        /// batch id that is not the query's (DD-4). The owner rows in `blocks`
+        /// project these (DD-13).
+        std::vector<BatchEntry> batches;
     };
 
     /// Rebuild `groups_` if the store changed since the last call.
@@ -472,6 +524,13 @@ private:
     size_t groupOpenBefore_ = 0;
     float groupTop_ = 0.0f;
 };
+
+/// The one chips composer (DD-18, FR-23): the running tool calls' names as the
+/// live-edge chips line - `"[bash] [grep]"`, first three distinct names then
+/// `+N` (`"[bash] [grep] [read_file] +1"`), empty for no calls. The projection
+/// composes a batch's settled chips with it, and the view composes the live
+/// edge's with the same helper, so the two notations can never drift apart.
+std::string chipsText(const std::vector<std::string>& toolNames);
 
 // The palette's "copy last answer" used to ask this file for the newest answer's text
 // (`lastAnswerText()`). It asks the adapter for a *block* now -

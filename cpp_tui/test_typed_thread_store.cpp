@@ -316,9 +316,9 @@ int main(int argc, char** argv) {
               "typed: the header announces its step count (the hidden block weighs 0, "
               "the settled tool carries call + result)");
 
-        check(thread.blockCount(0) == 2,
-              "typed: the query projects outside the group, the hidden tool block "
-              "is stored but not a row (D3)");
+        check(thread.blockCount(0) == 3,
+              "typed: the query projects outside the group, the hidden tool block is "
+              "stored but not a row, and the batch's owner row is a row (D3, DD-13)");
         const tui::model::BlockDesc header = thread.blockAt(0, 0);
         check(header.label == "WORK" && !header.hasBody && header.steps == 2,
               "typed: the header row announces the steps and has no body of its own");
@@ -327,7 +327,12 @@ int main(int argc, char** argv) {
               "typed: the turn-opening prose is the query row, addressed turn-level");
         check(q.summary == "what is v5?" && q.hasBody,
               "typed: the query previews its body, no number prefix");
-        const tui::model::BlockDesc tool = thread.blockAt(0, 1);
+        const tui::model::BlockDesc owner = thread.blockAt(0, 1);
+        check(owner.label == "AGENT" && owner.kind == tui::model::BlockKind::Assistant,
+              "typed: the response's owner row is the synthetic AGENT (DD-13)");
+        check(owner.timingS == 0.0,
+              "typed: a batch without a content block carries no duration (DD-8)");
+        const tui::model::BlockDesc tool = thread.blockAt(0, 2);
         check(tool.label == "TOOL" && tool.state == tui::model::BlockState::Ok,
               "typed: the merged tool card carries the wire status");
         check(tool.summary == "grep", "typed: the tool card previews its tool name");
@@ -340,13 +345,13 @@ int main(int argc, char** argv) {
             block(42, "call-1", 2, 3, "grep", "call body v2", "42#0"));
         check(thread.groupAt(0).revision == rev0 + 1,
               "typed: a block merge bumps the group's revision (the hint guard sees it)");
-        check(thread.blockCount(0) == 2, "typed: the merge stayed in its slot");
+        check(thread.blockCount(0) == 3, "typed: the merge stayed in its slot");
 
         // An unknown wire kind draws as a system notice, never as a neighbour's row.
         state.chat.typedTurns.blockUpsert(block(42, "odd", 9, 0, "", "mystery", "42#0"));
-        check(thread.blockCount(0) == 3, "typed: an unknown kind is still a row");
-        check(thread.blockAt(0, 2).kind == tui::model::BlockKind::System &&
-                  thread.blockAt(0, 2).label == "SYSTEM",
+        check(thread.blockCount(0) == 4, "typed: an unknown kind is still a row");
+        check(thread.blockAt(0, 3).kind == tui::model::BlockKind::System &&
+                  thread.blockAt(0, 3).label == "SYSTEM",
               "typed: an unknown wire kind draws as a system notice");
 
         // Expansion: the header shares the v4 work-group set, keyed by the
@@ -354,12 +359,12 @@ int main(int argc, char** argv) {
         // seeded - task 2's groups are born collapsed, and while the group is
         // folded a row's bit is its own.
         check(!thread.expanded(42), "typed: a group is born collapsed (task 2 seeds no defaults)");
-        check(!thread.blockExpanded(0, 1),
+        check(!thread.blockExpanded(0, 2),
               "typed: a tool row is born collapsed (the group is folded)");
-        check(thread.setBlockExpanded(0, 1, true), "typed: opening a tool row reports open");
-        check(thread.blockExpanded(0, 1), "typed: the row's disclosure took");
-        thread.setBlockExpanded(0, 1, false);
-        check(!thread.blockExpanded(0, 1), "typed: closing it clears the bit");
+        check(thread.setBlockExpanded(0, 2, true), "typed: opening a tool row reports open");
+        check(thread.blockExpanded(0, 2), "typed: the row's disclosure took");
+        thread.setBlockExpanded(0, 2, false);
+        check(!thread.blockExpanded(0, 2), "typed: closing it clears the bit");
 
         // A second adapter bound to the same state answers the same thing where
         // the state is shared: the group header's bit lives in openWorkGroups,
@@ -369,11 +374,11 @@ int main(int argc, char** argv) {
         other.bind(state);
         check(other.groupCount() == 1 && other.groupAt(0).id == 42,
               "typed: a second adapter rebuilds the same groups from the store");
-        check(other.blockAt(0, 1).label == "TOOL" && other.blockAt(0, 1).summary == "grep",
+        check(other.blockAt(0, 2).label == "TOOL" && other.blockAt(0, 2).summary == "grep",
               "typed: ...and the same block view");
         check(other.expanded(42) == thread.expanded(42) && !other.expanded(42),
               "typed: the shared group bit answers through both adapters");
-        check(!other.blockExpanded(0, 1), "typed: a row's disclosure stays per-adapter");
+        check(!other.blockExpanded(0, 2), "typed: a row's disclosure stays per-adapter");
 
         // Opening the group is task 6's minimal rule: every row it owns draws
         // open, and the shared set makes that true through both adapters.
@@ -381,7 +386,7 @@ int main(int argc, char** argv) {
         check(thread.expanded(42) && other.expanded(42), "typed: setExpanded opens the header");
         check(state.chat.openWorkGroups.count(42) == 1,
               "typed: the header's bit lives in the shared work-group set, keyed by the turnId");
-        check(thread.blockExpanded(0, 1) && other.blockExpanded(0, 1),
+        check(thread.blockExpanded(0, 2) && other.blockExpanded(0, 2),
               "typed: an open group draws the rows it owns open");
 
         // The header row toggles through the SAME set `setExpanded()` uses, so
@@ -412,9 +417,10 @@ int main(int argc, char** argv) {
 
         check(thread.groupAt(0).oneLineSummary.find("2 steps") != std::string::npos,
               "typed pipeline: the assistant prose is work, the header counts the settled tool");
-        check(thread.blockAt(0, 1).label == "AGENT" &&
-                  thread.blockAt(0, 1).kind == tui::model::BlockKind::Assistant,
-              "typed pipeline: the streamed assistant prose is an AGENT row, never YOU");
+        check(thread.blockAt(0, 2).label == "AGENT" &&
+                  thread.blockAt(0, 2).kind == tui::model::BlockKind::Assistant,
+              "typed pipeline: the streamed assistant prose is an AGENT row, never YOU "
+              "(it sits behind its batch's owner row, DD-13)");
 
         // The main tab's shape: the query prose carries the meta. It is the
         // query row wherever it sits in the turn.
@@ -810,6 +816,138 @@ int main(int argc, char** argv) {
         // copy-answer stamp reads: a turn with an answer block answers true.
         check(view.groupAt(0).hasAnswer && view.groupAt(2).hasAnswer,
               "typed order: GroupView.hasAnswer tracks the Answer sentinel");
+    }
+
+    // --- Task 7: the projection buckets the response batches (DD-4, DD-13) -----
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.typedTurns.turnUpsert(turn(42, 1, 5));
+        // The query rides the query batch; a notice rides along with it (DD-4 -
+        // the batch of the query row is not a response batch, ids are opaque).
+        auto query = block(42, "q", 0, 0, "", "what is v5?", "42#q");
+        query.meta = "user";
+        state.chat.typedTurns.blockUpsert(query);
+        state.chat.typedTurns.blockUpsert(block(42, "notice", 4, 0, "", "a notice", "42#q"));
+        // Three response batches: 42#0 (reasoning + content + call), 42#1
+        // (content + call), 42#2 (a call alone).
+        state.chat.typedTurns.blockUpsert(block(42, "think#0", 1, 3, "", "reasoning", "42#0"));
+        state.chat.typedTurns.blockUpsert(
+            block(42, "content#0", 0, 3, "", "working", "42#0", 1200));
+        state.chat.typedTurns.blockUpsert(block(42, "call#0", 2, 3, "bash", "call body", "42#0"));
+        state.chat.typedTurns.blockUpsert(
+            block(42, "content#1", 0, 3, "", "more work", "42#1", 900));
+        state.chat.typedTurns.blockUpsert(block(42, "call#1", 2, 3, "grep", "call body", "42#1"));
+        state.chat.typedTurns.blockUpsert(
+            block(42, "call#2", 2, 3, "read_file", "call body", "42#2"));
+
+        check(thread.batchCount(0) == 3,
+              "task 7: three response batches, the query's batch is never counted (DD-4)");
+        // Wire order kept; one owner row inserted before each batch's first row:
+        // [header, notice, owner0, think, content0, call0, owner1, content1, call1,
+        //  owner2, call2]
+        check(thread.blockCount(0) == 11,
+              "task 7: one owner row per response batch, emitted at the batch's first row (DD-13)");
+        check(thread.blockAt(0, 1).label == "SYSTEM",
+              "task 7: the query batch's notice stays plain, before the owner rows (DD-4)");
+        const tui::model::BlockDesc owner0 = thread.blockAt(0, 2);
+        check(owner0.label == "AGENT" && owner0.kind == tui::model::BlockKind::Assistant &&
+                  owner0.state == tui::model::BlockState::None && owner0.expandable,
+              "task 7: the owner row is the synthetic AGENT, no wire status written (I-8, DD-13)");
+        check(owner0.key == std::hash<std::string>{}("batch#42#0"),
+              "task 7: the owner row's key is the namespaced batch id's hash (DD-13)");
+        check(owner0.timingS == 1.2,
+              "task 7: the owner carries the batch's content duration (DD-8: 1200 ms -> 1.2)");
+        check(thread.blockAt(0, 3).kind == tui::model::BlockKind::Thinking &&
+                  thread.blockAt(0, 4).kind == tui::model::BlockKind::Assistant &&
+                  thread.blockAt(0, 5).kind == tui::model::BlockKind::ToolStep,
+              "task 7: the batch's own rows keep their wire order behind the owner");
+        check(thread.blockAt(0, 6).label == "AGENT" && thread.blockAt(0, 6).timingS == 0.9 &&
+                  thread.blockAt(0, 7).kind == tui::model::BlockKind::Assistant &&
+                  thread.blockAt(0, 8).kind == tui::model::BlockKind::ToolStep,
+              "task 7: the second batch's owner carries its own content duration (900 ms -> 0.9)");
+        check(thread.blockAt(0, 9).label == "AGENT" && thread.blockAt(0, 9).timingS == 0.0 &&
+                  thread.blockAt(0, 10).kind == tui::model::BlockKind::ToolStep,
+              "task 7: a batch without a content block carries no duration (DD-8)");
+        check(thread.blockAt(0, tui::store::kQueryRow).label == "YOU",
+              "task 7: the query row is still the turn-level YOU, untouched by the buckets");
+    }
+
+    // Task 7 / DD-4: a turn whose query row is missing gives every batch an owner.
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.typedTurns.turnUpsert(turn(7, 0, 2)); // a live turn, no prose at all
+        state.chat.typedTurns.blockUpsert(block(7, "call-1", 2, 2, "bash", "call body", "", 100));
+        check(thread.batchCount(0) == 1,
+              "task 7 / DD-4: a turn with no query row owns every batch");
+        check(thread.blockAt(0, 1).label == "AGENT",
+              "task 7 / DD-4: the owner row draws for the orphan batch");
+    }
+
+    // Task 7 / DD-4: a query batch alone buckets nothing - no owner row at all.
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.typedTurns.turnUpsert(turn(5, 1, 2));
+        auto query = block(5, "q", 0, 0, "", "what is v5?", "5#q");
+        query.meta = "user";
+        state.chat.typedTurns.blockUpsert(query);
+        state.chat.typedTurns.blockUpsert(block(5, "notice", 4, 0, "", "a notice", "5#q"));
+        check(thread.batchCount(0) == 0 && thread.blockCount(0) == 2,
+              "task 7 / DD-4: the query's batch is not a response batch - no owner row");
+        check(thread.blockAt(0, 1).label == "SYSTEM",
+              "task 7 / DD-4: the notice rides the query batch, plain");
+    }
+
+    // Task 7: malformed batch ids bucket like any other - nothing parses them.
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.typedTurns.turnUpsert(turn(9, 1, 3));
+        state.chat.typedTurns.blockUpsert(block(9, "a", 2, 3, "bash", "call", "#"));
+        state.chat.typedTurns.blockUpsert(block(9, "b", 2, 3, "grep", "call", "abc"));
+        state.chat.typedTurns.blockUpsert(block(9, "c", 2, 3, "edit_file", "call", "1#q#2"));
+        check(thread.batchCount(0) == 3,
+              "task 7: malformed batch ids bucket like any other (ids are opaque)");
+        // Each owner is followed by its own row, so the owners sit at 1, 3, 5.
+        check(thread.blockAt(0, 1).key == std::hash<std::string>{}("batch##") &&
+                  thread.blockAt(0, 3).key == std::hash<std::string>{}("batch#abc") &&
+                  thread.blockAt(0, 5).key == std::hash<std::string>{}("batch#1#q#2"),
+              "task 7: each owner's key is its own namespaced batch id, malformed included");
+    }
+
+    // Task 7: the owner reads the content duration even when the body has not
+    // arrived - a streamed content block is a row before its body is.
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.typedTurns.turnUpsert(turn(8, 0, 1));
+        auto content = block(8, "content#0", 0, 2, "", "", "8#0", 900);
+        content.meta = "assistant"; // a streamed content block is not the query
+        state.chat.typedTurns.blockUpsert(content);
+        check(thread.blockAt(0, 1).label == "AGENT" && thread.blockAt(0, 1).timingS == 0.9,
+              "task 7: the owner carries the duration of a body-less content block (DD-8)");
+    }
+
+    // Task 7 / FR-23: the one chips composer.
+    {
+        using tui::store::chipsText;
+        check(chipsText({}).empty(), "task 7 / FR-23: no calls, no chips");
+        check(chipsText({"bash"}) == "[bash]", "task 7 / FR-23: one call, one chip");
+        check(chipsText({"bash", "grep", "read_file"}) == "[bash] [grep] [read_file]",
+              "task 7 / FR-23: three calls, three chips");
+        check(chipsText({"bash", "grep", "read_file", "edit_file"}) ==
+                  "[bash] [grep] [read_file] +1",
+              "task 7 / FR-23: the +N tail past three");
+        check(chipsText({"bash", "bash", "grep"}) == "[bash] [grep]",
+              "task 7 / FR-23: a repeated name chips once (first occurrence wins)");
+        check(chipsText({"", "bash"}) == "[bash]", "task 7 / FR-23: an empty name never chips");
     }
 
     if (g_failures != 0) {
