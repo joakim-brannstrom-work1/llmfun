@@ -921,8 +921,9 @@ int main(int argc, char** argv) {
               "task 7: each owner's key is its own namespaced batch id, malformed included");
     }
 
-    // Task 7: the owner reads the content duration even when the body has not
-    // arrived - a streamed content block is a row before its body is.
+    // Task 8 / DD-15: a batch whose only child is a body-less content row emits
+    // no owner and no row (D6: no bare AGENT header above nothing). The bucket
+    // stays a bucket - the drop is the rows', not the batching's.
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
@@ -931,8 +932,115 @@ int main(int argc, char** argv) {
         auto content = block(8, "content#0", 0, 2, "", "", "8#0", 900);
         content.meta = "assistant"; // a streamed content block is not the query
         state.chat.typedTurns.blockUpsert(content);
+        check(thread.batchCount(0) == 1,
+              "task 8: a body-less content batch is still a bucket (the drop is the rows', DD-15)");
+        check(thread.blockCount(0) == 1,
+              "task 8: the body-less batch emits no owner and no row (D6, DD-15, I-2)");
+        check(thread.blockAt(0, 0).label == "WORK",
+              "task 8: the group header is the only row the empty batch leaves");
+    }
+
+    // Task 8 / DD-8: the duration survives the drop - a body-less content row
+    // vanishes, but its batch's owner still carries the content's duration when
+    // a sibling call keeps the owner alive.
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.typedTurns.turnUpsert(turn(10, 1, 3));
+        auto content = block(10, "content#0", 0, 2, "", "", "10#0", 900);
+        content.meta = "assistant"; // not the query: the batch is a response batch
+        state.chat.typedTurns.blockUpsert(content);
+        state.chat.typedTurns.blockUpsert(block(10, "call#0", 2, 3, "bash", "ls -R", "10#0"));
+        check(thread.blockCount(0) == 3,
+              "task 8: the dropped content leaves header, owner and the call card");
         check(thread.blockAt(0, 1).label == "AGENT" && thread.blockAt(0, 1).timingS == 0.9,
-              "task 7: the owner carries the duration of a body-less content block (DD-8)");
+              "task 8: the owner still carries the dropped content's duration (DD-8)");
+        check(thread.blockAt(0, 2).kind == tui::model::BlockKind::ToolStep,
+              "task 8: the content row is gone, the call card is the block's last child");
+    }
+
+    // Task 8 / C5.5: the drop is kind-blind - a body-less `Thinking` row
+    // vanishes exactly like a body-less content row: no owner (the batch's
+    // only kept child is gone), no row, just the header.
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.typedTurns.turnUpsert(turn(11, 0, 1));
+        state.chat.typedTurns.blockUpsert(block(11, "think#0", 1, 3, "", "", "11#0"));
+        check(
+            thread.batchCount(0) == 1,
+            "task 8: a body-less reasoning batch is still a bucket (the drop is kind-blind, C5.5)");
+        check(thread.blockCount(0) == 1 && thread.blockAt(0, 0).label == "WORK",
+              "task 8: a body-less Thinking row drops too - no owner, no row (C5.5, D6)");
+    }
+
+    // --- Task 8: the block is canonical - order, contiguity, placement (DD-5, I-3, I-4, H8) ---
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.typedTurns.turnUpsert(turn(21, 1, 4));
+        auto query = block(21, "q", 0, 0, "", "sweep the tree", "21#q");
+        query.meta = "user";
+        state.chat.typedTurns.blockUpsert(query);
+        // The LIVE wire order of one response batch: content first, then the
+        // call, the reasoning last (replay's order is the reverse). The
+        // projection re-orders whatever the wire sent (DD-5).
+        state.chat.typedTurns.blockUpsert(
+            block(21, "content#0", 0, 3, "", "listing the tree", "21#0", 1200));
+        state.chat.typedTurns.blockUpsert(block(21, "call#0", 2, 3, "bash", "ls -R", "21#0"));
+        state.chat.typedTurns.blockUpsert(block(21, "think#0", 1, 3, "", "reasoning", "21#0"));
+        // A notice riding the QUERY batch, parked between the batch's rows: it
+        // is a plain row, and the block's emission must jump over it (I-3) and
+        // emit it after the block (H8) - never between two children.
+        state.chat.typedTurns.blockUpsert(
+            block(21, "notice#1", 4, 0, "", "context compacted", "21#q"));
+        check(thread.blockCount(0) == 6,
+              "task 8: header, owner, three children, then the notice - one block, no interleave");
+        check(thread.blockAt(0, 1).kind == tui::model::BlockKind::Assistant &&
+                  thread.blockAt(0, 1).expandable && !thread.blockAt(0, 1).hasBody,
+              "task 8: the owner row opens the block at the batch's first row (DD-13, H8)");
+        check(thread.blockAt(0, 2).kind == tui::model::BlockKind::Thinking &&
+                  thread.blockAt(0, 3).kind == tui::model::BlockKind::Assistant &&
+                  thread.blockAt(0, 4).kind == tui::model::BlockKind::ToolStep,
+              "task 8: the children draw reasoning, content, card - the wire sent content, card, "
+              "reasoning (DD-5, I-4)");
+        check(
+            thread.blockAt(0, 5).kind == tui::model::BlockKind::System,
+            "task 8: the interleaved plain row is emitted after the block's last child (H8, I-3)");
+        check(thread.blockAt(0, tui::store::kQueryRow).label == "YOU",
+              "task 8: the query row stays turn-level, untouched by the block's emission");
+    }
+
+    // Task 8 / DD-12: stepCount walks the WIRE store, one layer below the
+    // projection - the drops and the order cannot move it, only the hidden
+    // flag can (design §0.3, sign-off R-4). Two config pins:
+    {
+        TypedThreadStore store;
+        // The default config's verdict: taskDone and pipeline_output are hidden,
+        // so a finished task_done response's card weighs 0. query 0 + content 1 +
+        // the settled call (2 visible -> 0 hidden): 3 with the card, 1 without.
+        store.turnUpsert(turn(31));
+        auto query = block(31, "q", 0, 0, "", "what is v5?", "31#q");
+        query.meta = "user";
+        store.blockUpsert(query);
+        auto content = block(31, "content#0", 0, 3, "", "working", "31#0", 1200);
+        content.meta = "assistant";
+        store.blockUpsert(content);
+        TypedBlock done = block(31, "done#0", 2, 3, "task_done", "the answer", "31#0");
+        done.flags |= tui::store::kBlockFlagHidden;
+        store.blockUpsert(done);
+        check(tui::store::stepCount(store, 31) == 1,
+              "task 8 / DD-12: the default config's hidden task_done card weighs 0 - the turn "
+              "counts content 1");
+        // hiddenTools = [] - the same turn with nothing hidden: the settled
+        // card weighs 2 again, the count is today's expectation, unchanged.
+        store.blockUpsert(block(31, "done#0", 2, 3, "task_done", "the answer", "31#0"));
+        check(tui::store::stepCount(store, 31) == 3,
+              "task 8 / DD-12: with hiddenTools = [] the same turn counts 3 - query 0, content 1, "
+              "the settled card 2");
     }
 
     // Task 7 / FR-23: the one chips composer.

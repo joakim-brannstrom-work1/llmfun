@@ -358,7 +358,11 @@ struct Fixture {
     /// merges the answer into (`content#0`; the query block is a `User` row, the
     /// reasoning a `Thinking` one). The batch's synthetic owner row (DD-13) is
     /// an `Assistant` row too, so the owner's namespaced key is skipped - the
-    /// helper names the streamed body's row, never the owner's.
+    /// helper names the streamed body's row, never the owner's. A body-less
+    /// answer is dropped by the projection (C5.5/D6), so the row need not exist
+    /// yet; the helper reports `npos` rather than pointing at a stand-in.
+    static constexpr size_t npos = static_cast<size_t>(-1);
+
     size_t streamBodyRow() const {
         const size_t blocks = state.threadAdapter.blockCount(streamGroupIndex());
         const std::size_t ownerKey = std::hash<std::string>{}(
@@ -368,7 +372,19 @@ struct Fixture {
                     model::BlockKind::Assistant &&
                 state.threadAdapter.blockAt(streamGroupIndex(), b).key != ownerKey)
                 return b;
-        return blocks - 1;
+        return npos;
+    }
+
+    /// The stream group's reasoning row, found by kind - the batch projection
+    /// emits the owner first and sorts the children stably (I-4), so a
+    /// literal index would not hold across the task-8 emission order.
+    size_t streamReasoningRow() const {
+        const size_t blocks = state.threadAdapter.blockCount(streamGroupIndex());
+        for (size_t b = 1; b < blocks; ++b)
+            if (state.threadAdapter.blockAt(streamGroupIndex(), b).kind ==
+                model::BlockKind::Thinking)
+                return b;
+        return npos;
     }
 
     /// Draw the thread into the 100x30 frame and answer the captured grid.
@@ -566,6 +582,7 @@ void checkIdentityAndHeight() {
     bool identityStable = true;
     bool revisionMonotone = true;
     bool heightStableWithinRevision = true;
+    bool sawBody = false;
     std::uint64_t previousRevision = 0;
     size_t groupId = 0;
     std::int64_t now = kT0;
@@ -599,11 +616,21 @@ void checkIdentityAndHeight() {
         identityStable = identityStable && view.id == groupId;
         // The content row keeps its identity: the block D's stream updater merges
         // the answer into (`content#0`), whatever the reasoning around it does.
-        const model::BlockDesc body = fixture.state.threadAdapter.blockAt(
-            fixture.streamGroupIndex(), fixture.streamBodyRow());
-        identityStable = identityStable &&
-                         body.id() == model::BlockId{groupId, std::hash<std::string>{}("content#0"),
-                                                     model::BlockKind::Assistant};
+        // A body-less answer is dropped by the projection (C5.5/D6), so the
+        // reasoning-only updates have no content row at all; once the text has
+        // arrived the row must be there, carry `content#0`'s id, and never
+        // disappear again.
+        const size_t bodyRow = fixture.streamBodyRow();
+        if (bodyRow != Fixture::npos) {
+            const model::BlockDesc body =
+                fixture.state.threadAdapter.blockAt(fixture.streamGroupIndex(), bodyRow);
+            identityStable =
+                identityStable &&
+                body.id() == model::BlockId{groupId, std::hash<std::string>{}("content#0"),
+                                            model::BlockKind::Assistant};
+            sawBody = true;
+        } else if (sawBody)
+            identityStable = false; // the row must not vanish once it has text
         if (step > 1 && view.revision < previousRevision)
             revisionMonotone = false;
         previousRevision = view.revision;
@@ -635,6 +662,7 @@ void checkIdentityAndHeight() {
         }
     }
 
+    check(sawBody, "the content row exists once the answer's text arrives");
     check(identityStable,
           "300 updates keep the stream group's id and the content block's id stable");
     check(groupId != 0, "the stream group has an id (got " + std::to_string(groupId) + ")");
@@ -677,22 +705,22 @@ void checkHeader() {
     phase("header");
     Fixture fixture;
     fixture.stream("", "Let me think", kT0);
-    check(headerOf(fixture, 3) == "Thinking",
+    check(headerOf(fixture, fixture.streamReasoningRow()) == "Thinking",
           "a reasoning row's header is the bare word while it streams (got '" +
-              headerOf(fixture, 3) + "')");
+              headerOf(fixture, fixture.streamReasoningRow()) + "')");
     check(headerOf(fixture, 0) == "WORK - 1 step",
           "and the live turn's header is the work group's (got '" + headerOf(fixture, 0) + "')");
 
     // The answer's text arrives: the reasoning row holds still (D stamps the duration
     // at completion), and seconds passing move nothing.
     fixture.stream("The answer", "Let me think", kT0 + 12000);
-    check(headerOf(fixture, 3) == "Thinking",
-          "the reasoning row holds still while the answer streams (got '" + headerOf(fixture, 3) +
-              "')");
+    check(headerOf(fixture, fixture.streamReasoningRow()) == "Thinking",
+          "the reasoning row holds still while the answer streams (got '" +
+              headerOf(fixture, fixture.streamReasoningRow()) + "')");
     fixture.tick(kT0 + 13000);
     fixture.tick(kT0 + 14000);
     fixture.tick(kT0 + 15000);
-    check(headerOf(fixture, 3) == "Thinking",
+    check(headerOf(fixture, fixture.streamReasoningRow()) == "Thinking",
           "and holds still across three seconds of ticking (flicker-free)");
 
     // A stop closes the turn; the group is stored (the thread's only group) and keeps
@@ -702,9 +730,20 @@ void checkHeader() {
     check(fixture.state.threadAdapter.blockAt(group, 0).label == "WORK",
           "the stored turn keeps its work header (got '" +
               fixture.state.threadAdapter.blockAt(group, 0).label + "')");
-    check(fixture.state.threadAdapter.blockAt(group, 3).label == "Thinking",
+    // The reasoning row by kind, not position: the stored batch carries the
+    // owner first and the sorted children after it (I-4).
+    size_t storedThinking = Fixture::npos;
+    const size_t storedBlocks = fixture.state.threadAdapter.blockCount(group);
+    for (size_t b = 1; b < storedBlocks; ++b)
+        if (fixture.state.threadAdapter.blockAt(group, b).kind == model::BlockKind::Thinking)
+            storedThinking = b;
+    check(storedThinking != Fixture::npos &&
+              fixture.state.threadAdapter.blockAt(group, storedThinking).label == "Thinking",
           "and the reasoning row's header, still unstamped (got '" +
-              fixture.state.threadAdapter.blockAt(group, 3).label + "')");
+              (storedThinking != Fixture::npos
+                   ? fixture.state.threadAdapter.blockAt(group, storedThinking).label
+                   : "<no reasoning row>") +
+              "')");
 
     // The header is the block's, so a completed block keeps its own shape: the Answer
     // block D stamps at completion prints its duration.

@@ -368,10 +368,11 @@ private:
     /// One response batch of a turn (task 7): the facts the projection buckets
     /// per `batchId`. Built while the turn's rows are bucketed - the query's
     /// batch is not a response batch and gets none (DD-4). `firstRow` is the
-    /// wire index of the batch's first row, so the owner row (DD-13) emits
-    /// before it and the bucket vector's order is the first-row order (I-7).
-    /// The facts read the batch's *displayed* rows; nothing is dropped or
-    /// re-ordered here (DD-15/DD-5 are task 8's).
+    /// wire index of the batch's first row, kept for the bucket vector's
+    /// first-row order (I-7); the emission itself no longer reads it (the
+    /// owner row's placement comes from the sort, not from `firstRow`).
+    /// The facts read the batch's rows before any drop (DD-8): the emission's
+    /// drops and DD-5's order shape the row list, never these numbers.
     struct BatchEntry {
         std::string batchId;
         std::size_t firstRow = 0;

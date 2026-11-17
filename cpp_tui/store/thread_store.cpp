@@ -194,6 +194,27 @@ std::string chipsText(const std::vector<std::string>& toolNames) {
     return out;
 }
 
+// The child order inside one batch block (DD-5, I-4): reasoning, then content,
+// then the call cards in call order - whatever order the wire sent. Live sends
+// content first, replay sends reasoning first; the projection is the one that
+// decides. Anything else a response batch carries (a notice riding it, an
+// unknown kind) keeps its insertion order after the calls.
+enum class ChildRank { Reasoning = 0, Content = 1, Call = 2, Other = 3 };
+
+ChildRank childRank(model::BlockKind kind) {
+    switch (kind) {
+    case model::BlockKind::Thinking:
+        return ChildRank::Reasoning;
+    case model::BlockKind::Assistant: // the batch's prose (a Code prose too, D-RAW)
+    case model::BlockKind::Code:
+        return ChildRank::Content;
+    case model::BlockKind::ToolStep:
+        return ChildRank::Call;
+    default:
+        return ChildRank::Other;
+    }
+}
+
 // The typed-backed rebuild (v5, task 2): one group per stored turn, one row per
 // displayed block, through the same Entry/BlockEntry machinery the v4 body
 // fills - the GroupView/BlockDesc consumers cannot tell the paths apart. The
@@ -379,8 +400,9 @@ void ThreadStoreAdapter::syncTyped() const {
         // the query's is a response batch (DD-4; ids are opaque, nothing parses
         // them). The rows keep their wire order; each records the bucket it
         // joined, and the batch accumulates the facts its owner row (DD-13)
-        // and the tests read. Nothing is dropped or re-ordered here (DD-5 and
-        // DD-15 are task 8's).
+        // and the tests read - all of them, before any drop: the emission
+        // below drops rows, never facts (DD-8's duration survives a
+        // body-less content row).
         std::unordered_map<std::string, std::size_t> bucketOf;
         std::vector<std::vector<std::string>> batchCalls; // per batch: call names, in call order
         for (std::size_t i = 0; i < rows.size(); ++i) {
@@ -432,13 +454,51 @@ void ThreadStoreAdapter::syncTyped() const {
         for (std::size_t i = 0; i < entry.batches.size(); ++i)
             entry.batches[i].chips = chipsText(batchCalls[i]);
 
-        // The emission: the wire order, with one owner row (DD-13) inserted
-        // before each response batch's first row. Later batch rows stay where
-        // the wire put them - ordering, drops and placement are task 8's.
+        // The emission (task 8): the wire order decides only WHERE each batch's
+        // block starts - at its first row's index (H8). The block itself is
+        // canonical: one owner row (DD-13) when a child survived the drops
+        // (I-2, DD-15), then the children in DD-5's order, contiguous (I-3); a
+        // plain row that lay between the batch's rows is emitted after the
+        // block, at the first wire position the walk reaches after it.
+        std::vector<char> batchDrawn(entry.batches.size(), 0);
         for (std::size_t i = 0; i < rows.size(); ++i) {
+            if (rows[i].batch != kNoBatch && batchDrawn[rows[i].batch])
+                continue; // consumed by the block emitted at the batch's first row
             BlockEntry row = std::move(rows[i]);
-            if (row.batch != kNoBatch && entry.batches[row.batch].firstRow == i) {
-                const BatchEntry& batch = entry.batches[row.batch];
+            if (row.batch == kNoBatch) {
+                // A plain row: the query batch's rows ride along, and so does
+                // anything the projection did not bucket.
+                entry.blocks.push_back(std::move(row));
+                continue;
+            }
+            batchDrawn[row.batch] = 1;
+            const std::size_t slot = row.batch;
+            // The batch's children in wire order first, then the drops (design
+            // §C5.5): a content/reasoning row whose body never arrived would
+            // draw a bare AGENT header above nothing (D6), so it goes - the
+            // batch's duration was already read in the bucket pass (DD-8).
+            std::vector<BlockEntry> children;
+            children.push_back(std::move(row));
+            for (std::size_t j = i + 1; j < rows.size(); ++j)
+                if (rows[j].batch == slot)
+                    children.push_back(std::move(rows[j]));
+            std::vector<BlockEntry> kept;
+            kept.reserve(children.size());
+            for (BlockEntry& child : children) {
+                const bool bodyLess =
+                    child.typedBody.empty() && (child.kind == model::BlockKind::Assistant ||
+                                                child.kind == model::BlockKind::Thinking);
+                if (!bodyLess)
+                    kept.push_back(std::move(child));
+            }
+            // DD-5's order, stable: each rank keeps its own wire order, so the
+            // calls stay in call order and a rank's ties never reorder.
+            std::stable_sort(kept.begin(), kept.end(),
+                             [](const BlockEntry& a, const BlockEntry& b) {
+                                 return childRank(a.kind) < childRank(b.kind);
+                             });
+            if (!kept.empty()) { // I-2: the owner exists iff a child survived
+                const BatchEntry& batch = entry.batches[slot];
                 BlockEntry owner;
                 owner.kind = model::BlockKind::Assistant; // the AGENT row (blockAt labels it)
                 owner.timingS = batch.durationS;
@@ -449,14 +509,15 @@ void ThreadStoreAdapter::syncTyped() const {
                 owner.typedTurnId = turn.id;
                 owner.typedBlockId = "batch#" + batch.batchId;
                 owner.typedBatchId = batch.batchId;
-                owner.batch = row.batch;
+                owner.batch = slot;
                 owner.ownsBatch = true;
                 // The state stays None (I-8): no wire status is written by the
                 // C++ side - the FAIL word and the chips are the batch's own
                 // facts, and the tasks that draw them read `Entry::batches`.
                 entry.blocks.push_back(std::move(owner));
             }
-            entry.blocks.push_back(std::move(row));
+            for (BlockEntry& child : kept)
+                entry.blocks.push_back(std::move(child));
         }
         // I-6: a turn's row ids never repeat - the owner namespace (`batch#...`)
         // colliding with a wire block id would silently merge two rows.
