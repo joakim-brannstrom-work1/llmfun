@@ -1425,6 +1425,53 @@ void scenarioCopyBlock() {
     idle(1);
 }
 
+// S15: a response batch's content is the copy target when the turn carries no
+// ANSWER row (FR-22) - the shape an interrupted-before-answer run leaves behind.
+// The walk reaches the content through the batch's surviving content child (an
+// `Assistant` row with a body); the owner row itself is never the answer - it
+// carries no body, and `blockIsAnswerRole` rejects it (C9b), so a calls-only
+// batch leaves the copy row disabled. Both scenarios are regression pins of the
+// walk's shape: the content case predates the owner row (task 7/8's walk already
+// accepted the child) and must not regress under the owner vocabulary, and the
+// calls-only case pins that the body-less owner cannot be talked into being the
+// answer.
+void scenarioOwnerCopy() {
+    g_phase = "S15 owner copy: content, no answer";
+    resetClean();
+    // A turn id no stored turn uses: a run never merges into a turn a previous
+    // seed made (ids are never reused, D-GROUPID). The seed's own answer stays:
+    // the live group is the newest, so the walk's answer is the batch's content
+    // child, never the stale ANSWER row.
+    typed_seed::Seeder seed{&g_state, 10000};
+    seed.runStart("run the thing");
+    seed.content("partial work body");
+    seed.tool("bash", "ls -R", TuiBlockStatus_Ok);
+    idle(2);
+    openPalette();
+    selectRowById("actions.copyLastAnswer");
+    pressKey(ImGuiKey_Enter);
+    check(g_clipboard == "partial work body",
+          "S15: the batch's content is the copy target with no ANSWER row (got '" + g_clipboard +
+              "')");
+
+    g_phase = "S15 owner copy: calls only";
+    resetClean();
+    // The thread's own seed carries an answer: wipe it, so the only turn is the
+    // calls-only run - otherwise the stale ANSWER row is the copy target and the
+    // check pins nothing.
+    tuiClearOutput(g_state);
+    typed_seed::Seeder callsOnly{&g_state, 10000};
+    callsOnly.runStart("run the thing");
+    callsOnly.tool("bash", "ls -R", TuiBlockStatus_Ok);
+    idle(2);
+    openPalette();
+    const views::PaletteItem* copy = paletteItem("actions.copyLastAnswer");
+    check(copy != nullptr && !copy->enabled,
+          "S15: a calls-only batch leaves no answer - the copy row stays disabled");
+    pressKey(ImGuiKey_Escape);
+    idle(1);
+}
+
 // S16: the review's two Important findings and the behaviour changes the Minor ones asked for.
 // Each check names the defect it pins: they are all "the palette did more - or less - than the
 // control it points at", which is the divergence D-PALETTE exists to prevent.
@@ -1771,6 +1818,7 @@ int runText(bool update) {
     scenarioSlashSeed();
     scenarioCommandRows();
     scenarioCopyBlock();
+    scenarioOwnerCopy();
     scenarioRowParity();
     // S15 leaves the keyboard with the rail, so it runs after the composer-driven scenarios.
     scenarioRailSlash();

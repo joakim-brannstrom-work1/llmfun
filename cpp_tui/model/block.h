@@ -120,10 +120,28 @@ struct BlockDesc {
     double timingS = 0.0;
     /// A work group's step count, 0 for every other kind.
     int steps = 0;
-    /// A thinking disclosure's meta: the count of the batch's
-    /// tool cards - `Thinking · N tool calls`. 0 = tool-less batch, and the
-    /// disclosure carries no count at all.
-    int batchTools = 0;
+    /// Whether the row is drawn at all, resolved by the store adapter from the
+    /// batch's own state. Nothing computes it yet - task 10 owns the predicate
+    /// (DD-16); every descriptor defaults to visible.
+    bool visible = true;
+    /// The batch's content: drawn as the response's body, with no header and
+    /// no hit box of its own (DD-7). A body segment never has a disclosure.
+    bool bodySegment = false;
+    /// The synthetic AGENT owner row: the batch's header, drawn from the
+    /// batch's facts, not its own (DD-13).
+    bool ownsBatch = false;
+    /// A child of an owner row: it shares the batch's indent and rail, and
+    /// the owner decides when the batch's body shows.
+    bool batchOwned = false;
+    /// The row's text is reachable through `blockText()` (FR-16). A row that
+    /// cannot be copied keeps false, so copy affordances skip it.
+    bool copyable = false;
+    /// The owner's tool chips: `[bash] [grep] +2`. Empty when the batch has
+    /// no calls, and set on no other row.
+    std::string chips;
+    /// The batch's failed tool calls; > 0 paints FAIL on the owner row (FR-9).
+    int failedCalls = 0;
+
     /// Whether the row offers a disclosure, and whether its body is showing now.
     bool expandable = false;
     bool expanded = true;

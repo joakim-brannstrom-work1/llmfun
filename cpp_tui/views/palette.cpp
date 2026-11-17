@@ -165,6 +165,15 @@ bool groupIs(const PaletteItem& item, const char* group) {
 /// same table `views/blocks.cpp` draws from. So the answer test reads the kind *and* the word -
 /// a code-only answer is an answer, and a tool result that happens to be code is not.
 bool blockIsAnswerRole(const model::BlockDesc& block) {
+    // The batch's owner row is a `BlockKind::Assistant` row but it is not an
+    // answer: it is the response batch's header, and its text is the batch's
+    // content, which the walk reaches through the batch's content child (the
+    // child carries the body; FR-16's `blockText()` floors the owner's copy to
+    // the same text). The rejection is C9b's ask; today the walk's acceptance
+    // already skips the body-less owner, so this is the semantic floor that
+    // holds if the acceptance ever loosens.
+    if (block.ownsBatch)
+        return false;
     if (block.kind == model::BlockKind::Answer || block.kind == model::BlockKind::Assistant)
         return true;
     return block.label == defaultBlockLabel(model::BlockKind::Answer) ||
@@ -205,6 +214,12 @@ bool lastAnswerBlock(const TuiState& state, std::size_t& group, std::size_t& blo
         const std::size_t blocks = state.threadAdapter.blockCount(k - 1);
         for (std::size_t b = blocks; b > 0; --b) {
             const model::BlockDesc desc = state.threadAdapter.blockAt(k - 1, b - 1);
+            // The batch's content is the copy target with no ANSWER row (FR-22):
+            // the walk finds the batch's surviving content child - the owner
+            // carries no body of its own (the acceptance skips it), and its
+            // copy floors to the same text through `blockText()` (FR-16). A
+            // calls-only batch leaves no acceptable row, so the row stays
+            // disabled - the owner cannot be talked into being the answer.
             if (!blockIsAnswerRole(desc))
                 continue;
             if (desc.hasBody || desc.streaming) {

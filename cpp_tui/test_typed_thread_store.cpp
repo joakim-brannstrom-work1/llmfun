@@ -874,6 +874,80 @@ int main(int argc, char** argv) {
               "task 7: the query row is still the turn-level YOU, untouched by the buckets");
     }
 
+    // --- Task 9: the owner's facts and the batch's body segment (DD-7, DD-13, FR-16, FR-9) ---
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.threadMinimalMode = false; // maximal: the mode's defaults are the pins' baseline
+        state.chat.typedTurns.turnUpsert(turn(42, 1, 5));
+        auto query = block(42, "q", 0, 0, "", "what is v5?", "42#q");
+        query.meta = "user";
+        state.chat.typedTurns.blockUpsert(query);
+        // 42#0: reasoning + content + a settled call. 42#1: content + a failed
+        // call (the FAIL count reads the batch, FR-9). 42#2: a call alone - its
+        // owner copies nothing (FR-16).
+        state.chat.typedTurns.blockUpsert(block(42, "think#0", 1, 3, "", "reasoning", "42#0"));
+        state.chat.typedTurns.blockUpsert(
+            block(42, "content#0", 0, 3, "", "working", "42#0", 1200));
+        state.chat.typedTurns.blockUpsert(block(42, "call#0", 2, 3, "bash", "call body", "42#0"));
+        state.chat.typedTurns.blockUpsert(
+            block(42, "content#1", 0, 3, "", "more work", "42#1", 900));
+        state.chat.typedTurns.blockUpsert(block(42, "callfail", 2, 4, "bash", "boom", "42#1"));
+        state.chat.typedTurns.blockUpsert(
+            block(42, "call#2", 2, 3, "read_file", "call body", "42#2"));
+
+        // Row list: [header, owner0, think, content0, call0, owner1, content1,
+        // callfail, owner2, call2].
+        check(thread.blockCount(0) == 10,
+              "task 9: the fixture's row list is the one the checks index");
+
+        const tui::model::BlockDesc owner0 = thread.blockAt(0, 1);
+        check(owner0.ownsBatch && !owner0.hasBody && owner0.expandable && owner0.summary.empty() &&
+                  owner0.chips == "[bash]" && owner0.failedCalls == 0 && owner0.copyable,
+              "task 9: the owner draws from the batch's facts - chips, FAIL count, copy offer "
+              "(DD-13, FR-9)");
+        check(thread.blockText(0, 1) == "working",
+              "task 9: the owner's copy target is its batch's content body (FR-16)");
+
+        const tui::model::BlockDesc segment = thread.blockAt(0, 3);
+        check(segment.bodySegment && segment.batchOwned && !segment.ownsBatch &&
+                  !segment.expandable && segment.kind == tui::model::BlockKind::Assistant &&
+                  segment.hasBody,
+              "task 9: the batch's content child is a body segment - no disclosure of its own "
+              "(DD-7)");
+        check(!thread.setBlockExpanded(0, 3, true) && thread.blockAt(0, 3).expanded,
+              "task 9: a body segment cannot be opened - the guard answers false and pins nothing "
+              "(I-11)");
+        check(thread.blockText(0, 3) == "working",
+              "task 9: the segment's own text is still its body");
+
+        const tui::model::BlockDesc owner1 = thread.blockAt(0, 5);
+        check(owner1.ownsBatch && owner1.failedCalls == 1 && owner1.copyable &&
+                  thread.blockText(0, 5) == "more work",
+              "task 9: the failed call counts on its own batch's owner (FR-9, FR-16)");
+
+        const tui::model::BlockDesc owner2 = thread.blockAt(0, 8);
+        check(owner2.ownsBatch && !owner2.copyable && thread.blockText(0, 8).empty(),
+              "task 9: a calls-only batch's owner copies nothing (FR-16)");
+        check(thread.setBlockExpanded(0, 8, true),
+              "task 9: the owner itself still opens - it is the batch's disclosure (D15)");
+    }
+
+    // Task 9: the stream predicates read the batch's content, not the owner's
+    // (always empty) body - an Assistant row with no text is not streamed text.
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.typedTurns.turnUpsert(turn(9, tui::store::kTurnStateRunning, 2));
+        state.chat.typedTurns.blockUpsert(block(9, "think#0", 1, 0, "", "reasoning", "9#0"));
+        state.chat.typedTurns.blockUpsert(block(9, "call#0", 2, 0, "bash", "call body", "9#0"));
+        check(!thread.streamHasText() && thread.streamHasThinking(),
+              "task 9: a thinking-plus-call stream has no streamed text - the owner is not an "
+              "answer (C9b)");
+    }
+
     // Task 7 / DD-4: a turn whose query row is missing gives every batch an owner.
     {
         tui::TuiState state;

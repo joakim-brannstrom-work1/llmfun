@@ -528,8 +528,19 @@ void checkVocabulary() {
         check(views::blockIsCompactRow(row.kind) == row.compact,
               std::string(row.label) +
                   (row.compact ? " is a compact row" : " is not a compact row"));
-        check(views::blockHasDisclosure(row.kind) == row.disclosure,
+        model::BlockDesc view;
+        view.kind = row.kind;
+        check(views::blockHasDisclosure(view) == row.disclosure,
               std::string(row.label) + (row.disclosure ? " is a disclosure" : " is a role rule"));
+    }
+
+    // The disclosure is a property of the row, not of its kind (D15, C9a): a
+    // batch's owner row is a plain AGENT row that still folds.
+    {
+        model::BlockDesc owner;
+        owner.kind = model::BlockKind::Assistant;
+        owner.ownsBatch = true;
+        check(views::blockHasDisclosure(owner), "the batch's owner is a disclosure (D15, C9a)");
     }
 
     const ui::Metrics m = ui::metricsFor(true, 1.0f, 1.0f);
@@ -1220,7 +1231,8 @@ void checkStreamReasoningDefault() {
     fixture.seed.runStart("stream this");
     fixture.addStream(MsgKind::Assistant, "prose", "reasoning");
     fixture.draw();
-    const size_t bodyRow = 3; // header, the batch's owner row, content, reasoning
+    const size_t bodyRow = 2; // header, the batch's owner row, then the batch's
+                              // children in DD-5 order: reasoning, content
     check(!fixture.state.threadAdapter.blockExpanded(0, bodyRow),
           "a new stream's reasoning starts folded (its preview is the header's)");
 

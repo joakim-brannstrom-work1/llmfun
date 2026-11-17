@@ -126,9 +126,11 @@ ui::ColorToken blockInk(BlockKind kind);
 /// True for the two-line compact rows (a tool call and its result).
 bool blockIsCompactRow(BlockKind kind);
 
-/// True for the kinds whose header is a *disclosure* (a mark that toggles) rather
-/// than a role rule: the work group and the thinking body.
-bool blockHasDisclosure(BlockKind kind);
+/// True for the rows whose header is a *disclosure* (a mark that toggles) rather
+/// than a role rule: the work group, the thinking body, and a batch's owner row
+/// - the disclosure is a property of the row, not of its kind, so the owner
+/// (a `BlockKind::Assistant` row) folds too (D15, C9a).
+bool blockHasDisclosure(const BlockView& block);
 
 /// A duration as the header writes it: nothing at zero, `320 ms` under a second,
 /// `3.2 s` under a minute, then `1m 5s` / `1h 2m`. One decimal is the resolution

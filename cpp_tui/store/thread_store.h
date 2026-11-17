@@ -390,6 +390,10 @@ private:
         /// the batch's duration: the content block's `durationMs` (DD-8) -
         /// a settled batch says "1.2s" in its header
         double durationS = 0.0;
+        /// the batch's surviving content body (FR-16): the first kept Assistant
+        /// child's `typedBody`, the owner row's copy source. Empty when the
+        /// batch's content rows all dropped (a calls-only batch copies nothing).
+        std::string contentBody;
     };
 
     /// One block of a group (design §4.5, task 26): the group's own header row, a
@@ -416,8 +420,8 @@ private:
         std::string typedTitle;
         std::string typedBody;
         bool typedQuery = false;
-        /// The typed block's batch id: the response's blocks share it, which is
-        /// how a thinking disclosure counts its batch's tool cards (F5).
+        /// The typed block's batch id: the response's blocks share it, which
+        /// is how the projection buckets a row into its batch.
         std::string typedBatchId;
         /// The batch bookkeeping the projection fills (task 7): `batch` is the
         /// row's slot in `Entry::batches` (`kNoBatch` for a plain row - the
@@ -427,10 +431,7 @@ private:
         std::size_t batch = kNoBatch;
         bool batchOwned = false;
         bool ownsBatch = false;
-        /// The batch's tool-card count (F5): filled for a Thinking row by
-        /// counting the Tool rows that share its `typedBatchId`.
-        int batchTools = 0;
-        /// The merged card's RESULT pair set, copied verbatim from the
+        /// The merged card's RESULT pair set
         /// typed block - the renderer draws the store's strings, it never
         /// re-parses. `resultRaw` is the packed one-line fallback for
         /// an array, a non-JSON payload or a zero-pair object. `resultMore` is

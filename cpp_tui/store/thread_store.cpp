@@ -321,7 +321,6 @@ void ThreadStoreAdapter::syncTyped() const {
             BlockEntry row;
             row.timingS =
                 block.durationMs != 0 ? static_cast<double>(block.durationMs) / 1000.0 : 0.0;
-            row.expandable = true;
             // Pre-cutover keying: the row's `key` is the
             // block id's hash - stable per block id, but not injective.
             row.key = std::hash<std::string>{}(block.id);
@@ -359,6 +358,15 @@ void ThreadStoreAdapter::syncTyped() const {
                 row.kind = model::BlockKind::System; // an unknown wire kind: a notice
                 break;
             }
+            // A row's disclosure is a property of the row itself (DD-13): only
+            // a row that HAS a body to fold offers one. The owner row is
+            // constructed expandable at its emission (its initialiser, below);
+            // every other row's offer comes from its kind. A body segment and
+            // a query/answer sentinel keep false, so setBlockExpanded's guard
+            // answers false instead of pinning a row nothing can open (I-11).
+            row.expandable = row.kind == model::BlockKind::WorkGroup ||
+                             row.kind == model::BlockKind::Thinking ||
+                             row.kind == model::BlockKind::ToolStep;
             // The row's state comes straight off the wire status (D7 is the
             // emitter's: the store merges, it never enforces a transition).
             switch (block.status) {
@@ -497,8 +505,14 @@ void ThreadStoreAdapter::syncTyped() const {
                              [](const BlockEntry& a, const BlockEntry& b) {
                                  return childRank(a.kind) < childRank(b.kind);
                              });
+            // The batch's surviving content body (FR-16): the first kept
+            // Assistant child's typed body, the owner row's copy source. A
+            // calls-only batch keeps it empty - its owner copies nothing.
+            BatchEntry& batch = entry.batches[slot];
+            for (const BlockEntry& child : kept)
+                if (child.kind == model::BlockKind::Assistant && batch.contentBody.empty())
+                    batch.contentBody = child.typedBody;
             if (!kept.empty()) { // I-2: the owner exists iff a child survived
-                const BatchEntry& batch = entry.batches[slot];
                 BlockEntry owner;
                 owner.kind = model::BlockKind::Assistant; // the AGENT row (blockAt labels it)
                 owner.timingS = batch.durationS;
@@ -530,18 +544,6 @@ void ThreadStoreAdapter::syncTyped() const {
             }
         }
 #endif
-        // The batch's thinking meta (F5): the disclosure names its response's
-        // tool count - "Thinking · N tool calls" - counted over the Tool rows
-        // that share its batch id. A tool-less batch leaves the meta 0, and
-        // the disclosure carries no count.
-        for (BlockEntry& row : entry.blocks) {
-            if (row.kind != model::BlockKind::Thinking)
-                continue;
-            for (const BlockEntry& other : entry.blocks)
-                if (other.kind == model::BlockKind::ToolStep &&
-                    other.typedBatchId == row.typedBatchId)
-                    ++row.batchTools;
-        }
         // A rough estimate only: one line per row the group draws. The hint is
         // replaced by the drawn height after the first draw, exactly like v4's.
         entry.view.lineCountEstimate = std::max(1, static_cast<int>(entry.blocks.size()));
@@ -790,9 +792,25 @@ model::BlockDesc ThreadStoreAdapter::blockAt(size_t k, std::size_t b) const {
     out.key = block->key;
     out.timingS = block->timingS;
     out.steps = block->steps;
-    out.batchTools = block->batchTools;
     out.expandable = block->expandable;
     out.expanded = blockExpanded(k, b);
+    out.batchOwned = block->batchOwned;
+    // The batch's content child is a body segment (DD-7): the view draws its
+    // body, never a header of its own (task 12). Detected on the entry's kind,
+    // before the fenced-code rewrite below renames a segment's body to `Code`.
+    out.bodySegment =
+        block->batchOwned && !block->ownsBatch && block->kind == model::BlockKind::Assistant;
+    if (block->ownsBatch) {
+        // The owner row is drawn from the batch's facts (DD-13), not from its
+        // (always empty) own body: the chips, the FAIL count and the copy
+        // offer all read the batch.
+        assert(block->batch != store::kNoBatch && "an owner row always carries its batch slot");
+        const BatchEntry& batch = entry.batches[block->batch];
+        out.ownsBatch = true;
+        out.chips = batch.chips;
+        out.failedCalls = batch.failedCalls;
+        out.copyable = !batch.contentBody.empty();
+    }
 
     if (block->kind == model::BlockKind::WorkGroup) {
         // The group's own header: "WORK · N steps" over the rows below it. It has no
@@ -915,6 +933,13 @@ std::string ThreadStoreAdapter::blockText(size_t k, std::size_t b) const {
     const BlockEntry* block = blockEntryAt(k, b);
     if (block == nullptr || !bound() || block->kind == model::BlockKind::WorkGroup)
         return {};
+    // The owner's copy target is its batch's content (FR-16): the copy belongs
+    // to the response, not to the paragraph it happens to live in. A
+    // calls-only batch has no content, so its owner copies nothing.
+    if (block->ownsBatch) {
+        assert(block->batch != store::kNoBatch && "an owner row always carries its batch slot");
+        return groups_[k].batches[block->batch].contentBody;
+    }
     return block->typedBody;
 }
 

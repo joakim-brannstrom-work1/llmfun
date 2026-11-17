@@ -158,11 +158,12 @@ bool blockIsCompactRow(BlockKind kind) {
     return kind == BlockKind::ToolCall || kind == BlockKind::ToolResult;
 }
 
-bool blockHasDisclosure(BlockKind kind) {
-    // The tool card is a foldable like the Thinking rows: the same
-    // disclosure shape and the same click behavior.
-    return kind == BlockKind::WorkGroup || kind == BlockKind::Thinking ||
-           kind == BlockKind::ToolStep;
+bool blockHasDisclosure(const BlockView& block) {
+    // The disclosure is a property of the row, not of its kind: a batch's
+    // owner row is a `BlockKind::Assistant` row and still folds (D15, C9a) -
+    // the AGENT word's row is the batch's own disclosure.
+    return block.kind == BlockKind::WorkGroup || block.kind == BlockKind::Thinking ||
+           block.kind == BlockKind::ToolStep || block.ownsBatch;
 }
 
 std::string blockTimingLabel(double seconds) {
@@ -190,11 +191,6 @@ std::string blockHeaderText(const BlockView& block, const BlockDraw& draw, bool 
     const char* label = block.label.empty() ? defaultBlockLabel(block.kind) : block.label.c_str();
     std::string text = label;
     const std::string timing = blockTimingLabel(block.timingS);
-    if (block.kind == BlockKind::Thinking && block.batchTools > 0) {
-        text += separator(textGrid);
-        text += std::to_string(block.batchTools);
-        text += block.batchTools == 1 ? " tool call" : " tool calls";
-    }
     if (block.kind == BlockKind::ToolStep) {
         // The tool card's header: `TOOL <name>` while the card streams,
         // `TOOL <name> · <duration>` once the result lands (W7: exactly when
@@ -305,7 +301,7 @@ BlockResult renderBlock(const BlockView& block, const ui::Rect& rect, const ui::
     const ui::ColorToken ink = draw.focused ? ui::ColorToken::accent : roleInk;
     float penX = pos.x;
 
-    if (blockHasDisclosure(block.kind)) {
+    if (blockHasDisclosure(block)) {
         // A mark that toggles, then the label: the same anatomy `ui::disclosure`
         // draws, with the ink the focus state needs (the primitive fixes its own
         // two tokens, and a focused block must read as the active row).

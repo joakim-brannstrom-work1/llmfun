@@ -497,9 +497,10 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
         // follow it are its batch's calls - the store keeps first-emission
         // order and a batch's reasoning precedes its calls - so the row draws
         // while none of them has landed, and folds the moment one does. Its
-        // `batchTools` is the streaming response's call count, pending calls
-        // included. A tool-less batch draws the bare word. A finished turn
-        // draws nothing: the fold is the live edge, so it dies with the turn.
+        // count is the response's live call count, pending calls included,
+        // read off those rows. A tool-less batch draws the bare word. A
+        // finished turn draws nothing: the fold is the live edge, so it dies
+        // with the turn.
         const model::BlockDesc* liveThinking = nullptr;
         if (!runningSteps && liveAnswer && index == drawn.back() && !rows.empty())
             for (std::size_t b = rows.size(); b-- > 0;) {
@@ -543,10 +544,19 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
                 ui::iconMark(m, ui::Rect{x, y, m.gu, m.row, m.textGrid}, ui::Icon::DisclosureClosed,
                              ui::ColorToken::textLow);
                 std::string text = "Thinking";
-                if (liveThinking->batchTools > 0) {
+                // The shadow's count is its own: the Tool rows after the
+                // shadow's row are the batch's calls (reasoning precedes
+                // calls, DD-5), pending calls included. Not a descriptor
+                // field - the row is the stream's shadow, and the drawn
+                // rows are what the stream has.
+                int liveTools = 0;
+                for (auto it = liveThinking + 1; it != rows.data() + rows.size(); ++it)
+                    if (it->kind == model::BlockKind::ToolStep)
+                        ++liveTools;
+                if (liveTools > 0) {
                     text += m.textGrid ? " - " : " \xC2\xB7 ";
-                    text += std::to_string(liveThinking->batchTools);
-                    text += liveThinking->batchTools == 1 ? " tool call" : " tool calls";
+                    text += std::to_string(liveTools);
+                    text += liveTools == 1 ? " tool call" : " tool calls";
                 }
                 lineAt(m, ui::Rect{x, y, std::max(0.0f, w), m.row, m.textGrid}, x + m.gu + m.pad1,
                        y, text.c_str(), ui::ColorToken::roleAgent);
