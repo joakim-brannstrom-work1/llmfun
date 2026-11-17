@@ -926,6 +926,7 @@ struct AgentApp {
             pendingDeleteId = SessionId.init;
 
         bool runAgentLoop;
+        bool resuming;
         AgentStatus rval;
 
         if (slashCommands_.isSlashCommand(query)) {
@@ -938,6 +939,7 @@ struct AgentApp {
                 pendingDeleteId = SessionId.init;
             rval = slashCommands_.execute(this, query);
             query = null; // consume the query so it isn't added to the chat
+            resuming = forceRunAgentLoop;
             runAgentLoop = forceRunAgentLoop;
             logger.trace(forceRunAgentLoop, "agent loop forced to start");
             forceRunAgentLoop = false;
@@ -952,6 +954,10 @@ struct AgentApp {
         }
 
         if (runAgentLoop) {
+            // `/c`: the interrupted turn re-opens before its next batch streams.
+            if (resuming && typedCtx_ !is null)
+                uiMsg.turnUpsert(UiTurnData(typedCtx_.turnId,
+                        TuiTurnState_Running, typedCtx_.messageCount));
             this.doCompress(false);
             // User-query echo, sent AFTER the turn-start doCompress: the
             // query (if any) is the last entry in the possibly-compressed
@@ -967,8 +973,7 @@ struct AgentApp {
                 stopped = isStopAgentTriggered;
                 return stopped;
             });
-            if (stopped)
-                this.emitStopTyped();
+            this.emitRunEndedTyped(stopped);
             if (result.status == ProcessResult.Status.agentStuckInLoop) {
                 this.sendChatMessage("harness: Agent forcefully terminated because it got stuck in a loop.\nYou can restart it with /c.\nIf it gets stuck again then the model is stuck in an internal prediction loop. Clear the context (/clear) and run your query again.");
             }
@@ -1138,6 +1143,7 @@ struct AgentApp {
                     : TuiBlockStatus_Failed, kToolBlockFlags, a.toolName,
                     summarizeToolResponse(a, 1000), null, durationMsOf(a.processTime())),
                     unpackToolResultPairs(a)));
+                ctx.clearLiveCall(a.toolCallId); // a landed live call never stays live
             }, (VisionMessage a) {
                 uiMsg.blockUpsert(makeBlockData(ctx.turnId, "vision#" ~ to!string(++ctx.visionSeq),
                     queryBatchId(ctx.turnId), TuiBlockKind_Prose, TuiBlockStatus_None,
@@ -1148,6 +1154,7 @@ struct AgentApp {
         if (finalAnswerSeen) {
             uiMsg.blockUpsert(makeBlockData(ctx.turnId, "answer", finalAnswerBatchId, TuiBlockKind_Answer,
                     TuiBlockStatus_None, 0, null, null, finalAnswerBody, finalAnswerDurMs));
+            ctx.closedByAnswer = true;
             uiMsg.turnUpsert(UiTurnData(ctx.turnId, TuiTurnState_Done, ctx.messageCount));
         }
     }
@@ -1166,15 +1173,33 @@ struct AgentApp {
         uiMsg.turnUpsert(UiTurnData(ctx.turnId, TuiTurnState_Interrupted, ctx.messageCount));
     }
 
+    /// One close for every run exit. A stop keeps its honest `Cancelled` flips;
+    /// any other exit leaves the calls' last real status and closes the turn
+    /// `Interrupted` - unless the step walk already closed it `Done` with the
+    /// Answer. The context stays alive: `/c` resumes this turn.
+    package void emitRunEndedTyped(bool stopped) {
+        auto ctx = typedCtx_;
+        if (ctx is null)
+            return;
+        if (stopped) {
+            emitStopTyped();
+            return;
+        }
+        if (ctx.closedByAnswer) {
+            // The turn closed: the context is spent. A later replay rebuilds
+            // the finished turn from the history, so it must not be filtered
+            // out as the live turn.
+            typedCtx_ = null;
+            return;
+        }
+        ctx.liveCalls = null;
+        uiMsg.turnUpsert(UiTurnData(ctx.turnId, TuiTurnState_Interrupted, ctx.messageCount));
+    }
+
     /// A compression progress notice as a Notice block. The body is the exact
     /// text today's chatMessage line carries (the formatter prints it
     /// verbatim), so console parity holds.
     package void emitNoticeTyped(string notice) {
-        // A synthetic bare AgentApp (registry tests, some slash error paths)
-        // has no chat to attach the notice to: the notice still emits, into
-        // the no-turn bucket (turn 0). Every real path (live run, one-shot
-        // with a built agent) has a chat, so the notice lands in the
-        // store's newest turn.
         const turnId = agent_ !is null ? agent_.chat.currentTurnId() : 0;
         noticeSeq_++;
         uiMsg.blockUpsert(makeBlockData(turnId, "notice#" ~ text(noticeSeq_), queryBatchId(turnId),

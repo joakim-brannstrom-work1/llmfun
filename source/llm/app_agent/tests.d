@@ -90,6 +90,29 @@ version (unittest) {
         }
     }
 
+    /// Run-exit probe seam: serves the script in order, then repeats the
+    /// last entry - a run that outlives the script still terminates, so a
+    /// ladder-exhaustion probe can use a short script with no overflow
+    /// bookkeeping.
+    private class ScriptedAgent : Agent {
+        import llm.types : ProcessResult;
+        import my.filter : ReFilter;
+
+        ProcessResult[] script;
+        size_t served;
+
+        this(string name, LlmConfig llmConf) {
+            super(name, llmConf, null, null, null, ReFilter.init);
+        }
+
+        override ProcessResult process(bool delegate() interrupt) @trusted nothrow {
+            assert(script.length > 0, "an empty script cannot serve a run");
+            const i = served < script.length ? served : script.length - 1;
+            ++served;
+            return script[i];
+        }
+    }
+
     // Two-phase exit block fakes: the cheap-model seam for the real worker (module scope:
     // SummarizerFn is a plain function pointer and cannot capture; the factory mirrors the
     // worker test seam in llm.rag.dialogue_worker).
@@ -1988,9 +2011,13 @@ unittest {
     app.runAgent("hello");
 
     // The turn opens Running with the query prose block; the empty
-    // (failed) batch emits nothing further and the turn stays open.
-    assert(sink.turnUpserts.length == 1 && sink.turnUpserts[0].id == 1 && sink.turnUpserts[0].state == TuiTurnState_Running,
+    // (failed) batch emits nothing further and the run's exit path
+    // closes the turn Interrupted without fabricating a block status
+    // (FR-11): two turn upserts, same id.
+    assert(sink.turnUpserts.length == 2 && sink.turnUpserts[0].id == 1 && sink.turnUpserts[0].state == TuiTurnState_Running,
             "the failed turn opens Running with the typed walk's first id");
+    assert(sink.turnUpserts[1].id == 1 && sink.turnUpserts[1].state == TuiTurnState_Interrupted,
+            "the networkFailure run closes the turn Interrupted");
     assert(sink.blockUpserts.length == 1 && sink.blockUpserts[0].id == "query"
             && sink.blockUpserts[0].body == "hello", "the query is the turn's first block");
     assert(sink.setTurnsSnapshots.empty, "the live path sends no setTurns");
@@ -2004,7 +2031,8 @@ unittest {
     // the loop); the unknown-command notice lands as a Notice block in
     // the store's newest turn context.
     app.runAgent("/nope");
-    assert(sink.turnUpserts.length == 1, "a consumed slash query must not open a turn");
+    assert(sink.turnUpserts.length == 2,
+            "a consumed slash query must not open a turn (the failed run's two upserts stand)");
     assert(sink.blockUpserts.length == 2 && sink.blockUpserts[1].kind == TuiBlockKind_Notice
             && sink.blockUpserts[1].body.startsWith("system: Unknown command"),
             "the unknown-command notice is sent as a Notice block");
@@ -4213,4 +4241,304 @@ unittest {
     assert(got[6] == "tool result ✅: grep_files ok-1");
     assert(got[7] == "tool result ❌: write_file bad-2");
     assert(got[8] == "assistant: Compressing... 1/2 : x", "notices print verbatim");
+}
+
+// FR-11 run exits: a stop interrupts through emitStopTyped (honest Cancelled
+// flips, no fabricated status), and the /c resume re-opens the SAME turn
+// Running before the next batch's blocks land.
+@("runAgent: stop interrupts and /c re-opens the same turn")
+unittest {
+    import std.datetime : dur;
+    import std.json : JSONValue;
+    import std.path : buildPath;
+
+    import llm.chat;
+    import llm.types : ProcessResult;
+
+    auto tmpDir = testArea("app_agent_run_stop_resume");
+    scope (exit)
+        tmpDir.cleanup;
+
+    auto cfg = testLlmConfig(tmpDir);
+    auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
+
+    auto app = AgentApp(UserConfig.AgentChatConfig.init);
+    app.llmConf = cfg;
+    app.sessionStore = store;
+    auto agent = new CannedAgent("main", cfg);
+    app.agent_ = agent;
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
+    app.activeSession = store.create();
+    clearStopAgent();
+    app.agent_.chat.setSystemPrompt("sys");
+
+    // The step the interrupt lands in: a ToolMessage whose call streams but
+    // gets no response (still live when the stop arrives).
+    JSONValue call;
+    call["id"] = "c1";
+    call["type"] = "function";
+    JSONValue fn;
+    fn["name"] = "grep_files";
+    fn["arguments"] = `{}`;
+    call["function"] = fn;
+    auto liveTm = ToolMessage("T1", JSONValue([call]));
+
+    // The resume step: a response, merged calls and the final answer.
+    JSONValue sd;
+    sd["taskDoneAnswer"] = JSONValue("Done: 4.");
+    auto answeredTm = ToolMessage("T1", JSONValue([call]), JSONValue.init, sd);
+    answeredTm.setProcessTime(MessageTime(120.dur!"msecs"));
+    auto a3 = Message(Role.assistant, false, "C0", null);
+    a3.thinking = "T0";
+    a3.setProcessTime(MessageTime(100.dur!"msecs"));
+    auto tr = ToolResponse("ok-1", "c1", "grep_files", true);
+    tr.setProcessTime(MessageTime(42.dur!"msecs"));
+
+    agent.canned = [
+        ProcessResult(status: ProcessResult.Status.ok, hasToolCall: true, chat: [
+            Chat.MessageT(liveTm)
+        ]),
+        ProcessResult(status: ProcessResult.Status.ok, hasToolCall: true,
+                chat: [
+                    Chat.MessageT(a3), Chat.MessageT(answeredTm),
+                    Chat.MessageT(tr)
+        ]), ProcessResult(status: ProcessResult.Status.networkFailure)
+    ];
+
+    // Exit 2 - stop: the interrupt fires after the first step, so the stop
+    // path (emitStopTyped) closes the turn.
+    stopAgent();
+    app.runAgent("q");
+    clearStopAgent();
+
+    assert(sink.turnUpserts.length == 2 && sink.turnUpserts[0].id == 1
+            && sink.turnUpserts[0].state == TuiTurnState_Running && sink.turnUpserts[1].id == 1
+            && sink.turnUpserts[1].state == TuiTurnState_Interrupted,
+            "the stop closes the turn Interrupted (same id)");
+
+    assert(sink.blockUpserts.length == 3 && sink.blockUpserts[1].id == "reasoning#0"
+            && sink.blockUpserts[2].id == "c1" && sink.blockUpserts[2].status == TuiBlockStatus_Cancelled,
+            "the live call is Cancelled, never a fabricated Ok");
+
+    // Exit 5 - /c resume: the interrupted turn re-opens Running (same id)
+    // BEFORE any block of the next batch streams.
+    app.runAgent("/c");
+
+    assert(sink.turnUpserts.length == 4 && sink.turnUpserts[2].id == 1
+            && sink.turnUpserts[2].state == TuiTurnState_Running,
+            "/c re-opens the interrupted turn Running");
+    assert(sink.turnUpserts[3].id == 1 && sink.turnUpserts[3].state == TuiTurnState_Done
+            && sink.turnUpserts[3].messageCount == 4,
+            "query + response + call + result close the turn Done");
+    // The resumed batch: the continue notice appends under the query's batch,
+    // a3 streams as batch "1#1", and the answered ToolMessage's batch "1#2"
+    // carries the merged call (upserted in place, Ok) and the final answer.
+    // The live call's stop-run row stays untouched (its Cancelled is never
+    // rewritten); the merge lands as a new upsert on the new owner batch.
+    assert(sink.blockUpserts[3].id == "notice#1"
+            && sink.blockUpserts[3].kind == TuiBlockKind_Notice && sink.blockUpserts[3].batchId == "1#q",
+            "the continue request is a Notice block in the query's batch");
+    assert(sink.blockUpserts[4].id == "reasoning#1"
+            && sink.blockUpserts[4].batchId == "1#1" && sink.blockUpserts[4].durationMs == 100);
+    assert(sink.blockUpserts[5].id == "content#1"
+            && sink.blockUpserts[5].batchId == "1#1" && sink.blockUpserts[5].durationMs == 100);
+    assert(sink.blockUpserts[6].id == "reasoning#2"
+            && sink.blockUpserts[6].batchId == "1#2" && sink.blockUpserts[6].durationMs == 120);
+    assert(sink.blockUpserts[7].id == "c1"
+            && sink.blockUpserts[7].batchId == "1#2" && sink.blockUpserts[7].status == TuiBlockStatus_Ok
+            && sink.blockUpserts[7].durationMs == 42,
+            "the merged call lands on the answered ToolMessage's batch");
+    assert(sink.blockUpserts[8].id == "answer"
+            && sink.blockUpserts[8].batchId == "1#2" && sink.blockUpserts[8].body == "Done: 4."
+            && sink.blockUpserts[8].durationMs == 120,
+            "the answer lands on the response's batch with the ToolMessage's time");
+    // Interleaving, through the sink's unified call log: the Running
+    // re-upsert precedes the resumed batch's first block (reasoning#1
+    // exists only in the resumed batch, so its first upsert is the
+    // batch's opening emission). Turn upserts for id 1, in order: the
+    // opening Running, the Interrupted close, the /c re-open, then the
+    // Done close (which lands after the resumed batch's blocks).
+    size_t seen, reOpen, firstBlock;
+    foreach (i, c; sink.calls) {
+        if (c.kind == "turnUpsert" && c.payload == "1") {
+            ++seen;
+            if (seen == 3)
+                reOpen = i;
+        }
+        if (c.kind == "blockUpsert" && c.payload == "reasoning#1" && firstBlock == 0)
+            firstBlock = i;
+    }
+    assert(seen == 4 && reOpen > 0 && reOpen < firstBlock,
+            "the Running re-upsert crosses before the next batch's blocks");
+}
+
+// FR-11 run exits: the nudge ladder's exhaustion fails the turn
+// agentStuckInLoop, the harness still explains, and the run's exit closes the
+// turn Interrupted without touching any block status.
+@("runAgent: agentStuckInLoop explains and closes the turn Interrupted")
+unittest {
+    import std.array : replicate;
+    import std.path : buildPath;
+
+    import llm.chat;
+    import llm.types : ProcessResult;
+
+    auto tmpDir = testArea("app_agent_run_stuck");
+    scope (exit)
+        tmpDir.cleanup;
+
+    auto cfg = testLlmConfig(tmpDir);
+    auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
+
+    auto app = AgentApp(UserConfig.AgentChatConfig.init);
+    app.llmConf = cfg;
+    app.sessionStore = store;
+    auto agent = new ScriptedAgent("main", cfg);
+    app.agent_ = agent;
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
+    app.activeSession = store.create();
+    clearStopAgent();
+    app.agent_.chat.setSystemPrompt("sys");
+
+    // ok with no tool call: the recovery nudge ladder exhausts (the shipped
+    // depths are MaxConsecutiveSameStatus = 3 and MaxConsecutiveNoToolCallOk
+    // = 5, agent/package.d:567-569 - 12 entries stay past any of them; the
+    // seam repeats the last entry, so a deepened ladder cannot range-error)
+    // and fails the turn agentStuckInLoop.
+    agent.script = [ProcessResult(status: ProcessResult.Status.ok)].replicate(12);
+    app.runAgent("q");
+
+    assert(sink.lastNoticeBody().canFind("stuck in a loop") && sink.lastNoticeBody()
+            .canFind("/c"), "the harness still explains the stuck loop and the /c escape");
+    assert(sink.turnUpserts.length == 2 && sink.turnUpserts[0].state == TuiTurnState_Running
+            && sink.turnUpserts[1].id == 1 && sink.turnUpserts[1].state == TuiTurnState_Interrupted,
+            "the stuck run closes the turn Interrupted");
+    assert(sink.blockUpserts.length == 2 && sink.blockUpserts[0].id == "query"
+            && sink.blockUpserts[1].kind == TuiBlockKind_Notice,
+            "no block status is written the transport did not report");
+}
+
+// FR-11 run exits, replay: emitReplayTyped() after a finished run emits a
+// snapshot whose rows equal the live run's final shape - same ids, same
+// batch ids, same order, durations included.
+@("runAgent: emitReplayTyped replays a finished run's live shape")
+unittest {
+    import std.datetime : dur;
+    import std.json : JSONValue;
+    import std.path : buildPath;
+
+    import llm.types : ProcessResult;
+
+    auto tmpDir = testArea("app_agent_run_replay");
+    scope (exit)
+        tmpDir.cleanup;
+
+    auto cfg = testLlmConfig(tmpDir);
+    auto store = new SessionStore(buildPath(tmpDir, "chat").Path);
+
+    auto app = AgentApp(UserConfig.AgentChatConfig.init);
+    app.llmConf = cfg;
+    app.sessionStore = store;
+
+    // The real worker appends each step's messages to the chat before the
+    // step walk streams them; the probe mirrors that so the replay built
+    // from the history sees the same turn the live walk streamed. The run
+    // exits after the answer step through a failed follow-up step: the
+    // closed turn's last upsert stays Done (the exit path skips the
+    // Interrupted close for an answer-closed turn).
+    class AppendingAgent : ScriptedAgent {
+        this(string name, LlmConfig llmConf) {
+            super(name, llmConf);
+        }
+
+        override ProcessResult process(bool delegate() interrupt) @trusted nothrow {
+            auto r = super.process(interrupt);
+            foreach (m; r.chat)
+                m.match!((Message v) => chat.add(v),
+                        (ToolMessage v) => chat.add(v), (ToolResponse v) => chat.add(v),
+                        (VisionMessage v) => chat.add(v));
+            return r;
+        }
+    }
+
+    auto agent = new AppendingAgent("main", cfg);
+    app.agent_ = agent;
+    auto sink = new TuiRecordingSink();
+    app.uiMsg = new UiMessenger(sink);
+    app.activeSession = store.create();
+    clearStopAgent();
+    app.agent_.chat.setSystemPrompt("sys");
+
+    // The finishing step: the response streams (thinking + content), the
+    // answered ToolMessage carries the call, the result and the final
+    // answer; the failed follow-up step then ends the run (the exit path
+    // skips the Interrupted close for an answer-closed turn).
+    JSONValue call;
+    call["id"] = "c1";
+    call["type"] = "function";
+    JSONValue fn;
+    fn["name"] = "grep_files";
+    fn["arguments"] = `{}`;
+    call["function"] = fn;
+    JSONValue sd;
+    sd["taskDoneAnswer"] = JSONValue("Done: 4.");
+    auto answeredTm = ToolMessage("T1", JSONValue([call]), JSONValue.init, sd);
+    answeredTm.setProcessTime(MessageTime(120.dur!"msecs"));
+    auto a3 = Message(Role.assistant, false, "C0", null);
+    a3.thinking = "T0";
+    a3.setProcessTime(MessageTime(100.dur!"msecs"));
+    auto tr = ToolResponse("ok-1", "c1", "grep_files", true);
+    tr.setProcessTime(MessageTime(42.dur!"msecs"));
+
+    agent.script = [
+        ProcessResult(status: ProcessResult.Status.ok, hasToolCall: true, chat: [
+            Chat.MessageT(a3), Chat.MessageT(answeredTm), Chat.MessageT(tr)
+        ]), ProcessResult(status: ProcessResult.Status.networkFailure)
+    ];
+
+    app.runAgent("q");
+
+    assert(sink.turnUpserts.length == 2 && sink.turnUpserts[0].state == TuiTurnState_Running
+            && sink.turnUpserts[1].id == 1 && sink.turnUpserts[1].state == TuiTurnState_Done,
+            "the finished run closes the turn Done");
+
+    // The live run's final shape, folded from the upsert log: the last
+    // upsert per id wins, in first-appearance order.
+    string[] fIds, fBatches;
+    long[] fDurs;
+    foreach (b; sink.blockUpserts) {
+        ptrdiff_t at = -1;
+        foreach (i, id; fIds)
+            if (id == b.id) {
+                at = i;
+                break;
+            }
+        if (at < 0) {
+            fIds ~= b.id;
+            fBatches ~= b.batchId;
+            fDurs ~= b.durationMs;
+        } else {
+            fBatches[at] = b.batchId;
+            fDurs[at] = b.durationMs;
+        }
+    }
+    assert(fIds == [
+        "query", "reasoning#0", "content#0", "reasoning#1", "c1", "answer"
+    ], "the finished run's live shape, got ids `" ~ fIds.join(" ") ~ "`");
+    assert(fBatches == ["1#q", "1#0", "1#0", "1#1", "1#1", "1#1"],
+            "the live batch ids, got `" ~ fBatches.join(" ") ~ "`");
+    assert(fDurs == [0, 100, 100, 120, 42, 120], "the live durations");
+
+    // Replay: the same rows, same order, durations included.
+    app.emitReplayTyped();
+    assert(sink.setTurnsSnapshots.length == 1, "one replay snapshot");
+    const turns = sink.setTurnsSnapshots[0].turns;
+    const blocks = sink.setTurnsSnapshots[0].blocks;
+    assert(turns.length == 1 && turns[0].id == 1
+            && turns[0].state == TuiTurnState_Done, "the finished turn replays Done");
+    assert(blocks.map!(b => b.id).array == fIds, "same ids, same order");
+    assert(blocks.map!(b => b.batchId).array == fBatches, "same batch ids");
+    assert(blocks.map!(b => b.durationMs).array == fDurs, "same durations");
 }

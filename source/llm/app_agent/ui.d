@@ -709,6 +709,9 @@ package final class TypedEmitContext {
     /// Informational count of the LLM messages the turn covers so far (the
     /// C-side stepCount over the blocks is the rendered number).
     int messageCount;
+    /// The step walk already upserted `Done` with the Answer: runAgent's
+    /// exit path must not close the turn a second time.
+    bool closedByAnswer;
     /// The role the streamed content blocks carry.
     string role = "assistant";
 
@@ -717,10 +720,10 @@ package final class TypedEmitContext {
     /// stop can flip it to Cancelled without rebuilding the blocks.
     struct LiveCall {
         long turnId;
-        string id; // the call id (the tool block's id)
+        string id;
         string batchId;
-        string title; // tool name
-        string body; // the call's summarized arguments (the header carries the name)
+        string title;
+        string body;
     }
 
     LiveCall[] liveCalls;
