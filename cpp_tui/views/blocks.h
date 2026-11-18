@@ -137,12 +137,12 @@ bool blockHasDisclosure(const BlockView& block);
 /// the store has (`prettyDuration`), so the row never claims more.
 std::string blockTimingLabel(double seconds);
 
-/// The header line: label, duration, step count, and - while the block is closed -
-/// the one-line preview. `draw` is the same frame state `renderBlock()` is handed,
-/// so the preview cannot disagree with the height and the disclosure mark; `textGrid`
-/// picks the ASCII separator (` - `) over the middle dot, which a `LC_ALL=C` terminal
-/// would draw as a replacement character.
-std::string blockHeaderText(const BlockView& block, const BlockDraw& draw, bool textGrid);
+/// The row's header text, fitted to `availUnits` in the profile's own unit
+/// (`ui::textUnits`). Order: label -> duration -> chips. A folded batch owner drops the
+/// role word (FR-8). Chips drop one token at a time from the right before the duration
+/// does; the label never drops.
+std::string blockHeaderText(const BlockView& block, const BlockDraw& draw, const ui::Metrics& m,
+                            float availUnits);
 
 /// The compact row's second line: the summary, and nothing else.
 std::string blockRowText(const BlockView& block);

@@ -403,7 +403,8 @@ struct Fixture {
 std::string headerOf(Fixture& fixture, std::size_t block) {
     const model::BlockDesc desc =
         fixture.state.threadAdapter.blockAt(fixture.streamGroupIndex(), block);
-    return views::blockHeaderText(desc, views::BlockDraw{desc.expanded, false}, /*textGrid=*/true);
+    return views::blockHeaderText(desc, views::BlockDraw{desc.expanded, false},
+                                  ui::metricsFor(/*textGrid=*/true, 1.0f, 1.0f), 1000.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -752,19 +753,27 @@ void checkHeader() {
     stored.seed.upsertBlock(1, "answer", "1#0", TuiBlockKind_Answer, TuiBlockStatus_None, nullptr,
                             "done", nullptr, 2500);
     const model::BlockDesc desc = stored.state.threadAdapter.blockAt(0, store::kAnswerRow);
-    check(views::blockHeaderText(desc, views::BlockDraw{true, false}, true) == "ANSWER - 2.5 s",
+    check(views::blockHeaderText(desc, views::BlockDraw{true, false},
+                                 ui::metricsFor(/*textGrid=*/true, 1.0f, 1.0f),
+                                 1000.0f) == "ANSWER - 2.5 s",
           "a stamped answer block's header is its duration (got '" +
-              views::blockHeaderText(desc, views::BlockDraw{true, false}, true) + "')");
+              views::blockHeaderText(desc, views::BlockDraw{true, false},
+                                     ui::metricsFor(/*textGrid=*/true, 1.0f, 1.0f), 1000.0f) +
+              "')");
 
-    // A stamped reasoning keeps its duration too.
+    // A stamped reasoning drops its duration anyway (DD-8): the row is the
+    // bare word, the owner carries the cost.
     stored.seed.upsertBlock(1, "reasoning#0", "1#0", TuiBlockKind_Reasoning, TuiBlockStatus_None,
                             nullptr, "the reasoning", nullptr, 2500);
     const model::BlockDesc reasoning = stored.state.threadAdapter.blockAt(0, 2);
     check(reasoning.kind == model::BlockKind::Thinking, "a turn's reasoning is its own block");
-    check(views::blockHeaderText(reasoning, views::BlockDraw{true, false}, true) ==
-              "Thinking - 2.5 s",
-          "and a stamped reasoning row keeps its duration (got '" +
-              views::blockHeaderText(reasoning, views::BlockDraw{true, false}, true) + "')");
+    check(views::blockHeaderText(reasoning, views::BlockDraw{true, false},
+                                 ui::metricsFor(/*textGrid=*/true, 1.0f, 1.0f),
+                                 1000.0f) == "Thinking",
+          "and a stamped reasoning row drops its duration too (DD-8, got '" +
+              views::blockHeaderText(reasoning, views::BlockDraw{true, false},
+                                     ui::metricsFor(/*textGrid=*/true, 1.0f, 1.0f), 1000.0f) +
+              "')");
 }
 
 // ---------------------------------------------------------------------------

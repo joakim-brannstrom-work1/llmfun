@@ -260,9 +260,11 @@ model::BlockDesc blockOf(model::BlockKind kind, const char* label, const char* s
 /// The header text for a descriptor whose `expanded` flag is the draw state. The
 /// renderer takes a `BlockDraw` so the preview and the geometry cannot disagree;
 /// the pure tests name the same state explicitly instead of relying on a second
-/// read of the descriptor.
-std::string headerText(const views::BlockView& block, bool textGrid) {
-    return views::blockHeaderText(block, views::BlockDraw{block.expanded, false}, textGrid);
+/// read of the descriptor. The width is a promise the row keeps: wide enough by
+/// default that nothing is ever fitted away.
+std::string headerText(const views::BlockView& block, bool textGrid, float availUnits = 1000.0f) {
+    return views::blockHeaderText(block, views::BlockDraw{block.expanded, false},
+                                  ui::metricsFor(textGrid, 1.0f, 1.0f), availUnits);
 }
 
 ui::Rect cellRect(float x, float y, float w, float h) {
@@ -620,8 +622,8 @@ void checkHeaderText() {
     // the frame still previews per the frame, matching the height and the disclosure.
     model::BlockDesc mismatched = user;
     mismatched.expanded = true;
-    check(views::blockHeaderText(mismatched, views::BlockDraw{false, false}, true) ==
-              "YOU  a question",
+    check(views::blockHeaderText(mismatched, views::BlockDraw{false, false},
+                                 ui::metricsFor(true, 1.0f, 1.0f), 1000.0f) == "YOU  a question",
           "the preview follows the draw state, not the descriptor");
     user.timingS = 1.2;
     check(headerText(user, true) == "YOU - 1.2 s",
@@ -648,8 +650,55 @@ void checkHeaderText() {
     model::BlockDesc thinking = blockOf(model::BlockKind::Thinking, "Thinking", "");
     thinking.timingS = 3.2;
     thinking.expanded = false;
-    check(headerText(thinking, true) == "Thinking - 3.2 s",
-          "the thinking disclosure says what it costs (got '" + headerText(thinking, true) + "')");
+    check(headerText(thinking, true) == "Thinking",
+          "the thinking disclosure is the bare word: its duration is the owner's (DD-8, got '" +
+              headerText(thinking, true) + "')");
+
+    // The composer (FR-8, FR-13): an owner's header is the label, the duration,
+    // and the batch's chips - and a folded owner drops the role word.
+    model::BlockDesc owner = blockOf(model::BlockKind::Assistant, "AGENT", "");
+    owner.ownsBatch = true;
+    owner.timingS = 3.2;
+    owner.chips = "[bash] [grep]";
+    owner.expanded = true;
+    check(headerText(owner, true) == "AGENT - 3.2 s - [bash] [grep]",
+          "an open owner says its role word, duration, and chips (got '" + headerText(owner, true) +
+              "')");
+    owner.expanded = false;
+    check(headerText(owner, true) == "3.2 s - [bash] [grep]",
+          "a folded owner drops the role word (FR-8, got '" + headerText(owner, true) + "')");
+
+    // The fitting: chips drop one token at a time from the right before the
+    // duration does, and the label never drops.
+    owner.expanded = true;
+    owner.chips = "[bash] [grep] [read_file]";
+    owner.timingS = 3.2;
+    check(headerText(owner, true, 40.0f) == "AGENT - 3.2 s - [bash] [grep] +1",
+          "40 units: one chip drops and the count follows it (got '" +
+              headerText(owner, true, 40.0f) + "')");
+    owner.chips = "";
+    check(headerText(owner, true, 10.0f) == "AGENT",
+          "10 units: the timing drops, the label keeps (got '" + headerText(owner, true, 10.0f) +
+              "')");
+    owner.chips = "[bash] [grep]";
+    check(headerText(owner, true, 1.0f) == "AGENT - [bash] +1",
+          "one chip is the floor, and the label is never dropped (got '" +
+              headerText(owner, true, 1.0f) + "')");
+    owner.expanded = false;
+    check(headerText(owner, true, 1.0f) == "[bash] +1",
+          "a folded owner's timing drops after its chips (got '" + headerText(owner, true, 1.0f) +
+              "')");
+
+    // Both profiles fit the same way, in the profile's own unit: the pixel
+    // row's separator is the middle dot, and its units are pixels.
+    model::BlockDesc pixel = owner;
+    pixel.expanded = true;
+    pixel.chips = "[bash] [grep] [read_file]";
+    check(headerText(pixel, false, 1000.0f) ==
+              "AGENT \xC2\xB7 3.2 s \xC2\xB7 [bash] [grep] [read_file]",
+          "the pixel owner joins with the middle dot, in the profile's order");
+    check(headerText(pixel, false, 0.0f) == "AGENT \xC2\xB7 [bash] +2",
+          "the pixel owner fits by the same rules (got '" + headerText(pixel, false, 0.0f) + "')");
 
     model::BlockDesc stream = blockOf(model::BlockKind::Assistant, "AGENT", "half a senten");
     stream.streaming = true;
@@ -1378,8 +1427,9 @@ void checkCrossGroupIdentity() {
     grid = fixture.draw();
 
     // The stored Thinking row: same group and key, a different kind - a separate
-    // identity and a separate copy target.
-    const int storedThinking = rowOf(grid, "Thinking - 2.0 s");
+    // identity and a separate copy target. The bare word is unique enough here:
+    // it names the stored reasoning, which draws before the live group's own.
+    const int storedThinking = rowOf(grid, "Thinking");
     check(storedThinking >= 0, "the stored message 3 thinking row is on screen");
     Grid afterStoredThinking = clickRow(storedThinking);
     check(fixture.state.ui.thread.focus == model::BlockId{1,
@@ -2429,19 +2479,28 @@ void checkOwnerShape() {
         ThreadFixture f;
         buildMaxLongLive(f);
         const Grid g = f.draw();
-        check(g.contains("> 1.1 s - [bash] [grep]"),
+        // The needles are composed from the pinned glyph set, not the ASCII art
+        // legend: the run pins LLMFUN_ASCII=0, so the grid draws the real marks
+        // - the shape assertion stays exactly as strong, only re-keyed.
+        const std::string open =
+            std::string(ui::icon(ui::Icon::DisclosureOpen, ui::GlyphSet::Glyphs));
+        const std::string shut =
+            std::string(ui::icon(ui::Icon::DisclosureClosed, ui::GlyphSet::Glyphs));
+        check(g.contains(shut + " 1.1 s - [bash] [grep]"),
               "maxlonglive: a settled owner folds with its duration and chips");
-        check(g.contains("v AGENT - [execute_command]"),
+        check(g.contains(open + " AGENT - [execute_command]"),
               "maxlonglive: the live owner draws open, no duration yet");
-        check(g.contains("v Thinking"), "maxlonglive: the live batch's reasoning draws");
+        check(g.contains(open + " Thinking"), "maxlonglive: the live batch's reasoning draws");
         check(g.contains("Next I will move the loader out of core."),
               "maxlonglive: its content draws");
         check(g.contains("TOOL  execute_command"), "maxlonglive: its live card draws");
         // The owners are flat siblings - the drawRow indent leak used to
         // stair-step each folded batch's owner under the previous one - and
-        // the live batch's children share the one indent C7 gives them.
-        const int ownerA = colOfSub(g, "AGENT - 1.1 s");
-        const int ownerB = colOfSub(g, "AGENT - 1.2 s");
+        // the live batch's children share the one indent C7 gives them. The
+        // folded owner's line now leads with its duration (FR-8), so the
+        // column is read off that text.
+        const int ownerA = colOfSub(g, "1.1 s - [bash] [grep]");
+        const int ownerB = colOfSub(g, "1.2 s - [bash] [grep]");
         check(ownerA >= 0 && ownerA == ownerB,
               "maxlonglive: folded owners stay flat siblings, no staircase");
         const int thinking = colOfSub(g, "Thinking");
@@ -2453,7 +2512,9 @@ void checkOwnerShape() {
         ThreadFixture f;
         buildMaxNotice(f);
         const Grid g = f.draw();
-        const int owner = rowOfSub(g, "v AGENT");
+        const std::string open =
+            std::string(ui::icon(ui::Icon::DisclosureOpen, ui::GlyphSet::Glyphs));
+        const int owner = rowOfSub(g, open + " AGENT");
         const int content = rowOfSub(g, "now the count");
         const int notice = rowOfSub(g, "context compacted");
         check(owner >= 0, "maxnotice: the live owner row is drawn open");
@@ -2464,8 +2525,14 @@ void checkOwnerShape() {
     { // maxchips (T9, T13)
         ThreadFixture f;
         buildMaxChips(f);
+        // The target row is the batch's *folded owner*, and a folded group draws
+        // its header only - so the check pins the group open (the task-10 pin)
+        // in its own fixture and reads the owner the way a settled batch folds.
+        f.state.chat.groupPins[1] = true;
         const Grid g = f.draw();
-        check(g.contains("> 1.2 s - [bash] [grep] [read_file] +1"),
+        const std::string shut =
+            std::string(ui::icon(ui::Icon::DisclosureClosed, ui::GlyphSet::Glyphs));
+        check(g.contains(shut + " 1.2 s - [bash] [grep] [read_file] +1"),
               "maxchips: chips drop to three and a +N");
     }
 }
