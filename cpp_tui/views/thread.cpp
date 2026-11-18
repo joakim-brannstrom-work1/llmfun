@@ -108,17 +108,16 @@ constexpr const char* kLoadEarlierLabel = "Load earlier";
 /// `Copy` item (task 44) and the `y` key all land here, so a block has exactly one copy
 /// path - and the item that asked never chooses the text.
 ///
-// What reaches the clipboard is the wrapper's decision, not this file's: a `Code`
-// block copies its *code* (`ui::copyText`), everything else its body verbatim - and
-// the wrapper is the only place allowed to know what a fence is. A batch owner
-// copies its batch's content (FR-16), and the fence answer is the content's own
-// kind - the adapter's, never re-derived here (B1).
+/// What reaches the clipboard is the wrapper's decision, not this file's: a `Code`
+/// block copies its *code* (`ui::copyText`), everything else its body verbatim - and
+/// the wrapper is the only place allowed to know what a fence is. A batch owner
+/// copies its batch's content (FR-16), and the fence answer is the content's own
+/// kind - the adapter's, never re-derived here (B1).
 ///
 /// Answers whether the clipboard was written: a row with no body copies nothing, which is what
 /// keeps a body-less block (the `WORK` header, a stream row before its first token) from
 /// claiming a copy nobody got - and from raising the feedback item for one (task 45).
-bool copyBlock(store::ThreadStoreAdapter& thread, std::size_t groupIndex, std::size_t block,
-               const model::BlockDesc& desc) {
+bool copyBlock(store::ThreadStoreAdapter& thread, std::size_t groupIndex, std::size_t block) {
     const std::string body = thread.blockText(groupIndex, block);
     if (body.empty())
         return false;
@@ -602,12 +601,13 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
             // InvisibleButton, no menu, no copy chip and no `expanded` read -
             // the body is the row, and the renderer owns its height. Under its
             // owner it takes the batch's pad2, the same indent the batch's
-            // cards draw at (C10); the minimal live tail's segment draws with
-            // no owner row above it, so it keeps the turn-level indent (FR-5,
-            // §4.6 - the shape the `child` predicate already encodes).
+            // cards draw at (C10). With no owner row on screen - the minimal
+            // live tail's segment, FR-5 - it takes the mark column instead: the
+            // turn-level indent §4.6's art gives the body, one grid cell in
+            // from the group's edge.
             if (desc.bodySegment) {
-                if (child)
-                    ImGui::Indent(m.pad2);
+                const float segIndent = child ? m.pad2 : m.gu;
+                ImGui::Indent(segIndent);
                 ui::Rect body;
                 body.x = ImGui::GetCursorScreenPos().x;
                 body.y = ImGui::GetCursorScreenPos().y;
@@ -615,8 +615,7 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
                 body.h = 0.0f; // the renderer measures what it draws
                 body.cells = m.textGrid;
                 thread.renderBlockBody(index, b, body);
-                if (child)
-                    ImGui::Unindent(m.pad2);
+                ImGui::Unindent(segIndent);
                 return true;
             }
             if (child)
@@ -655,7 +654,7 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
                 toggledGroup = group.id;
             }
             if (result.copyPressed || (focused && copyKey)) {
-                if (copyBlock(thread, index, b, desc)) {
+                if (copyBlock(thread, index, b)) {
                     // The copy's answer (task 45): exactly one item per press, naming the block
                     // that was copied - the label the row itself draws, or its kind's word when
                     // the descriptor carried none. All three doors (the chip, the menu, `y`) reach
