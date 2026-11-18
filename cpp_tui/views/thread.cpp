@@ -712,7 +712,18 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
             if (b == 0 && desc.kind == model::BlockKind::WorkGroup && !desc.expanded) {
                 if (styleMinimal && group.typedTurn) {
                     const float used = drawLiveEdge(row.x, row.y + row.h, row.w);
-                    if (used > 0.0f)
+                    // The SetPos below is a boundary extension: ImGui only
+                    // tolerates one when an item validates it (a Dummy after
+                    // the fact). When nothing of the group draws past the
+                    // chips - every row the fold hid and no answer row - the
+                    // position has no consumer, so it is not moved: the
+                    // natural cursor after the chips line is what the group's
+                    // height hint and the next group's rows read.
+                    const bool drawsOn =
+                        answerRow.group != 0 ||
+                        std::any_of(rows.begin() + 1, rows.end(),
+                                    [](const model::BlockDesc& d) { return d.visible; });
+                    if (used > 0.0f && drawsOn)
                         ImGui::SetCursorScreenPos(ImVec2(row.x, row.y + row.h + used));
                 }
             }

@@ -172,3 +172,36 @@ The "content" part do not seem to be rendered anymore.
 Sometimes the model stop with a "finish_reason" and a "content" message. Then it gets a nudge to call task_done and do that.
 But the "content" is lost. that is not OK.
 It should be shown as part of the thinking fold.
+
+# 21
+[09201] [imgui-error] (current settings: Assert=1, Log=1, Tooltip=1)
+[09201] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09202] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09203] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09204] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09205] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09206] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09207] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09208] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09209] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09210] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09211] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09212] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09213] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09214] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+[09215] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
+Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
