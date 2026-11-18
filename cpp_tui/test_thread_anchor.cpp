@@ -16,7 +16,10 @@
 //     notch) and the view is *not* yanked to the bottom,
 //   * the header keeps its screen row while the content below it grows - the anchor,
 //   * `PgUp` and `Ctrl+U` reveal one page of older groups (D-BOUNDS), and the window
-//     the page is measured against is the layout's, not a constant.
+//     the page is measured against is the layout's, not a constant,
+//   * a batch folding in place - by hand or by the live batch settling - never
+//     moves the group's header row (task 16): the fold changes how many rows
+//     follow the header, never where the header starts.
 //
 // Needs a display; runs headless under xvfb:
 //   xvfb-run -s "0 1280x820x24" ./test_thread_anchor [--out DIR]
@@ -596,10 +599,167 @@ int main(int argc, char** argv) {
               std::to_string(thread != nullptr ? thread->Scroll.y : -1.0f) + " vs " +
               std::to_string(parkedStreamY) + ")");
 
+    // --- A batch folding in place never moves the group's header row -----------
+    // Task 16: the group's header row is the anchor, and a fold - by hand or by
+    // the live batch settling - changes how many rows follow the header, never
+    // where the header starts. Both cases run in the maximal mode (`threadMinimal`
+    // off), where the fold is visible: the owner row draws open with its children
+    // under it and folding hides them. (The minimal shape - the chips line dying
+    // under the folded header while the segment stays - is the goldens' in
+    // test_blocks; this file owns the anchor row's numbers.) The fixture stays
+    // short so the child does not scroll: a parked view that clamps would move
+    // the header for reasons the anchor does not govern.
+    phase("batch-fold-by-hand");
+    clearThread();
+    frames(2);
+    state.ui.prefs.threadMinimal =
+        false; // maximal: the fold's effect is visible
+               // (the shell syncs the chat flag from the prefs every frame)
+    seed.runStart("fold the batch by hand");
+    seed.content("prose while the call runs");
+    seed.tool("bash", "ls -la", TuiBlockStatus_Running);
+    frames(3);
+    const std::int64_t foldLiveId = seed.liveTurnId;
+    check(foldLiveId != 0, "the live run is seeded");
+    std::size_t foldK = 0;
+    for (std::size_t k = 0; k < state.threadAdapter.groupCount(); ++k)
+        if (state.threadAdapter.groupAt(k).id == static_cast<std::size_t>(foldLiveId))
+            foldK = k;
+    check(state.threadAdapter.groupCount() == 1 && foldK == 0, "the fixture is the one live group");
+    check(state.ui.thread.firstGroupId == static_cast<std::size_t>(foldLiveId),
+          "the live group's header is the latched anchor row");
+    check(state.ui.thread.anchorGroupId == 0 && !state.ui.thread.anchorPending,
+          "no anchor is pending before the fold");
+    std::size_t foldOwnerB = 0;
+    std::size_t foldCardB = 0;
+    bool foldSawOwner = false;
+    bool foldSawCard = false;
+    for (std::size_t b = 0; b < state.threadAdapter.blockCount(foldK); ++b) {
+        const llmfun::tui::model::BlockDesc foldDesc = state.threadAdapter.blockAt(foldK, b);
+        if (foldDesc.ownsBatch) {
+            foldOwnerB = b;
+            foldSawOwner = true;
+        }
+        if (foldDesc.kind == llmfun::tui::model::BlockKind::ToolStep) {
+            foldCardB = b;
+            foldSawCard = true;
+        }
+    }
+    check(foldSawOwner && foldSawCard, "the live batch carries an owner row and a card");
+    check(state.threadAdapter.blockAt(foldK, foldOwnerB).expanded,
+          "the running batch's owner draws open (the live default)");
+    check(state.threadAdapter.blockAt(foldK, foldCardB).visible,
+          "the card under the open owner is visible");
+    thread = findThreadWindow();
+    check(thread != nullptr, "the thread child window exists for the fold");
+    const float preFoldY = state.ui.thread.firstGroupY;
+    const float preFoldScroll = thread->Scroll.y;
+
+    // The fold, by hand, mid-stream: the call is still Running. The adapter
+    // latches the toggle (`setBlockExpanded` returns `open` - false here, the
+    // fold's own answer) and the next frame arms the anchor on the header row.
+    (void)state.threadAdapter.setBlockExpanded(foldK, foldOwnerB, false);
+    frame();
+    check(!state.threadAdapter.blockAt(foldK, foldOwnerB).expanded,
+          "the fold pinned the owner row closed");
+    check(state.ui.thread.anchorGroupId == static_cast<std::size_t>(foldLiveId) &&
+              state.ui.thread.anchorPending,
+          "the fold anchors the group's header row");
+    frames(2);
+    thread = findThreadWindow();
+    check(thread != nullptr, "the thread child window survives the fold");
+    check(state.ui.thread.firstGroupId == static_cast<std::size_t>(foldLiveId),
+          "the folded group is still the latched one");
+    check(state.threadAdapter.blockAt(foldK, foldCardB).kind ==
+                  llmfun::tui::model::BlockKind::ToolStep &&
+              !state.threadAdapter.blockAt(foldK, foldCardB).visible,
+          "the fold hid the card below the header");
+    check(std::fabs(state.ui.thread.firstGroupY - preFoldY) <= 1.0f,
+          "the fold did not move the header row (" + std::to_string(preFoldY) + " -> " +
+              std::to_string(state.ui.thread.firstGroupY) + ")");
+    check(std::fabs(thread->Scroll.y - preFoldScroll) <= 1.0f,
+          "the fold did not move the scroll (scroll " + std::to_string(thread->Scroll.y) + ")");
+    check(state.ui.thread.anchorGroupId == 0 && !state.ui.thread.anchorPending,
+          "the anchor applied its correction and cleared");
+
+    // The settled batch: a fresh fixture - the fold above pinned its owner
+    // closed, and a pin outranks the default it must not mask (DD-6). The batch
+    // settles the way a response does: the call answers, the content gains its
+    // duration, and the owner's live default folds it - a store change the view
+    // did not perform, so no anchor may arm, and the rows that hide sit below
+    // the header, which stays where the user read it.
+
+    phase("batch-fold-settles");
+    clearThread();
+    frames(2);
+    seed.runStart("settle the batch");
+    seed.content("prose while the call runs");
+    seed.tool("grep", "needle", TuiBlockStatus_Running);
+    frames(3);
+    const std::int64_t settleLiveId = seed.liveTurnId;
+    const std::string settleBatch = seed.batchId();
+    const std::string settleContentId = "content#" + std::to_string(seed.liveBatch);
+    const std::string settleCallId = "tool#" + std::to_string(seed.callSeq);
+    std::size_t settleK = 0;
+    for (std::size_t k = 0; k < state.threadAdapter.groupCount(); ++k)
+        if (state.threadAdapter.groupAt(k).id == static_cast<std::size_t>(settleLiveId))
+            settleK = k;
+    check(settleLiveId != 0 && settleK == 0 &&
+              state.ui.thread.firstGroupId == static_cast<std::size_t>(settleLiveId),
+          "the settled case's live group is the latched one");
+    check(state.ui.thread.anchorGroupId == 0 && !state.ui.thread.anchorPending,
+          "no anchor is pending before the settle");
+    std::size_t settleOwnerB = 0;
+    std::size_t settleCardB = 0;
+    for (std::size_t b = 0; b < state.threadAdapter.blockCount(settleK); ++b) {
+        const llmfun::tui::model::BlockDesc settleDesc = state.threadAdapter.blockAt(settleK, b);
+        if (settleDesc.ownsBatch)
+            settleOwnerB = b;
+        if (settleDesc.kind == llmfun::tui::model::BlockKind::ToolStep)
+            settleCardB = b;
+    }
+    check(state.threadAdapter.blockAt(settleK, settleOwnerB).expanded,
+          "the running batch's owner draws open (the live default)");
+    check(state.threadAdapter.blockAt(settleK, settleCardB).visible,
+          "the card is visible before the settle");
+    thread = findThreadWindow();
+    check(thread != nullptr, "the thread child window exists before the settle");
+    const float preSettleY = state.ui.thread.firstGroupY;
+    const float preSettleScroll = thread->Scroll.y;
+
+    // The settle itself: the same block ids, the call done, the content timed.
+    seed.upsertBlock(seed.liveTurnId, settleContentId, settleBatch, TuiBlockKind_Prose,
+                     TuiBlockStatus_None, "assistant", "prose while the call runs", nullptr, 2500);
+    seed.upsertBlock(seed.liveTurnId, settleCallId, settleBatch, TuiBlockKind_Tool,
+                     TuiBlockStatus_Ok, nullptr, "needle", "grep", 1500);
+    frame();
+    check(state.ui.thread.anchorGroupId == 0 && !state.ui.thread.anchorPending,
+          "a settling batch arms no anchor (a default is not a toggle)");
+    check(!state.threadAdapter.blockAt(settleK, settleOwnerB).expanded,
+          "the settled batch's owner folded (the live default)");
+    check(state.threadAdapter.blockAt(settleK, settleCardB).kind ==
+                  llmfun::tui::model::BlockKind::ToolStep &&
+              !state.threadAdapter.blockAt(settleK, settleCardB).visible,
+          "the settle hid the card below the header");
+    frames(2);
+    thread = findThreadWindow();
+    check(thread != nullptr, "the thread child window survives the settle");
+    check(state.ui.thread.firstGroupId == static_cast<std::size_t>(settleLiveId),
+          "the settled group is still the latched one");
+    check(std::fabs(state.ui.thread.firstGroupY - preSettleY) <= 1.0f,
+          "the settle did not move the header row (" + std::to_string(preSettleY) + " -> " +
+              std::to_string(state.ui.thread.firstGroupY) + ")");
+    check(std::fabs(thread->Scroll.y - preSettleScroll) <= 1.0f,
+          "the settle did not move the scroll (scroll " + std::to_string(thread->Scroll.y) + ")");
+    check(state.ui.thread.anchorGroupId == 0 && !state.ui.thread.anchorPending,
+          "no anchor lingers after the settle");
+    state.ui.prefs.threadMinimal = true; // the factory mode again
+
     state.backend->shutdown();
     state.backend.reset();
     ImGui::DestroyContext();
-    std::printf("OK: %d checks (anchor, follow hand-over, arriving steps, Load earlier keys)\n",
+    std::printf("OK: %d checks (anchor, follow hand-over, arriving steps, Load earlier keys, "
+                "fold-stable headers)\n",
                 g_checks);
     return 0;
 }

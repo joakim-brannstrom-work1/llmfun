@@ -736,13 +736,18 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
         // The query row opens the turn, above the WORK header.
         if (queryRow.group != 0)
             drawRow(queryRow, store::kQueryRow);
-        // The header rows the anchor follows are sampled as the group is
-        // drawn - after the query row, so the anchor compares the header's
-        // drawn row, not a position the query's height moves. A group with
-        // no work rows draws no header and records nothing: the cursor then
-        // sits on the next group's query row, which is not a header row.
+        // The anchor contract (task 25's mechanism, unchanged): the group's
+        // header row is the anchor, and it is sampled HERE - immediately
+        // before that row draws - so the anchor is the header's own row,
+        // never "the cursor after the query row": an owner row or a body
+        // segment the projection invents above the header cannot shift it.
+        // A fold changes how many rows follow the header, never where the
+        // header starts (task 16). A group with no work rows draws no header
+        // and records nothing: the cursor then sits on the next group's
+        // query row, which is not a header row.
         if (hasWorkRows) {
-            const float headerScreenY = ImGui::GetCursorScreenPos().y;
+            const float headerScreenY =
+                ImGui::GetCursorScreenPos().y; // BEFORE the header row is drawn
             headerRows.emplace_back(group.id, headerScreenY - ImGui::GetWindowPos().y);
             if (ts.firstGroupId == 0 && headerScreenY >= clipMin.y &&
                 headerScreenY + m.row <= clipMax.y) {
@@ -772,6 +777,10 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
             const ImVec2 edge = ImGui::GetCursorScreenPos();
             (void)drawLiveEdge(edge.x, edge.y, std::max(0.0f, ImGui::GetContentRegionAvail().x));
         }
+        // The hint keeps using the height the group drew (not the `cell.h`
+        // reservation): `endGroup` stores the drawn height, so a batch folding
+        // in place changes the next hint, never the anchor row sampled above
+        // the fold (task 16).
         thread.endGroup(index, cell);
     }
     ts.drawnGroups = drawn.size();
