@@ -2517,6 +2517,16 @@ int rowOfSub(const Grid& g, const std::string& needle) {
     return -1;
 }
 
+/// How many rows carry a substring: the live-edge checks count the rows a
+/// word draws on, since the edge's line is the one place its text may repeat.
+int rowsWith(const Grid& g, const std::string& needle) {
+    int count = 0;
+    for (int y = 0; y < g.ny; ++y)
+        if (g.rowText(y).find(needle) != std::string::npos)
+            ++count;
+    return count;
+}
+
 /// The column a substring starts at on its row, -1 when absent: the shape
 /// checks read the drawn grid, so an indent is an answer too.
 int colOfSub(const Grid& g, const std::string& needle) {
@@ -2600,6 +2610,45 @@ void checkOwnerShape() {
             std::string(ui::icon(ui::Icon::DisclosureClosed, ui::GlyphSet::Glyphs));
         check(g.contains(shut + " 1.2 s - [bash] [grep] [read_file] +1"),
               "maxchips: chips drop to three and a +N");
+    }
+    { // the live edge (T15): maximal draws neither of its lines - the rows are
+      // on screen, so the owner header is the one row that names a running
+      // call and the drawn reasoning row the one Thinking word.
+        ThreadFixture f;
+        buildMaxLongLive(f);
+        const Grid g = f.draw();
+        check(rowsWith(g, "[execute_command]") == 1,
+              "maxlonglive: the running call is named on the owner header alone - no chips line");
+        check(rowsWith(g, "Thinking") == 1,
+              "maxlonglive: the drawn reasoning row is the one Thinking word - no shadow line");
+    }
+    { // an older turn's Running call is stale state the view paints nothing for:
+      // the live edge is the newest drawn group's alone, minimal-style or not.
+        ThreadFixture f;
+        f.seed.upsertTurn(1, TuiTurnState_Done, 3);
+        f.seed.upsertBlock(1, "q1", "1#q", TuiBlockKind_Prose, TuiBlockStatus_None, "user",
+                           "the first question");
+        f.seed.upsertBlock(1, "tool#1", "1#0", TuiBlockKind_Tool, TuiBlockStatus_Running, nullptr,
+                           "still marked running", "bash", 0);
+        f.seed.upsertTurn(2, TuiTurnState_Running, 1);
+        f.seed.upsertBlock(2, "q2", "2#q", TuiBlockKind_Prose, TuiBlockStatus_None, "user",
+                           "the second question");
+        const Grid g = f.draw();
+        check(rowsWith(g, "[bash]") == 0,
+              "an older group's Running call paints no chips line under its fold");
+        check(g.contains("WORK - 1 step"), "the older group still draws its folded header");
+    }
+    { // the live chips line composes its names with the owner header's one
+      // helper: the same `[bash] [grep] [read_file] +1` spelling, +N included.
+        ThreadFixture f;
+        f.seed.runStart("four calls at once");
+        f.seed.tool("bash", "listing the tree", TuiBlockStatus_Running);
+        f.seed.tool("grep", "searching the tree", TuiBlockStatus_Running);
+        f.seed.tool("read_file", "reading a file", TuiBlockStatus_Running);
+        f.seed.tool("write_file", "writing a file", TuiBlockStatus_Running);
+        const Grid g = f.draw();
+        check(g.contains("[bash] [grep] [read_file] +1"),
+              "the live chips line folds past three the way the owner header spells");
     }
 }
 

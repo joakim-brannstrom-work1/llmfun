@@ -482,17 +482,26 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
         if (hasWorkRows)
             for (std::size_t b = 0; b < blocks; ++b)
                 rows.push_back(thread.blockAt(index, b));
-        // The live edge (both modes): the newest live group - the last one
-        // drawn, a turn only ever starting after every earlier one ended - draws
-        // exactly one live element. The chips line while a call runs: one chip
-        // per RUNNING call, tool name only, orange, not clickable. Pending calls
-        // draw no chip. The line folds the moment a call goes dormant,
-        // mid-batch included - the selection re-reads the store's states every
-        // frame.
+        // The live edge: the newest drawn group - the last one drawn, a turn
+        // only ever starting after every earlier one ended - draws exactly one
+        // live element, and only while its style is minimal: the fold is what
+        // the edge stands in for, and a drawn group's rows are on screen. The
+        // chips line while a call runs: one chip per RUNNING call, tool name
+        // only, orange, not clickable. Pending calls draw no chip. The line
+        // folds the moment a call goes dormant, mid-batch included - the
+        // selection re-reads the store's states every frame.
         bool runningSteps = false;
-        for (const model::BlockDesc& d : rows)
-            if (d.kind == model::BlockKind::ToolStep && d.state == model::BlockState::Running)
-                runningSteps = true;
+        std::vector<std::string> runningCalls;
+        for (const model::BlockDesc& d : rows) {
+            if (d.kind != model::BlockKind::ToolStep || d.state != model::BlockState::Running)
+                continue;
+            runningSteps = true;
+            runningCalls.push_back(d.summary);
+        }
+        // The chips line's one text, the store's own composer: the same
+        // `[bash] [grep]`, `+N` past three, no duplicates the owner header
+        // spells - a batch's names read one way, whichever row carries them.
+        const std::string liveChips = store::chipsText(runningCalls);
         // Else the folded, count-only Thinking row while the model streams
         // thinking: the live turn's last Thinking-kind row. The rows that
         // follow it are its batch's calls - the store keeps first-emission
@@ -522,18 +531,11 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
         // height the caller must skip (one row or none).
         const auto drawLiveEdge = [&](float x, float y, float w) -> float {
             if (runningSteps) {
-                float chipX = x + m.pad2;
-                for (const model::BlockDesc& d : rows) {
-                    if (d.kind != model::BlockKind::ToolStep ||
-                        d.state != model::BlockState::Running)
-                        continue;
-                    const std::string chip = "[" + d.summary + "]";
-                    lineAt(m, ui::Rect{chipX, y, std::max(0.0f, x + w - chipX), m.row, m.textGrid},
-                           chipX, y, chip.c_str(), ui::ColorToken::stateWarn);
-                    chipX +=
-                        static_cast<float>(ui::displayWidth(chip)) * (m.textGrid ? 1.0f : m.gu) +
-                        m.pad1;
-                }
+                // One line: the composer's answer carries the spacing, so the
+                // view places the whole string and measures nothing.
+                const float chipsX = x + m.pad2;
+                lineAt(m, ui::Rect{chipsX, y, std::max(0.0f, x + w - chipsX), m.row, m.textGrid},
+                       chipsX, y, liveChips.c_str(), ui::ColorToken::stateWarn);
                 return m.row;
             }
             if (liveThinking != nullptr) {
@@ -708,9 +710,11 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
             // answer) stand outside the fold, drawn before and after the loop,
             // and the folded live group names its live steps in one chips line:
             // its edge draws directly under the header, where no other row of
-            // the group renders (the sites' guards are task 15's).
+            // the group renders. The edge is the newest drawn group's alone -
+            // an older fold's Running call is history the turn left behind, and
+            // it paints nothing.
             if (b == 0 && desc.kind == model::BlockKind::WorkGroup && !desc.expanded) {
-                if (styleMinimal && group.typedTurn) {
+                if (styleMinimal && group.typedTurn && index == drawn.back()) {
                     const float used = drawLiveEdge(row.x, row.y + row.h, row.w);
                     // The SetPos below is a boundary extension: ImGui only
                     // tolerates one when an item validates it (a Dummy after
@@ -753,14 +757,18 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
         // The answer closes the turn, after the group's rows.
         if (answerRow.group != 0)
             drawRow(answerRow, store::kAnswerRow);
-        // The effectively-open group's live edge: at the group's bottom,
-        // after the answer row - maximal's position. A group whose rows the
-        // minimal fold hid drew its edge under the header instead (the drawRow
-        // fold case), so that shape skips this site. A group with no live
+        // The live edge's second site, at the group's bottom after the answer
+        // row. The minimal style draws the edge under the folded header (the
+        // drawRow case), so a folded group never reaches this site, and a
+        // group whose style is not minimal draws its rows on screen - the
+        // edge has no row to stand in for there. What does reach it in the
+        // minimal style is a group the fold case does not cover: an untyped
+        // (legacy) group, and a group with no work rows - the edge stands in
+        // for whatever rows such a group hides, and a group with no live
         // element draws nothing (the lambda answers 0).
         const bool foldedRows =
             styleMinimal && group.typedTurn && !rows.empty() && !rows[0].expanded;
-        if (index == drawn.back() && !foldedRows) {
+        if (index == drawn.back() && styleMinimal && !foldedRows) {
             const ImVec2 edge = ImGui::GetCursorScreenPos();
             (void)drawLiveEdge(edge.x, edge.y, std::max(0.0f, ImGui::GetContentRegionAvail().x));
         }
