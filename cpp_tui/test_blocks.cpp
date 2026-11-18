@@ -1113,6 +1113,28 @@ void checkStreaming() {
     // though the owner above it never drew.
     check(grid.contains("STREAM-PROSE"),
           "the streamed prose draws under the fold (the content segment's own clause)");
+    // The case the design exists for (FR-5, FR-21, C7), pinned on the adapter's
+    // descriptors, not on a screen substring: in the one frame the owner row is
+    // invisible and the segment is visible - both facts are the adapter's (the
+    // derived predicate, DD-16); the view only obeys `visible`. The rows are
+    // selected by kind, never by number (the projection's indices move).
+    {
+        const auto& a = both.state.threadAdapter;
+        std::size_t ownerRow = a.blockCount(0), segmentRow = a.blockCount(0);
+        for (std::size_t b = 0; b < a.blockCount(0); ++b) {
+            const model::BlockDesc desc = a.blockAt(0, b);
+            if (desc.ownsBatch)
+                ownerRow = b;
+            if (desc.bodySegment)
+                segmentRow = b;
+        }
+        check(ownerRow < a.blockCount(0) && segmentRow < a.blockCount(0),
+              "the folded live batch still projects its owner and its segment");
+        check(ownerRow < a.blockCount(0) && !a.blockAt(0, ownerRow).visible,
+              "no owner row is drawn in minimal's folded group");
+        check(segmentRow < a.blockCount(0) && a.blockAt(0, segmentRow).visible,
+              "but the live batch's content still draws");
+    }
     both.openNewestGroup();
     grid = both.draw();
     // The reasoning row draws (the pinned-open owner), but its text waits
@@ -1124,6 +1146,29 @@ void checkStreaming() {
     check(grid.contains("STREAM-PROSE"), "and the prose");
     check(grid.rowText(0).find("STREAM-PROSE") == std::string::npos,
           "the prose is not on the reasoning row");
+    // The opened group's segment pin (R-9's minimal side): the owner and the
+    // segment are both visible now - the segment draws inside the open owner,
+    // once, never a second copy (I-5's owner side reaches the segment as soon
+    // as the owner draws).
+    {
+        const auto& a = both.state.threadAdapter;
+        std::size_t ownerRow = a.blockCount(0), segmentRow = a.blockCount(0);
+        for (std::size_t b = 0; b < a.blockCount(0); ++b) {
+            const model::BlockDesc desc = a.blockAt(0, b);
+            if (desc.ownsBatch)
+                ownerRow = b;
+            if (desc.bodySegment)
+                segmentRow = b;
+        }
+        check(ownerRow < a.blockCount(0) && a.blockAt(0, ownerRow).visible &&
+                  a.blockAt(0, segmentRow).visible,
+              "the opened group draws the owner and the segment (both visible)");
+    }
+    int proseRows = 0;
+    for (int y = 0; y < grid.ny; ++y)
+        if (grid.rowText(y).find("STREAM-PROSE") != std::string::npos)
+            ++proseRows;
+    check(proseRows == 1, "the opened group draws the segment once (no second copy)");
 
     // The rows' screen order in the opened group: the group's header, the query,
     // the content, the reasoning - the reasoning row is screen row 4.
@@ -1177,6 +1222,27 @@ void checkStreaming() {
     both.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });
     check(g_clipboard == "STREAM-PROSE",
           "`y` on the focused owner copies the batch content (got '" + g_clipboard + "')");
+
+    // The segment's lifetime (R-9): a newer batch folds the old segment with
+    // its batch (the newest-only clause lives in the newer response), and the
+    // turn's close folds the last one too. One predicate line changes the
+    // lifetime if the user prefers a single one - the choice is not made here.
+    // A fresh fixture, not the walked one: the clicks above left row pins, and
+    // a pin would give the fold a second cause.
+    ThreadFixture later;
+    later.addStream(MsgKind::Assistant, "OLD-PROSE", "");
+    Grid laterGrid = later.draw();
+    check(laterGrid.contains("OLD-PROSE"),
+          "the first batch's segment draws (it is the newest, live one)");
+    later.seed.nextBatch();
+    later.addStream(MsgKind::Assistant, "NEW-PROSE", "");
+    laterGrid = later.draw();
+    check(laterGrid.contains("NEW-PROSE"),
+          "a newer batch's segment draws (it is the newest, live one)");
+    check(!laterGrid.contains("OLD-PROSE"), "the old segment folded with its batch (newest-only)");
+    later.seed.runStop();
+    laterGrid = later.draw();
+    check(!laterGrid.contains("NEW-PROSE"), "the segment disappears when the turn closes");
 }
 
 void checkFocusAndCopy() {
