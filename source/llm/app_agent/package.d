@@ -134,6 +134,12 @@ private TypedTurns buildTypedTurns(Chat.MessageT[] history, ToolFlags flags) {
             if (!a.thinking.empty)
                 out_.blocks ~= makeBlockData(a.turnId, reasoningBlockId(bi), bid, TuiBlockKind_Reasoning,
                     TuiBlockStatus_None, TuiBlockFlag_Collapsible, null, null, a.thinking, durMs);
+            // A tooling response's streamed prose is not persisted in the
+            // ToolMessage, so the block is body-less, and the projection drops
+            // a body-less content child after reading the batch's duration
+            // from it.
+            out_.blocks ~= makeBlockData(a.turnId, contentBlockId(bi), bid,
+                TuiBlockKind_Prose, TuiBlockStatus_None, 0, null, a.role.to!string, null, durMs);
             const arr = a.toolCalls.type == JSONType.array ? a.toolCalls.array : [
             ];
             size_t idx;

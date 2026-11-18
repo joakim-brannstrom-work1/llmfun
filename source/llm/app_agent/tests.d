@@ -2174,7 +2174,8 @@ unittest {
             && rturns[0].state == TuiTurnState_Done && rturns[0].messageCount == 5,
             "the healed a1/a2 prefix + a3 + the call + the result replay as"
             ~ " one Done turn, got messageCount " ~ rturns[0].messageCount.to!string);
-    assert(rblocks.length == 6, "healed a1/a2, query, content, reasoning and merged call replay, got "
+    assert(rblocks.length == 7,
+            "healed a1/a2, query, content, reasoning, the tool message's content block and merged call replay, got "
             ~ rblocks.length.to!string ~ ": " ~ (rblocks.length
                 ? rblocks.map!(b => b.id).join(",").idup : ""));
     assert(rblocks[0].id == "content#0" && rblocks[0].body == "a1",
@@ -2186,7 +2187,9 @@ unittest {
             "a3 replays its original 432 ms");
     assert(rblocks[4].id == "reasoning#3" && rblocks[4].durationMs == 120,
             "tm replays its original 120 ms");
-    assert(rblocks[5].id == "c1" && rblocks[5].durationMs == 42, "tr replays its original 42 ms");
+    assert(rblocks[5].id == "content#3" && rblocks[5].body.empty && rblocks[5].durationMs == 120,
+            "the tool message replays a body-less content block carrying its 120 ms");
+    assert(rblocks[6].id == "c1" && rblocks[6].durationMs == 42, "tr replays its original 42 ms");
 }
 
 // Backward-compat gate: a session file created BEFORE the processMs
@@ -3613,7 +3616,7 @@ unittest {
     assert(turns.length == 1);
     assert(turns[0].id == 1 && turns[0].state == TuiTurnState_Done
             && turns[0].messageCount == 5, "query + response + 2 calls + 2 results");
-    assert(blocks.length == 7);
+    assert(blocks.length == 8);
     assert(blocks[0].id == "query" && blocks[0].kind == TuiBlockKind_Prose
             && blocks[0].meta == "user" && blocks[0].body == "q" && blocks[0].batchId == "1#q");
     assert(blocks[1].id == "reasoning#0"
@@ -3624,17 +3627,20 @@ unittest {
     assert(blocks[3].id == "reasoning#1"
             && blocks[3].kind == TuiBlockKind_Reasoning && blocks[3].body == "T1" && blocks[3].batchId == "1#1",
             "the tool message's own thinking is the batch's reasoning block");
-    assert(blocks[4].id == "c1" && blocks[4].kind == TuiBlockKind_Tool
-            && blocks[4].title == "grep_files" && blocks[4].status == TuiBlockStatus_Ok
-            && blocks[4].meta == "ok-1" && blocks[4].body == `pattern="x"` && blocks[4].durationMs == 42,
-            "call and response merged, response meta wins: id=" ~ blocks[4].id ~ " title="
-            ~ blocks[4].title ~ " status=" ~ blocks[4].status.text ~ " meta="
-            ~ blocks[4].meta ~ " body=" ~ blocks[4].body ~ " dur="
-            ~ blocks[4].durationMs.text ~ " batch=" ~ blocks[4].batchId);
-    assert(blocks[5].id == "c2" && blocks[5].status == TuiBlockStatus_Failed
-            && blocks[5].meta == "bad-2" && blocks[5].body.empty);
-    assert(blocks[6].id == "answer" && blocks[6].kind == TuiBlockKind_Answer
-            && blocks[6].body == "The answer is 4." && blocks[6].batchId == "1#1");
+    assert(blocks[4].id == "content#1" && blocks[4].meta == "assistant"
+            && blocks[4].body.empty && blocks[4].durationMs == 120,
+            "the tool message's content block is body-less and carries the response's duration");
+    assert(blocks[5].id == "c1" && blocks[5].kind == TuiBlockKind_Tool
+            && blocks[5].title == "grep_files" && blocks[5].status == TuiBlockStatus_Ok
+            && blocks[5].meta == "ok-1" && blocks[5].body == `pattern="x"` && blocks[5].durationMs == 42,
+            "call and response merged, response meta wins: id=" ~ blocks[5].id ~ " title="
+            ~ blocks[5].title ~ " status=" ~ blocks[5].status.text ~ " meta="
+            ~ blocks[5].meta ~ " body=" ~ blocks[5].body ~ " dur="
+            ~ blocks[5].durationMs.text ~ " batch=" ~ blocks[5].batchId);
+    assert(blocks[6].id == "c2" && blocks[6].status == TuiBlockStatus_Failed
+            && blocks[6].meta == "bad-2" && blocks[6].body.empty);
+    assert(blocks[7].id == "answer" && blocks[7].kind == TuiBlockKind_Answer
+            && blocks[7].body == "The answer is 4." && blocks[7].batchId == "1#1");
 }
 
 // STARTUP PROBE (temporary): the session-load path must feed the replay
@@ -3675,7 +3681,7 @@ unittest {
     const turns = sinkR.setTurnsSnapshots[0].turns;
     const blocks = sinkR.setTurnsSnapshots[0].blocks;
     assert(turns.length == 1, "the persisted turn replays: got " ~ turns.length.text);
-    assert(blocks.length == 7, "got " ~ blocks.length.text);
+    assert(blocks.length == 8, "got " ~ blocks.length.text);
 }
 
 // NR derivation: the live walk emits the same shapes as the replay (the
@@ -3986,10 +3992,10 @@ unittest {
     app.emitReplayTyped();
 
     const blocks = sink.setTurnsSnapshots[0].blocks;
-    assert(blocks.length == 4, blocks.length.text);
-    const c1Block = blocks[1];
-    const c2Block = blocks[2];
-    const c3Block = blocks[3];
+    assert(blocks.length == 5, blocks.length.text);
+    const c1Block = blocks[2];
+    const c2Block = blocks[3];
+    const c3Block = blocks[4];
     // The flat object walks one level: nested containers stringify as compact
     // JSON, scalars as text, keys byte-wise sorted.
     assert(c1Block.resultKeys == ["cmd", "n", "nested"], c1Block.resultKeys.text);
@@ -4049,10 +4055,10 @@ unittest {
     app.emitReplayTyped();
 
     const blocks = sink.setTurnsSnapshots[0].blocks;
-    assert(blocks.length == 4, blocks.length.text);
-    const c1Block = blocks[1];
-    const c2Block = blocks[2];
-    const c3Block = blocks[3];
+    assert(blocks.length == 5, blocks.length.text);
+    const c1Block = blocks[2];
+    const c2Block = blocks[3];
+    const c3Block = blocks[4];
     assert(c1Block.resultKeys == ["Z", "a"], c1Block.resultKeys.text);
     assert(c1Block.resultValues == ["1", "2"], c1Block.resultValues.text);
     assert(c2Block.resultKeys == ["k"] && c2Block.resultValues == ["second"],
@@ -4169,13 +4175,15 @@ unittest {
         app.emitReplayTyped();
 
         const blocks = sink.setTurnsSnapshots[0].blocks;
-        assert(blocks.length == 3, blocks.length.text);
-        assert(blocks[1].id == "c1" && blocks[1].status == TuiBlockStatus_Ok);
-        assert(blocks[1].resultKeys == ["x"] && blocks[1].resultValues == ["1"]);
-        assert(blocks[1].resultRaw.empty && blocks[1].resultMore == 0);
-        assert(blocks[2].id == "c2" && blocks[2].status == TuiBlockStatus_Cancelled);
-        assert(blocks[2].resultKeys.empty && blocks[2].resultValues.empty
-                && blocks[2].resultRaw.empty && blocks[2].resultMore == 0,
+        assert(blocks.length == 4, blocks.length.text);
+        assert(blocks[1].id == "content#0" && blocks[1].body.empty && blocks[1].durationMs == 0,
+                "a response with no content still writes its body-less content block");
+        assert(blocks[2].id == "c1" && blocks[2].status == TuiBlockStatus_Ok);
+        assert(blocks[2].resultKeys == ["x"] && blocks[2].resultValues == ["1"]);
+        assert(blocks[2].resultRaw.empty && blocks[2].resultMore == 0);
+        assert(blocks[3].id == "c2" && blocks[3].status == TuiBlockStatus_Cancelled);
+        assert(blocks[3].resultKeys.empty && blocks[3].resultValues.empty
+                && blocks[3].resultRaw.empty && blocks[3].resultMore == 0,
                 "a cancelled call carries no pair set and no resultRaw");
     }
 
@@ -4721,14 +4729,20 @@ unittest {
             "the live batch ids, got `" ~ fBatches.join(" ") ~ "`");
     assert(fDurs == [0, 100, 100, 120, 42, 120], "the live durations");
 
-    // Replay: the same rows, same order, durations included.
+    // Replay: the live rows plus the tooling batch's body-less content block.
+    // Its duration rides it. The streamed prose is not persisted, so a run
+    // without stream ticks has no live content block for that batch, and the
+    // projection drops the body-less child, keeping the owner's duration.
     app.emitReplayTyped();
     assert(sink.setTurnsSnapshots.length == 1, "one replay snapshot");
     const turns = sink.setTurnsSnapshots[0].turns;
     const blocks = sink.setTurnsSnapshots[0].blocks;
     assert(turns.length == 1 && turns[0].id == 1
             && turns[0].state == TuiTurnState_Done, "the finished turn replays Done");
-    assert(blocks.map!(b => b.id).array == fIds, "same ids, same order");
-    assert(blocks.map!(b => b.batchId).array == fBatches, "same batch ids");
-    assert(blocks.map!(b => b.durationMs).array == fDurs, "same durations");
+    assert(blocks.map!(b => b.id).array == fIds[0 .. 4] ~ "content#1" ~ fIds[4 .. $],
+            "same ids, same order, got `" ~ blocks.map!(b => b.id).array.join(" ") ~ "`");
+    assert(blocks.map!(b => b.batchId)
+            .array == fBatches[0 .. 4] ~ "1#1" ~ fBatches[4 .. $], "same batch ids");
+    assert(blocks.map!(b => b.durationMs)
+            .array == fDurs[0 .. 4] ~ 120L ~ fDurs[4 .. $], "same durations");
 }
