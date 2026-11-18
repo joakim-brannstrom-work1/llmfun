@@ -362,10 +362,13 @@ BlockResult renderBlock(const BlockView& block, const ui::Rect& rect, const ui::
     // `kBlockMenuId`): a popup the thread state has stopped naming survives one grace
     // frame and is closed at the next `NewFrame` (ImGui restores focus away from the
     // now-inactive popup window); `menuOpen` is what tells the caller to drop the latch.
-    // `Copy` is disabled for a block with no body (the `WORK` header, a stream row before
-    // its first character): the item must not promise text the block does not have, and
-    // a disabled item copies nothing. The keyboard half stays `y` on the focused block,
-    // so copy never needs the terminal's own `Ctrl+C` (plan/tui_copy_probe.md).
+    //    `Copy` is disabled for a block that copies nothing: the item must not
+    //    promise text the block does not have, and a disabled item copies
+    //    nothing. A batch owner has no body of its own but IS the copy target
+    //    for its batch's content (FR-16/FR-22, `copyable`), so the item reads
+    //    the copy target, not the body. The keyboard half stays `y` on the
+    //    focused block, so copy never needs the terminal's own `Ctrl+C`
+    //    (plan/tui_copy_probe.md).
     if (out.menuRequested || draw.menuOwner) {
         // No `SetNextWindowPos`: a mouse-opened popup already latches the pointer as its
         // position (`OpenPopupPos`), and setting one here would be left dangling for the
@@ -381,7 +384,7 @@ BlockResult renderBlock(const BlockView& block, const ui::Rect& rect, const ui::
             // already put on `ImGuiCol_TextDisabled`. One fact drives both halves -
             // whether the item may act and whether it looks like it may - so "drawn
             // enabled, acts disabled" cannot happen.
-            const bool canCopy = block.hasBody;
+            const bool canCopy = block.hasBody || block.copyable;
             if (!canCopy)
                 ImGui::PushStyleColor(ImGuiCol_Text,
                                       ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));

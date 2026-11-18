@@ -275,6 +275,13 @@ public:
     /// every body would pay for a feature nobody pressed.
     std::string blockText(size_t k, std::size_t b) const;
 
+    /// Whether the block's copy strips the markdown fences (S-13): a `Code`
+    /// row copies its code, and a batch owner copies its batch's content - the
+    /// fences strip when THAT content is code (task 12, the copy goes through
+    /// the owner). The copy path's only fence question, answered here so the
+    /// view never re-derives it (B1).
+    bool blockCopyIsCode(size_t k, std::size_t b) const;
+
     /// Whether `s` has anything to show on block `b` of group `k`: the row is drawn as markdown
     /// *and* `ui::bodyHasTable()` says its body holds a GFM table this profile draws as a grid
     /// (design §6.8, task 37).
@@ -399,6 +406,11 @@ private:
         /// child's `typedBody`, the owner row's copy source. Empty when the
         /// batch's content rows all dropped (a calls-only batch copies nothing).
         std::string contentBody;
+        /// the content body is a fenced code block (S-13, the store's own
+        /// `code` fact on the child the body came from): the owner's copy
+        /// strips the fences, the same answer the content row's own copy gave
+        /// before the fold (task 12 - the copy goes through the owner now).
+        bool contentIsCode = false;
     };
 
     /// One block of a group (design §4.5, task 26): the group's own header row, a

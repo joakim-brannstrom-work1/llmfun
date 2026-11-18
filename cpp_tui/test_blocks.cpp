@@ -1106,9 +1106,10 @@ void checkStreaming() {
     check(g_clipboard == "STREAM-THINKING",
           "`y` on the reasoning copies the reasoning (got '" + g_clipboard + "')");
 
-    // The body row is its own target: `y` there copies the prose. The batch's
-    // owner row (DD-13) prints AGENT above it, so the row is the AGENT header
-    // directly above the body text - found in the captured grid, never assumed.
+    // The body row is the batch's segment now (task 12, DD-7): no header, no
+    // hit box of its own - the row above the body text is the batch's owner
+    // (DD-13), and the owner is the copy target (FR-16). Found in the captured
+    // grid, never assumed.
     const int bodyText = rowOf(grid, "STREAM-PROSE");
     int agentRow = -1;
     for (int y = bodyText; y >= 0; --y)
@@ -1116,17 +1117,17 @@ void checkStreaming() {
             agentRow = y;
             break;
         }
-    check(agentRow >= 0,
-          "the body row sits under its own AGENT header (row " + std::to_string(agentRow) + ")");
+    check(agentRow >= 0, "the body segment sits under its owner's AGENT header (row " +
+                             std::to_string(agentRow) + ")");
     clickRow(static_cast<float>(agentRow));
     check(both.state.ui.thread.focus ==
-              model::BlockId{1, std::hash<std::string>{}("content#0"), model::BlockKind::Assistant},
-          "the body row is focusable too");
+              model::BlockId{1, std::hash<std::string>{}("batch#1#0"), model::BlockKind::Assistant},
+          "the owner takes the focus; the body segment is body text, not a row hit box (DD-7)");
     g_clipboard.clear();
     g_clipboardSet = false;
     both.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });
     check(g_clipboard == "STREAM-PROSE",
-          "`y` on the body copies the prose (got '" + g_clipboard + "')");
+          "`y` on the focused owner copies the batch content (got '" + g_clipboard + "')");
 }
 
 void checkFocusAndCopy() {
@@ -1203,26 +1204,38 @@ void checkFocusAndCopy() {
     fresh.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });
     check(!g_clipboardSet, "with no focused block, `y` copies nothing");
 
-    // And a *code* block's `y` copies the code, not the fences (S-13: the TUI path).
-    // Minimal folds the code row behind the header, so the fixture opens the
-    // group (the task-8 override) before the row is clicked.
+    // And a *code* block's `y` copies the code, not the fences (S-13: the TUI
+    // path). Minimal folds the batch behind its header, so the fixture opens
+    // the group (the task-8 override) before the row is clicked. The copy
+    // target is the batch's OWNER now (task 12, FR-16): the body draws as the
+    // batch's header-less segment, and the owner's copy strips the fences
+    // because the content it names is code - the adapter's fence answer (B1).
     ThreadFixture code;
     code.add(message(1, MsgKind::User, "[1] show [0.2s]", "show"));
     code.add(message(2, MsgKind::Assistant, "[2] here [1.0s]", "```\nint x = 1;\n```"));
     code.openNewestGroup();
-    code.draw();
-    // The code block is the *fifth* row of its work group (header, query, query
-    // body, the batch's owner row, code row), so the focus has to be put on the
-    // row that holds the body.
-    code.draw(true, [](ImGuiIO& in) { in.AddMousePosEvent(2.0f, 4.0f); });
+    const Grid cg = code.draw();
+    int ownerRow = -1;
+    for (int y = 0; y < cg.ny; ++y)
+        if (cg.rowText(y).find("AGENT") != std::string::npos) {
+            ownerRow = y;
+            break;
+        }
+    check(ownerRow >= 0, "the code batch's owner row is on screen");
+    code.draw(true,
+              [ownerRow](ImGuiIO& in) { in.AddMousePosEvent(2.0f, static_cast<float>(ownerRow)); });
     code.draw(true, [](ImGuiIO& in) { in.AddMouseButtonEvent(0, true); });
     code.draw(true, [](ImGuiIO& in) { in.AddMouseButtonEvent(0, false); });
     code.draw(true); // the click's answer is drawn on the next frame
+    check(code.state.ui.thread.focus ==
+              model::BlockId{1, std::hash<std::string>{}("batch#1#0"), model::BlockKind::Assistant},
+          "the owner row takes the focus; the code segment is body text, not a hit box (DD-7)");
     g_clipboard.clear();
     g_clipboardSet = false;
     code.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });
     check(g_clipboard == "int x = 1;\n",
-          "`y` on a focused code block copies the code (got '" + g_clipboard + "')");
+          "`y` on the focused owner copies the code without the fences (got '" + g_clipboard +
+              "')");
 
     // A text field keeps its characters: the guard is `ui::takeCharacter`'s own
     // `WantTextInput` check (pinned by the rail's key tests, its first consumer). What
@@ -1338,32 +1351,35 @@ void checkCrossGroupIdentity() {
     };
 
     // The stored Assistant body: the turn's second prose block ("content#1" -
-    // the first was message 2's). Its 2.0 s timing is unique here - but the
-    // batch's owner row (DD-13) prints the batch's duration too, so the row is
-    // the AGENT header directly above the body text, never the header alone.
+    // the first was message 2's). Post-fold (task 12) the body draws as the
+    // batch's header-less segment (DD-7): the row above it is the batch's
+    // owner, and the owner is the copy target (FR-16). The click focuses the
+    // owner - and toggles the batch (FR-1), which the re-open below undoes.
     const int storedBodyText = rowOf(grid, "stored-three");
-    int storedBody = -1;
+    int storedOwner = -1;
     for (int y = storedBodyText; y >= 0; --y)
         if (grid.rowText(y).find("AGENT") != std::string::npos) {
-            storedBody = y;
+            storedOwner = y;
             break;
         }
-    check(storedBody >= 0, "the stored message 3 body row is on screen");
-    Grid afterStoredBody = clickRow(storedBody);
+    check(storedOwner >= 0, "the stored message 3 owner row is on screen");
+    Grid afterStoredBody = clickRow(storedOwner);
     check(fixture.state.ui.thread.focus ==
-              model::BlockId{1, std::hash<std::string>{}("content#1"), model::BlockKind::Assistant},
-          "the stored body focuses its own group and message");
-    check(copyRows(afterStoredBody) == 1,
-          "focusing the stored body shows exactly one Copy control");
+              model::BlockId{1, std::hash<std::string>{}("batch#1#1"), model::BlockKind::Assistant},
+          "the stored body's owner takes the focus (the segment has no hit box, DD-7)");
+    check(copyRows(afterStoredBody) == 0,
+          "the focused owner shows no Copy chip (the copy doors are the menu and `y`, FR-16)");
     g_clipboard.clear();
     g_clipboardSet = false;
     fixture.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });
     check(g_clipboard == "stored-three",
-          "`y` on the stored body copies the stored text (got '" + g_clipboard + "')");
+          "`y` on the focused owner copies the batch content (got '" + g_clipboard + "')");
+    fixture.openGroup(1); // the click toggled the batch closed (FR-1); re-open it
+    grid = fixture.draw();
 
     // The stored Thinking row: same group and key, a different kind - a separate
     // identity and a separate copy target.
-    const int storedThinking = rowOf(afterStoredBody, "Thinking - 2.0 s");
+    const int storedThinking = rowOf(grid, "Thinking - 2.0 s");
     check(storedThinking >= 0, "the stored message 3 thinking row is on screen");
     Grid afterStoredThinking = clickRow(storedThinking);
     check(fixture.state.ui.thread.focus == model::BlockId{1,
@@ -1378,28 +1394,36 @@ void checkCrossGroupIdentity() {
     check(g_clipboard == "think-three",
           "`y` on the stored thinking copies the stored reasoning (got '" + g_clipboard + "')");
 
-    // The stream's rows are the other half of each pair. The stream body is the last
-    // AGENT header (it has no timing); the stream thinking is the last Thinking one.
-    const int streamBody = rowOf(afterStoredThinking, "AGENT", /*fromBottom=*/true);
-    check(streamBody >= 0, "the streamed body row is on screen");
-    Grid afterStreamBody = clickRow(streamBody);
+    // The stream's rows are the other half of each pair. The stream owner is
+    // the last AGENT header (it has no timing); the click focuses the owner -
+    // the segment itself has no hit box (DD-7) - and toggles the batch, which
+    // the re-open undoes before the Thinking row is addressed.
+    const int streamOwner = rowOf(afterStoredThinking, "AGENT", /*fromBottom=*/true);
+    check(streamOwner >= 0, "the streamed body's owner row is on screen");
+    Grid afterStreamBody = clickRow(streamOwner);
     check(fixture.state.ui.thread.focus ==
-              model::BlockId{2, std::hash<std::string>{}("content#0"), model::BlockKind::Assistant},
-          "the streamed body is focusable (the live turn's content block)");
-    check(copyRows(afterStreamBody) == 1, "the streamed body is the only focused row");
+              model::BlockId{2, std::hash<std::string>{}("batch#2#0"), model::BlockKind::Assistant},
+          "the streamed body's owner is focusable (the live turn's copy target)");
+    check(copyRows(afterStreamBody) == 0, "the focused stream owner shows no Copy chip (FR-16)");
     g_clipboard.clear();
     g_clipboardSet = false;
     fixture.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });
     check(g_clipboard == "stream-prose",
-          "`y` on the streamed body copies the stream (got '" + g_clipboard + "')");
+          "`y` on the focused stream owner copies the stream (got '" + g_clipboard + "')");
+    fixture.openNewestGroup(); // the click toggled the batch closed (FR-1); re-open it
+    grid = fixture.draw();
 
-    // The stream's Thinking row: the row directly above its prose segment's
-    // header ("AGENT  stream-prose" draws as one row). The live edge's folded
-    // count-only shadow row sits at the group's bottom and says the same bare
-    // word - so the list's row is addressed by the body text, never the word.
-    // The reasoning's text waits behind its fold (the batch holds no call in
-    // flight); the click below pins it open, and the text then draws.
-    const int streamThinking = rowOf(afterStreamBody, "stream-prose") - 1;
+    // The stream's Thinking row: the focusable row directly above the prose
+    // segment (the segment draws the body with no header of its own, DD-7).
+    // The live edge's folded count-only shadow row sits at the group's bottom
+    // and says the same bare word - so the list's row is addressed by walking
+    // UP from the body text, never the word alone.
+    int streamThinking = -1;
+    for (int y = rowOf(grid, "stream-prose"); y >= 0; --y)
+        if (grid.rowText(y).find("Thinking") != std::string::npos) {
+            streamThinking = y;
+            break;
+        }
     check(streamThinking >= 0, "the streamed reasoning row is on screen");
     Grid afterStreamThinking = clickRow(streamThinking);
     check(fixture.state.ui.thread.focus == model::BlockId{2,
@@ -1519,15 +1543,17 @@ void checkCopyFromEveryBlock() {
         const char* text;
         const char* thinking;
         bool stream;
-        const char* label; ///< the block's header word, the row to act on
-        const char* want;  ///< the exact clipboard payload
+        const char* label;  ///< the block's header word, the row to act on
+        const char* want;   ///< the exact clipboard payload
+        bool owner = false; ///< the label row is the batch's owner: body-less, the
+                            ///  copy target for its content (FR-16) - no Copy chip
     };
     const char* table = "| a | b |\n|---|---|\n| 1 | 2 |\n";
     const Case cases[] = {
         // Stored messages, one per kind that produces a body row.
         {"user", MsgKind::User, "[1] q-one [0.5s]", "user body", "", false, "YOU", "user body"},
         {"assistant", MsgKind::Assistant, "[2] a-two [1.0s]", "agent prose", "", false, "AGENT",
-         "agent prose"},
+         "agent prose", true},
         {"answer", MsgKind::FinalAnswer, "[3] done [1.2s]", "final answer", "", false, "ANSWER",
          "final answer"},
         {"system", MsgKind::System, "[4] notice [1.4s]", "a notice", "", false, "SYSTEM",
@@ -1537,13 +1563,13 @@ void checkCopyFromEveryBlock() {
         {"tool result", MsgKind::ToolResponse, "[6] result: 42 lines [1.8s]", "result: 42 lines",
          "", false, "TOOL", "result: 42 lines"},
         {"code", MsgKind::Assistant, "[7] code [2.0s]", "```\nint x = 1;\n```", "", false, "AGENT",
-         "int x = 1;\n"},
-        {"table", MsgKind::Assistant, "[8] table [2.2s]", table, "", false, "AGENT", table},
+         "int x = 1;\n", true},
+        {"table", MsgKind::Assistant, "[8] table [2.2s]", table, "", false, "AGENT", table, true},
         {"stored thinking", MsgKind::Assistant, "[9] think [2.4s]", "the answer", "the reasoning",
          false, "Thinking", "the reasoning"},
         // The live answer: its body and its reasoning are two blocks of one group.
-        {"streamed body", MsgKind::Assistant, "", "stream-prose", "", true, "AGENT",
-         "stream-prose"},
+        {"streamed body", MsgKind::Assistant, "", "stream-prose", "", true, "AGENT", "stream-prose",
+         true},
         {"streamed thinking", MsgKind::Assistant, "", "stream-prose", "stream-reasoning", true,
          "Thinking", "stream-reasoning"},
     };
@@ -1591,8 +1617,15 @@ void checkCopyFromEveryBlock() {
         clickCell(keyboard, 5, row, /*button=*/0);
         grid = keyboard.draw(true);
         check(keyboard.state.ui.thread.focus.valid(), what + ": a click focuses the block");
-        check(grid.rowText(row).find("Copy") != std::string::npos,
-              what + ": the focused block shows its Copy control");
+        // An owner row is body-less (task 7): the copy affordance is the menu
+        // and `y` (FR-16), never a chip - the segment's chip check is the
+        // body-less rule the row's shape keeps.
+        if (c.owner)
+            check(grid.rowText(row).find("Copy") == std::string::npos,
+                  what + ": the focused owner row carries no Copy chip (FR-16)");
+        else
+            check(grid.rowText(row).find("Copy") != std::string::npos,
+                  what + ": the focused block shows its Copy control");
         g_clipboard.clear();
         g_clipboardSet = false;
         keyboard.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });

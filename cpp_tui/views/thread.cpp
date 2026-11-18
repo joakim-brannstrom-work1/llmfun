@@ -108,9 +108,11 @@ constexpr const char* kLoadEarlierLabel = "Load earlier";
 /// `Copy` item (task 44) and the `y` key all land here, so a block has exactly one copy
 /// path - and the item that asked never chooses the text.
 ///
-/// What reaches the clipboard is the wrapper's decision, not this file's: a `Code`
-/// block copies its *code* (`ui::copyText`), everything else its body verbatim - and
-/// the wrapper is the only place allowed to know what a fence is.
+// What reaches the clipboard is the wrapper's decision, not this file's: a `Code`
+// block copies its *code* (`ui::copyText`), everything else its body verbatim - and
+// the wrapper is the only place allowed to know what a fence is. A batch owner
+// copies its batch's content (FR-16), and the fence answer is the content's own
+// kind - the adapter's, never re-derived here (B1).
 ///
 /// Answers whether the clipboard was written: a row with no body copies nothing, which is what
 /// keeps a body-less block (the `WORK` header, a stream row before its first token) from
@@ -120,7 +122,7 @@ bool copyBlock(store::ThreadStoreAdapter& thread, std::size_t groupIndex, std::s
     const std::string body = thread.blockText(groupIndex, block);
     if (body.empty())
         return false;
-    const std::string text = ui::copyText(body, desc.kind == model::BlockKind::Code);
+    const std::string text = ui::copyText(body, thread.blockCopyIsCode(groupIndex, block));
     if (text.empty())
         return false;
     ImGui::SetClipboardText(text.c_str());
@@ -445,7 +447,7 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
     bool blockMenuOpen = false;
     for (const std::size_t index : drawn) {
         const store::GroupView group = thread.groupAt(index);
-        const bool groupStyleIsMinimal = thread.groupStyleIsMinimal(group.id);
+        const bool styleMinimal = thread.groupStyleIsMinimal(group.id);
         // The cell is what the caller reserves for the group: its width is the content
         // width and its height the adapter's own expectation. The hint is a hint - the
         // group is drawn in full even when it is taller.
@@ -567,48 +569,67 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
         // One draw for every row the turn owns - the query, the work rows, the
         // answer - so the turn's anatomy shares the one chrome/body path. `b` is
         // the row's adapter address: a work row's list index, a turn-level row's
-        // sentinel. The bool is the work list's fold answer: false stops the
-        // loop after the collapsed header the caller just drew.
+        // sentinel. The bool is the work list's continuation answer, and it is
+        // `true` everywhere now (task 11): the fold is the rows' `visible`, so
+        // no early stop and no exception list survives in the view.
         const auto drawRow = [&](const model::BlockDesc& desc, std::size_t b) -> bool {
             ui::Rect row;
             row.x = ImGui::GetCursorScreenPos().x;
             row.y = ImGui::GetCursorScreenPos().y;
             row.w = std::max(0.0f, ImGui::GetContentRegionAvail().x);
             row.cells = m.textGrid;
-            // The maximal batch's tool cards: each card hangs indented
-            // beneath the batch's thinking disclosure, sharing one left rule -
-            // the indent starts before the row is measured, so the card's own
-            // body narrows with it. Minimal mode keeps the cards at the fold's
-            // edge (they are not drawn there at all).
-            const bool card = !groupStyleIsMinimal && desc.kind == model::BlockKind::ToolStep;
+            // The batch's tool cards: each card hangs indented beneath the
+            // batch's owner row, sharing one left rule - the indent starts
+            // before the row is measured, so the card's own body narrows with
+            // it. The predicate is ownership, not the mode (task 11): a
+            // minimal fold hides the card through `visible`, so the shape
+            // needs no mode test here.
+            const bool card = desc.batchOwned && desc.kind == model::BlockKind::ToolStep;
             // C7: the batch's children - thinking, content, cards - share one
             // indent and one rail under the owner row; the owner itself stays
             // at the group's level. The minimal live-tail segment keeps the
             // turn-level indent: it draws with no owner row above it (FR-5).
-            const bool child =
-                !groupStyleIsMinimal && (card || (desc.batchOwned && !desc.ownsBatch));
+            const bool child = !styleMinimal && (card || (desc.batchOwned && !desc.ownsBatch));
             const bool focused = desc.id() == ts.focus;
-            // The fold (design §7.5, task 10): visibility is the adapter's
-            // derived answer - a row the predicate hides returns without
-            // drawing, and the loop's caller keeps going. The view never
-            // re-derives a fold from the mode and the kind (DD-16); the
-            // turn-level rows are what the fold keeps, and the adapter says
-            // so through `visible`.
+            // The loop's whole visibility contract (design §7.3.1/§C7, task
+            // 11): nothing else in the view may decide whether a row draws -
+            // the adapter already folded the owner's openness into it (I-5).
+            // A row the predicate hides paints nothing, takes no focus, opens
+            // no menu, and the loop's caller keeps going.
             if (!desc.visible)
+                return true; // paints nothing, the loop's caller keeps going
+            // A body segment (DD-7, I-11): no header, so no measure, no
+            // InvisibleButton, no menu, no copy chip and no `expanded` read -
+            // the body is the row, and the renderer owns its height. Under its
+            // owner it takes the batch's pad2, the same indent the batch's
+            // cards draw at (C10); the minimal live tail's segment draws with
+            // no owner row above it, so it keeps the turn-level indent (FR-5,
+            // §4.6 - the shape the `child` predicate already encodes).
+            if (desc.bodySegment) {
+                if (child)
+                    ImGui::Indent(m.pad2);
+                ui::Rect body;
+                body.x = ImGui::GetCursorScreenPos().x;
+                body.y = ImGui::GetCursorScreenPos().y;
+                body.w = std::max(0.0f, ImGui::GetContentRegionAvail().x);
+                body.h = 0.0f; // the renderer measures what it draws
+                body.cells = m.textGrid;
+                thread.renderBlockBody(index, b, body);
+                if (child)
+                    ImGui::Unindent(m.pad2);
                 return true;
+            }
             if (child)
                 ImGui::Indent(m.pad2);
             // The block menu's owner: the one block the state names may submit
             // the popup, so an ImGui id that a transcript reset recycled cannot re-own a
             // menu the user opened on a different message.
-            // Minimal mode opens the turn's content rows: the query and
-            // the answer are what the fold keeps - their bodies draw under
-            // them, the way the v4 message rows always drew. The work rows keep
-            // their own expansion state behind the header.
-            const bool rowOpen =
-                desc.expanded ||
-                (groupStyleIsMinimal && group.typedTurn &&
-                 (desc.kind == model::BlockKind::User || desc.kind == model::BlockKind::Answer));
+            // The openness is the adapter's resolved answer (§7.5, task 11):
+            // the turn-level sentinels are hard-coded open on the wire side, a
+            // pin overrides, the live defaults decide the rest. The view keeps
+            // no mode special case (DD-16): the fold's exceptions are clauses
+            // of the one predicate, never branches here.
+            const bool rowOpen = desc.expanded;
             const BlockDraw draw{rowOpen, focused, desc.id() == ts.menuBlockId};
             row.h = measureBlockHeader(desc, m, draw);
             const BlockResult result = renderBlock(desc, row, m, draw);
@@ -681,20 +702,20 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
                 ImGui::Unindent(m.pad2);
             }
             // A collapsed work group hides the rows under its header: the header *is* the
-            // group, and its steps are the rows `blockCount()` reports. Minimal mode
-            // keeps drawing instead: the turn's rows (the query, the answer) stand
-            // outside the fold - drawn before and after the loop - its work rows
-            // stay behind the header, and the newest live group names its live
-            // steps in one chips line.
+            // group, and its steps are the rows `blockCount()` reports. The fold
+            // itself is those rows' `visible == false` (DD-16, task 11): the loop
+            // draws on, and each hidden row returns at the contract above - no
+            // early return, no kind list here. The turn's rows (the query, the
+            // answer) stand outside the fold, drawn before and after the loop,
+            // and the folded live group names its live steps in one chips line:
+            // its edge draws directly under the header, where no other row of
+            // the group renders (the sites' guards are task 15's).
             if (b == 0 && desc.kind == model::BlockKind::WorkGroup && !desc.expanded) {
-                if (!groupStyleIsMinimal || !group.typedTurn)
-                    return false; // the fold: the work rows after the header draw nothing
-                // The folded live group's edge (minimal): directly under the
-                // header, where no other row of the group renders. The next row
-                // starts under the live line, not on it.
-                const float used = drawLiveEdge(row.x, row.y + row.h, row.w);
-                if (used > 0.0f)
-                    ImGui::SetCursorScreenPos(ImVec2(row.x, row.y + row.h + used));
+                if (styleMinimal && group.typedTurn) {
+                    const float used = drawLiveEdge(row.x, row.y + row.h, row.w);
+                    if (used > 0.0f)
+                        ImGui::SetCursorScreenPos(ImVec2(row.x, row.y + row.h + used));
+                }
             }
             return true; // the work list draws on
         };
@@ -728,7 +749,7 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
         // fold case), so that shape skips this site. A group with no live
         // element draws nothing (the lambda answers 0).
         const bool foldedRows =
-            groupStyleIsMinimal && group.typedTurn && !rows.empty() && !rows[0].expanded;
+            styleMinimal && group.typedTurn && !rows.empty() && !rows[0].expanded;
         if (index == drawn.back() && !foldedRows) {
             const ImVec2 edge = ImGui::GetCursorScreenPos();
             (void)drawLiveEdge(edge.x, edge.y, std::max(0.0f, ImGui::GetContentRegionAvail().x));

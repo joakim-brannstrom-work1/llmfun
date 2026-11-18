@@ -511,8 +511,12 @@ void ThreadStoreAdapter::syncTyped() const {
             // calls-only batch keeps it empty - its owner copies nothing.
             BatchEntry& batch = entry.batches[slot];
             for (const BlockEntry& child : kept)
-                if (child.kind == model::BlockKind::Assistant && batch.contentBody.empty())
+                if (child.kind == model::BlockKind::Assistant && batch.contentBody.empty()) {
                     batch.contentBody = child.typedBody;
+                    // The copy's fence question rides with the body (S-13): the
+                    // owner's copy answers it from the child the body came from.
+                    batch.contentIsCode = child.code;
+                }
             if (!kept.empty()) { // I-2: the owner exists iff a child survived
                 BlockEntry owner;
                 owner.kind = model::BlockKind::Assistant; // the AGENT row (blockAt labels it)
@@ -546,9 +550,25 @@ void ThreadStoreAdapter::syncTyped() const {
             }
         }
 #endif
-        // A rough estimate only: one line per row the group draws. The hint is
-        // replaced by the drawn height after the first draw, exactly like v4's.
-        entry.view.lineCountEstimate = std::max(1, static_cast<int>(entry.blocks.size()));
+        // A rough estimate only (FR-19, task 11): the rows a *folded* turn
+        // draws - the header, the plain rows and the owner rows. A batch child
+        // (thinking, content, a card) draws behind its owner's fold, so it
+        // weighs nothing here. Mode- and pin-independent on purpose: the hint
+        // is computed in syncTyped(), while visibility resolves per frame, and
+        // test_streaming.cpp pins that the hint does not move with the fold.
+        // It is replaced by the drawn height after the first draw, exactly
+        // like v4's.
+        int plainRows = 0;
+        int ownerRows = 0;
+        for (const BlockEntry& row : entry.blocks) {
+            if (row.group)
+                continue; // the header: the +1 below counts it once
+            if (row.ownsBatch)
+                ++ownerRows;
+            else if (!row.batchOwned)
+                ++plainRows;
+        }
+        entry.view.lineCountEstimate = std::max(1, 1 + plainRows + ownerRows);
         entry.view.hasAnswer = entry.hasAnswer; // the copy-row stamp reads this
         groups.push_back(std::move(entry));
     }
@@ -980,6 +1000,19 @@ std::string ThreadStoreAdapter::blockText(size_t k, std::size_t b) const {
         return groups_[k].batches[block->batch].contentBody;
     }
     return block->typedBody;
+}
+
+bool ThreadStoreAdapter::blockCopyIsCode(size_t k, std::size_t b) const {
+    const BlockEntry* block = blockEntryAt(k, b);
+    if (block == nullptr || !bound())
+        return false;
+    // The owner copies its batch's content (FR-16): the fence answer is the
+    // content child's own `code` fact, captured beside the body it came from.
+    if (block->ownsBatch) {
+        assert(block->batch != store::kNoBatch && "an owner row always carries its batch slot");
+        return groups_[k].batches[block->batch].contentIsCode;
+    }
+    return block->code;
 }
 
 void ThreadStoreAdapter::renderBlockBody(size_t k, std::size_t b, const ui::Rect& cell) {
