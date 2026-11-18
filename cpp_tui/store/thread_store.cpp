@@ -436,6 +436,7 @@ void ThreadStoreAdapter::syncTyped() const {
             batch.hasReasoning = batch.hasReasoning || row.kind == model::BlockKind::Thinking;
             batch.hasContent = batch.hasContent || row.kind == model::BlockKind::Assistant;
             if (row.kind == model::BlockKind::ToolStep) {
+                batch.hasAnyCall = true;
                 batchCalls[slot].push_back(row.typedTitle);
                 if (row.state == model::BlockState::Failed) {
                     batch.failedCalls += 1;
@@ -524,6 +525,7 @@ void ThreadStoreAdapter::syncTyped() const {
                 owner.typedBlockId = "batch#" + batch.batchId;
                 owner.typedBatchId = batch.batchId;
                 owner.batch = slot;
+                owner.batchOwned = true;
                 owner.ownsBatch = true;
                 // The state stays None (I-8): no wire status is written by the
                 // C++ side - the FAIL word and the chips are the batch's own
@@ -661,32 +663,30 @@ size_t ThreadStoreAdapter::takeExpandedGroup() {
 }
 bool ThreadStoreAdapter::minimalMode() const { return !bound() || chat_->threadMinimalMode; }
 
-bool ThreadStoreAdapter::groupMinimal(size_t groupId) const {
+bool ThreadStoreAdapter::groupOpen(size_t groupId) const {
     if (!bound())
-        return true;
-    // The override first (design §6, task 8): a pinned group draws against the
-    // mode - a maximal batch the user folded stays folded, a minimal batch the
-    // user opened draws maximal-style - and the unpinned groups follow the mode.
-    const auto pinned = chat_->groupOverrides.find(static_cast<long long>(groupId));
-    if (pinned != chat_->groupOverrides.end())
-        return pinned->second == store::GroupOverride::ForceClosed;
-    return chat_->threadMinimalMode;
+        return false;
+    // The absolute pin first (DD-6): a click stored open/closed and that is
+    // the answer, whatever the mode and the turn's liveness say. Then the
+    // liveness default (design §7.5): a group draws open only while its turn
+    // is live in maximal mode - maximal at rest folds like minimal.
+    const auto pinned = chat_->groupPins.find(static_cast<std::int64_t>(groupId));
+    if (pinned != chat_->groupPins.end())
+        return pinned->second;
+    const Entry* entry = entryFor(groupId);
+    return entry != nullptr && !chat_->threadMinimalMode && entry->turnLive;
 }
 
-bool ThreadStoreAdapter::expanded(size_t id) const {
-    const Entry* entry = entryFor(id);
-    if (entry == nullptr || !bound())
-        return false;
-    // The per-group override first (task 8): the same answer the group's own
-    // header row draws, so the endGroup latch cannot miss a toggle the draw
-    // performed.
-    const auto pinned = chat_->groupOverrides.find(static_cast<long long>(id));
-    if (pinned != chat_->groupOverrides.end())
-        return pinned->second == GroupOverride::ForceOpen;
-    // The typed live turn is a work group like any other - its fold is the
-    // minimal mode's chips line, never a body.
-    return chat_->openWorkGroups.count(id) != 0;
+bool ThreadStoreAdapter::groupStyleIsMinimal(size_t groupId) const {
+    if (!bound())
+        return true;
+    // The SHAPE, not the fold (DD-14): the mode is minimal AND the group is
+    // not drawn open. A pinned-open minimal group and a live maximal group
+    // both draw maximal-style; a folded maximal group never draws the chips.
+    return chat_->threadMinimalMode && !groupOpen(groupId);
 }
+
+bool ThreadStoreAdapter::expanded(size_t id) const { return groupOpen(id); }
 
 void ThreadStoreAdapter::setExpanded(size_t id, bool open) {
     sync();
@@ -695,23 +695,10 @@ void ThreadStoreAdapter::setExpanded(size_t id, bool open) {
     const auto found = indexById_.find(id);
     if (found == indexById_.end())
         return;
-    // The group-level seam writes the same state the block seam writes (task
-    // 8): the per-group override in maximal - a fold a maximal batch cannot
-    // express through the mode, which draws a batch open on its own (F5) - and
-    // `openWorkGroups` in minimal (task 6's mechanism, unchanged).
-    if (chat_->threadMinimalMode) {
-        chat_->groupOverrides.erase(static_cast<long long>(id));
-        if (open)
-            chat_->openWorkGroups.insert(id);
-        else
-            chat_->openWorkGroups.erase(id);
-        return;
-    }
-    const long long key = static_cast<long long>(id);
-    if (open)
-        chat_->groupOverrides.erase(key);
-    else
-        chat_->groupOverrides[key] = GroupOverride::ForceClosed;
+    // The writer is absolute (DD-6, I-13): no "drop the entry when it equals
+    // the default" - that is the relative encoding rev 1 got wrong. The pin
+    // survives a mode flip and a liveness change and answers what was stored.
+    chat_->groupPins[static_cast<std::int64_t>(id)] = open;
 }
 
 float ThreadStoreAdapter::measureHint(size_t id) const {
@@ -793,7 +780,12 @@ model::BlockDesc ThreadStoreAdapter::blockAt(size_t k, std::size_t b) const {
     out.timingS = block->timingS;
     out.steps = block->steps;
     out.expandable = block->expandable;
-    out.expanded = blockExpanded(k, b);
+    // The derived predicate (design §7.5, task 10): visibility is computed
+    // HERE, before the view sees the row (B1) - the view never re-derives it.
+    out.visible = b == kQueryRow || b == kAnswerRow
+                      ? true // the turn-level rows draw in both modes (§4.6)
+                      : resolveVisible(entry, *block);
+    out.expanded = b == kQueryRow || b == kAnswerRow ? true : resolveOpen(entry, *block);
     out.batchOwned = block->batchOwned;
     // The batch's content child is a body segment (DD-7): the view draws its
     // body, never a header of its own (task 12). Detected on the entry's kind,
@@ -858,32 +850,100 @@ bool ThreadStoreAdapter::blockExpanded(size_t k, std::size_t b) const {
     const BlockEntry* block = blockEntryAt(k, b);
     if (block == nullptr || !bound())
         return false;
-    const Entry& entry = groups_[k];
-    if (block->group) {
-        // The per-group override first (design §6, task 8): a pinned group
-        // draws against the mode - a maximal batch the user folded stays
-        // folded, a minimal batch the user opened (its pin lives in
-        // `openWorkGroups`, task 6) draws maximal-style.
-        const auto pinned = chat_->groupOverrides.find(static_cast<long long>(entry.view.id));
-        if (pinned != chat_->groupOverrides.end())
-            return pinned->second == GroupOverride::ForceOpen;
-        return minimalMode() ? chat_->openWorkGroups.count(entry.view.id) != 0
-                             : true; // F5: a maximal batch draws open, always
-    }
-    // An open group renders maximal-style (design §6): every row it owns
-    // draws open, and the per-row set only matters while the group is folded.
-    if (chat_->openWorkGroups.count(entry.view.id) != 0)
+    // The turn-level sentinel rows are never expandable state (§7.5:
+    // queryOpen/answerOpen = true), the same answer blockAt() hard-codes into
+    // desc.expanded - the two seams must agree.
+    if (b == kQueryRow || b == kAnswerRow)
         return true;
-    const auto it = typedRowOpen_.find(static_cast<std::int64_t>(entry.view.id));
-    const bool pinned = it != typedRowOpen_.end() && it->second.count(block->typedBlockId) != 0;
-    // The row's default (F5): maximal mode draws every content row open -
-    // the query, the answer, the tool cards - with only the batch's thinking
-    // disclosure collapsed behind its meta. Minimal mode folds the work rows
-    // behind the group header instead. The set pins AGAINST the default: a
-    // click stores the opposite of what the row would draw on its own.
-    const bool defaultOpen =
-        !groupMinimal(entry.view.id) && block->kind != model::BlockKind::Thinking;
-    return pinned ? !defaultOpen : defaultOpen;
+    return resolveOpen(groups_[k], *block);
+}
+
+bool ThreadStoreAdapter::batchLiveFor(const Entry& entry, const BlockEntry& block) const {
+    // I-12: the turn is live and the batch is the turn's newest. "Settled"
+    // means the batch HELD a call and every call responded: a call-less batch
+    // (the streaming prose tail) is never settled - allSettled defaults true
+    // and only ToolStep rows touch it, so the literal predicate would fold a
+    // maximal live tail mid-stream, contradicting §4.5's own maximal cell
+    // ("content while the batch is the live tail: drawn inside the open
+    // owner"). A batch whose calls all responded folds with its owner (row
+    // 422): the content's lifetime in minimal is the segment clause's job,
+    // not the owner's open default. A plain row holds nothing open.
+    if (block.batch == kNoBatch)
+        return false;
+    const BatchEntry& batch = entry.batches[block.batch];
+    return entry.turnLive && batch.isNewest && (!batch.allSettled || !batch.hasAnyCall);
+}
+
+bool ThreadStoreAdapter::childLiveFor(const Entry& entry, const BlockEntry& block) const {
+    // A child's live default counts only the calls (I-12): a batch that holds
+    // no call in flight folds its children behind their own pins - the
+    // reasoning text waits for a row pin or a call in flight (§7.5, DD-6).
+    if (block.batch == kNoBatch)
+        return false;
+    const BatchEntry& batch = entry.batches[block.batch];
+    return entry.turnLive && batch.isNewest && !batch.allSettled;
+}
+
+bool ThreadStoreAdapter::resolveOpen(const Entry& entry, const BlockEntry& block) const {
+    // The header row IS the group: its body-open state is the group's own
+    // pin-or-liveness answer, the same one `groupOpen()` draws.
+    if (block.group)
+        return groupOpen(entry.view.id);
+    // A GROUP-LEVEL plain row (a notice, a vision block) is not expandable
+    // state: it draws open when the group it rides in draws open.
+    if (!block.batchOwned)
+        return groupOpen(entry.view.id);
+    // The absolute row pin first (DD-6): what a click stored is the answer,
+    // whatever the batch's liveness would default to (I-13).
+    const auto turn = chat_->rowPins.find(static_cast<std::int64_t>(entry.view.id));
+    if (turn != chat_->rowPins.end()) {
+        const auto pinned = turn->second.find(block.typedBlockId);
+        if (pinned != turn->second.end())
+            return pinned->second;
+    }
+    // The live default: an owner row of the live tail draws open while the
+    // batch is unsettled or still holds the turn's content (batchLiveFor); a
+    // child row draws open only while the batch has a call in flight
+    // (childLiveFor) and folds when the batch settles (design §7.5, I-12).
+    const bool live = block.ownsBatch ? batchLiveFor(entry, block) : childLiveFor(entry, block);
+    return live;
+}
+
+bool ThreadStoreAdapter::resolveVisible(const Entry& entry, const BlockEntry& block) const {
+    const bool open = groupOpen(entry.view.id);
+    // The header draws folded or open - it IS the fold (its own visibility is
+    // not a predicate; `blockAt()` never asks).
+    if (block.group)
+        return true;
+    // ownerVisible = groupOpen (§7.5): an owner row never draws under a fold,
+    // minimal-style or maximal.
+    if (block.ownsBatch)
+        return open;
+    // plainVisible = groupOpen (§7.5): a group-level plain row (a notice, a
+    // vision block, a query batch's rider) draws with the group it rides in.
+    if (!block.batchOwned)
+        return open;
+    const bool styleMinimal = groupStyleIsMinimal(entry.view.id);
+    const BatchEntry& batch = entry.batches[block.batch];
+    // The batch's content segment is the one child the minimal fold keeps
+    // visible on its own (I-11, B1/FR-5): the newest batch of a live turn
+    // draws its prose even though the owner above it never drew. Evaluated
+    // first (B1): "the owner is not drawn" and "the segment draws" are
+    // compatible by construction.
+    if (styleMinimal && entry.turnLive && batch.isNewest &&
+        block.kind == model::BlockKind::Assistant)
+        return true;
+    // Every other child draws only under an open owner (I-5): the owner's
+    // own open state is the pin-or-liveness answer `resolveOpen()` gives
+    // the owner row's descriptor.
+    const auto turn = chat_->rowPins.find(static_cast<std::int64_t>(entry.view.id));
+    bool ownerOpen = batchLiveFor(entry, block);
+    if (turn != chat_->rowPins.end()) {
+        const auto pinnedOwner = turn->second.find("batch#" + batch.batchId);
+        if (pinnedOwner != turn->second.end())
+            ownerOpen = pinnedOwner->second;
+    }
+    return open && ownerOpen;
 }
 
 bool ThreadStoreAdapter::setBlockExpanded(size_t k, std::size_t b, bool open) {
@@ -892,38 +952,17 @@ bool ThreadStoreAdapter::setBlockExpanded(size_t k, std::size_t b, bool open) {
         return false;
     const Entry& entry = groups_[k];
     if (block->group) {
-        // The per-group override (design §6, task 8): the mode's own default
-        // needs no entry - maximal draws a batch open on its own (F5) and
-        // minimal keeps its open groups in `openWorkGroups` (task 6's
-        // mechanism, unchanged) - so the map holds only the pin a click
-        // cannot express through the mode: a maximal batch the user folded.
-        // A click back to the mode's default removes the entry, so the map
-        // never grows a stale row.
-        if (chat_->threadMinimalMode) {
-            chat_->groupOverrides.erase(static_cast<long long>(entry.view.id));
-            if (open)
-                chat_->openWorkGroups.insert(entry.view.id);
-            else
-                chat_->openWorkGroups.erase(entry.view.id);
-        } else {
-            const long long key = static_cast<long long>(entry.view.id);
-            if (open)
-                chat_->groupOverrides.erase(key);
-            else
-                chat_->groupOverrides[key] = GroupOverride::ForceClosed;
-        }
+        // The group's pin: absolute, always stored (DD-6, I-13) - no
+        // "drop the entry when it equals the default", that is the relative
+        // encoding rev 1 got wrong. The pin survives a mode flip and the
+        // turn's liveness change and answers what was stored.
+        chat_->groupPins[static_cast<std::int64_t>(entry.view.id)] = open;
     } else {
-        // The per-row pin (F5): the row's own default - maximal draws every
-        // content row open and the thinking disclosure collapsed - is what a
-        // click stores against, so a set that agrees with the default is
-        // erased rather than carried.
-        const bool defaultOpen =
-            !groupMinimal(entry.view.id) && block->kind != model::BlockKind::Thinking;
-        std::set<std::string>& target = typedRowOpen_[entry.view.id];
-        if (open != defaultOpen)
-            target.insert(block->typedBlockId);
-        else
-            target.erase(block->typedBlockId);
+        // The row's pin: absolute, always stored, keyed by the wire block id
+        // under the turn it belongs to (DD-6, I-13). The owner rows are
+        // pinned under their `batch#<batchId>` key, the same id the
+        // visibility predicate reads for the owner's open state.
+        chat_->rowPins[static_cast<std::int64_t>(entry.view.id)][block->typedBlockId] = open;
     }
     expandedGroup_ = entry.view.id;
     return open;
@@ -1026,19 +1065,29 @@ bool ThreadStoreAdapter::beginGroup(size_t k, const ui::Rect& cell) {
     // a group draw, so a change the caller did not report is still latched (task 25's
     // anchor reads it).
     groupExpandedBefore_ = expanded(entry.view.id);
-    // A row inside an agent group toggles `typedRowOpen_` per block, which
-    // `expanded(groupId)` cannot see (it reads the group's own bit). Any toggle of the
-    // shared sets changes the membership of exactly one of them by one, so their
-    // combined size is the O(1) signal that covers them. (A thinking disclosure lives
-    // in `UiState`, so that one is the caller's own report.)
+    // A row inside an agent group toggles its own pin in `ChatTab::rowPins`,
+    // which `expanded(groupId)` cannot see (it reads the group's own pin). Any
+    // pin-map mutation shows in `truePins + totalPins`: a value flip of an
+    // EXISTING pin (a second click on the same row) changes no membership, so
+    // the true count catches it, and a newly stored or erased pin changes the
+    // membership count. Either mutation alone would miss the other. (A
+    // thinking disclosure lives in `UiState`, so that one is the caller's own
+    // report.)
     //
-    // This is only a toggle signal while the draw does not write the sets itself: the
-    // one-shot defaults are seeded in `sync()` at build time, so the writes between
-    // these two samples are the user's own activations.
+    // This is only a toggle signal while the draw does not write the maps
+    // itself: a pin is written once per click in `setBlockExpanded()`, so the
+    // writes between these two samples are the user's own activations.
     std::size_t rowOpen = 0;
-    for (const auto& [id, rows] : typedRowOpen_)
+    std::size_t rowTrue = 0;
+    for (const auto& [id, rows] : chat_->rowPins) {
         rowOpen += rows.size();
-    groupOpenBefore_ = rowOpen + chat_->openWorkGroups.size();
+        for (const auto& [row, open] : rows)
+            rowTrue += open ? 1 : 0;
+    }
+    for (const auto& [id, open] : chat_->groupPins) {
+        rowTrue += open ? 1 : 0;
+    }
+    groupOpenBefore_ = rowOpen + rowTrue + chat_->groupPins.size();
     groupTop_ = ImGui::GetCursorScreenPos().y;
     // One block scope per group, keyed by the adapter's own group id (D-GROUPID:
     // monotonic, never reused, never a frame counter) - rich_md's fragment ids are keyed
@@ -1060,10 +1109,20 @@ void ThreadStoreAdapter::endGroup(size_t k, const ui::Rect& cell) {
     // id even when the toggle happened on a row inside it: the anchor can only hold a
     // header row the view knows about, so the group's header is what stays put - the
     // row above the content the user just changed.
+    // The same combined sample beginGroup took: true pins plus membership, so
+    // a value flip of an existing pin and a newly stored or erased pin both
+    // move it.
     std::size_t rowOpen = 0;
-    for (const auto& [id, rows] : typedRowOpen_)
+    std::size_t rowTrue = 0;
+    for (const auto& [id, rows] : chat_->rowPins) {
         rowOpen += rows.size();
-    const std::size_t openAfter = rowOpen + chat_->openWorkGroups.size();
+        for (const auto& [row, open] : rows)
+            rowTrue += open ? 1 : 0;
+    }
+    for (const auto& [id, open] : chat_->groupPins) {
+        rowTrue += open ? 1 : 0;
+    }
+    const std::size_t openAfter = rowOpen + rowTrue + chat_->groupPins.size();
     if (expanded(entry.view.id) != groupExpandedBefore_ || openAfter != groupOpenBefore_)
         expandedGroup_ = entry.view.id;
 
@@ -1127,13 +1186,19 @@ void ThreadStoreAdapter::reset() {
     groupExpandedBefore_ = false;
     groupOpenBefore_ = 0;
     groupTop_ = 0.0f;
-    // The thinking disclosures are thread-scoped like the hints: a clear or a session
-    // switch replaces the thread, and a disclosure left open would be applied to the
-    // next session's block with the same identity (ids restart at 1). The table source
-    // flags (task 37) are the same kind of state - the next session's block can be
-    // the one the flag would name - so they go with them.
+    // The pins are keyed by the persisted turn id (DD-6), and a reset comes
+    // from a clear or a session switch: the thread's turns are gone, so a pin
+    // left behind would be applied to the *next* session's turn with the same
+    // id (ids restart at 1). The row pins and the group pins go with the
+    // thread. The thinking disclosure no longer exists here (task 10): the
+    // thinking row's pin is an ordinary row pin and died with the map above.
     if (bound()) {
-        thread_->thinkingOpen.clear();
+        chat_->rowPins.clear();
+        chat_->groupPins.clear();
+    }
+    // The table source flags (task 37) are the same kind of state - the next
+    // session's block can be the one the flag would name - so they go with them.
+    if (bound()) {
         thread_->tableSource.clear();
         // The block menu's owner too (task 44): the ids restart below, so a latch that
         // survived would name a block of the *next* thread.
@@ -1141,7 +1206,6 @@ void ThreadStoreAdapter::reset() {
     }
     typedRevision_.clear();
     typedFingerprints_.clear();
-    typedRowOpen_.clear();
     typedSynced_ = false;
     syncedTypedVersion_ = 0;
 }

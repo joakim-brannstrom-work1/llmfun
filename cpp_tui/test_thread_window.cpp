@@ -217,7 +217,7 @@ int main(int argc, char** argv) {
         // born folded, the answer included (the minimal mode's chips line is the
         // fold's face, never a hidden body).
         check(!thread.expanded(oldest), "adapter: a stored turn is born folded, answer and all");
-        check(state.chat.openWorkGroups.count(oldest) == 0,
+        check(state.chat.groupPins.count(static_cast<std::int64_t>(oldest)) == 0,
               "adapter: ...and the one store agrees (the fold is the turn id's)");
         check(!thread.expanded(thread.groupAt(thread.groupCount() - 1).id),
               "adapter: the newest turn is born folded too");
@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
               "adapter: the page reveals the whole thread (" + windowText(opened) + ")");
         check(!thread.expanded(oldest),
               "adapter: a paged-back turn keeps the fold it was born with");
-        check(state.chat.openWorkGroups.count(oldest) == 0,
+        check(state.chat.groupPins.count(static_cast<std::int64_t>(oldest)) == 0,
               "adapter: ...and the store was never seeded by the paging");
     }
     // The work-group rule: the newest group unfolds, the older ones do not, and the
@@ -252,7 +252,7 @@ int main(int argc, char** argv) {
         check(thread.groupCount() == 2,
               "adapter: q, work, q is 2 groups (" + std::to_string(thread.groupCount()) + ")");
         check(!thread.expanded(turn1), "adapter: a work turn is born folded");
-        check(state.chat.openWorkGroups.count(turn1) == 0,
+        check(state.chat.groupPins.count(static_cast<std::int64_t>(turn1)) == 0,
               "adapter: the group's key is its turn id (the typed store's)");
 
         // A toggle the user made survives the rebuild that follows it: that is

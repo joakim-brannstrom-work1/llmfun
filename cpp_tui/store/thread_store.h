@@ -15,8 +15,9 @@
 /// turn id - never renumbered within a session, reset only by `reset()`
 /// (clear / session switch). Expansion is one store, not two:
 /// `expanded()/setExpanded()` are the seam a restyled header uses (task 26),
-/// and they read and write the very sets the store keeps (`ChatTab::openWorkGroups`
-/// for a work group's fold, keyed by the turn id), so the block model and the
+/// and they read and write the very pins the store keeps (`ChatTab::groupPins`
+/// for a work group's fold, `ChatTab::rowPins` for a row's - absolute state
+/// keyed by the turn id, DD-6), so the block model and the
 /// store cannot disagree. A turn is born folded: there is no one-shot default
 /// expansion to seed, and `commitSeen()` is the view's once-per-frame shape
 /// (a deliberate no-op kept so a frame's render contract does not change with
@@ -75,14 +76,6 @@ namespace llmfun::tui::store {
 /// `llmfun::tui::GroupKind`: that one is the renderer's own enum and stays
 /// behind this header, so a rename of the renderer type cannot reach a view.
 enum class GroupKind { UserQuery, FinalAnswer, AssistantWork };
-
-/// One group's session-local override of the minimal/maximal mode (design §6,
-/// task 8): a click on one group's header pins THAT group against the mode -
-/// `ForceOpen` draws it maximal-style in minimal mode, `ForceClosed` folds it in
-/// maximal mode. Keyed by the group's persisted turn id (`GroupView::id`), so
-/// an upsert or a rebuild never orphans one; the entry-point layer clears the
-/// map on a session switch and a clear, and a turn's entry dies with the turn.
-enum class GroupOverride { ForceOpen, ForceClosed };
 
 /// The turn-level rows' block index: the query row and the answer row
 /// live outside the group's row list, so every per-block accessor
@@ -175,7 +168,6 @@ public:
         indexById_.clear();
         typedRevision_.clear();
         typedFingerprints_.clear();
-        typedRowOpen_.clear();
         typedSynced_ = false;
         syncedTypedVersion_ = 0;
         chat_ = nullptr;
@@ -195,17 +187,23 @@ public:
     /// frame layer's `bind()` makes it true again.
     bool bound() const { return chat_ != nullptr && thread_ != nullptr; }
 
-    /// Whether the thread draws in minimal mode (design §6): the tab's own flag
+    /// The thread's mode (design §6): the tab's own flag
     /// (`ChatTab::threadMinimalMode`, factory default minimal). Unbound, the
     /// adapter answers minimal - every default the view draws is the folded one.
     bool minimalMode() const;
 
-    /// The group's effective mode (design §6, task 8): its session-local
-    /// override first - a pinned group draws against the mode (`GroupOverride`,
-    /// `ChatTab::groupOverrides`, keyed by the persisted turn id) - then the
-    /// mode itself. Unbound, minimal (every default the view draws is the
-    /// folded one). Cheap: one map probe over the drawn window.
-    bool groupMinimal(size_t groupId) const;
+    /// Whether the group is drawn OPEN (design §4.5, §7.5): the group's
+    /// absolute pin first (`ChatTab::groupPins`, keyed by the persisted turn
+    /// id) - then the mode's liveness default, open only while the turn is
+    /// live in maximal mode. Unbound, closed (every default the view draws is
+    /// the folded one). Cheap: one map probe over the drawn window.
+    bool groupOpen(size_t groupId) const;
+
+    /// Whether the group draws in the MINIMAL STYLE (DD-14): the mode is
+    /// minimal AND the group is not pinned or live-open. An opened minimal
+    /// group draws maximal-style; a folded maximal group never draws the
+    /// minimal chips. Unbound, true (the folded shape). Same cost.
+    bool groupStyleIsMinimal(size_t groupId) const;
 
     /// Groups in the thread, streaming message included as the last one. Cheap:
     /// the group list is rebuilt only when the store changed (append, eviction,
@@ -261,9 +259,11 @@ public:
     /// not a response batch and is never counted (DD-4).
     std::size_t batchCount(size_t k) const;
 
-    /// Whether block `b` shows its body. Group and row blocks read the very sets
-    /// the store keeps (`openWorkGroups` / `typedRowOpen_`), so a click and a read
-    /// cannot disagree (D-GROUPID); a thinking disclosure is the view's own and lives
+    /// Whether block `b` draws at all, and whether it shows its body. Both read
+    /// the derived predicate (design §4.5, §7.5): the turn's liveness, the
+    /// batch's position and the user's absolute pins (`ChatTab::rowPins` /
+    /// `groupPins`) - never a mode+kind fold. A click and a read cannot
+    /// disagree (D-GROUPID); a thinking disclosure is the view's own and lives
     /// in `UiState`.
     bool blockExpanded(size_t k, std::size_t b) const;
     /// Flip a block's disclosure; answers the state it now has (false out of range,
@@ -301,9 +301,10 @@ public:
     /// `takeExpandedGroup()`) and store the height the group used as the next hint.
     void endGroup(size_t k, const ui::Rect& cell);
 
-    /// Whether the group with this id shows its body: the fold is one flag per
-    /// group, `openWorkGroups` keyed by the group's id - the same state the
-    /// store keeps, which is why the two cannot drift.
+    /// Whether the group with this id is drawn open: the group's absolute pin
+    /// (`ChatTab::groupPins`, keyed by the turn id) first, then the liveness
+    /// default - the same state the store keeps, which is why the two cannot
+    /// drift.
     bool expanded(size_t id) const;
     void setExpanded(size_t id, bool open);
 
@@ -383,6 +384,10 @@ private:
         /// the batch's calls have all settled (Ok/Failed/Cancelled) - the
         /// still-running and pending states clear it
         bool allSettled = true;
+        /// the batch holds at least one call (a ToolStep row): a call-less
+        /// batch is never "settled" - its streaming prose would otherwise be
+        /// vacuously folded (the design-pseudocode bug I2 recorded)
+        bool hasAnyCall = false;
         int failedCalls = 0;
         /// the batch's chips line (FR-23): composed once per rebuild by
         /// `chipsText()` over the batch's tool names, ready to draw
@@ -485,7 +490,21 @@ private:
     mutable std::map<std::int64_t, std::uint64_t> typedRevision_;
     /// The per-turn block fingerprint the revision compares (last rebuild's).
     mutable std::map<std::int64_t, std::uint64_t> typedFingerprints_;
-    mutable std::map<std::int64_t, std::set<std::string>> typedRowOpen_;
+
+    /// The derived predicate (design §7.5): "does this row draw" and "is its
+    /// body open", both from the turn's liveness, the batch's position and the
+    /// user's absolute pins. `blockAt()` fills `visible`/`expanded` from them;
+    /// `blockExpanded()` is the open half. No mode+kind fold survives.
+    bool resolveVisible(const Entry& entry, const BlockEntry& block) const;
+    bool resolveOpen(const Entry& entry, const BlockEntry& block) const;
+    /// The batch's live flag (I-12 + FR-21's content clause): the turn is live,
+    /// the batch is the turn's newest and it is unsettled or still holds the
+    /// turn's content. The OWNER's open default. False for a plain row.
+    bool batchLiveFor(const Entry& entry, const BlockEntry& block) const;
+    /// A child row's live default (I-12): the turn is live, the batch is the
+    /// turn's newest and a call in it is still in flight - a batch with no call
+    /// in flight folds its children behind their own pins.
+    bool childLiveFor(const Entry& entry, const BlockEntry& block) const;
 
     /// The typed-backed rebuild (design §4: group id = the persisted turnId).
     void syncTyped() const;

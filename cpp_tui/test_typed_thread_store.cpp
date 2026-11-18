@@ -354,22 +354,24 @@ int main(int argc, char** argv) {
                   thread.blockAt(0, 3).label == "SYSTEM",
               "typed: an unknown wire kind draws as a system notice");
 
-        // Expansion: the header shares the v4 work-group set, keyed by the
-        // turnId; a row's disclosure lives in the adapter's own set. Nothing is
-        // seeded - task 2's groups are born collapsed, and while the group is
-        // folded a row's bit is its own.
-        check(!thread.expanded(42), "typed: a group is born collapsed (task 2 seeds no defaults)");
+        // Expansion: the header's fold and a row's disclosure are the
+        // adapter's derived predicate now (task 10, design §7.5) - both read
+        // the user's absolute pins. Nothing is seeded - the groups are born
+        // on the mode's liveness default, and a Done turn's default is folded.
+        check(!thread.expanded(42),
+              "typed: a group is born collapsed (a Done turn holds nothing open)");
         check(!thread.blockExpanded(0, 2),
               "typed: a tool row is born collapsed (the group is folded)");
+        check(!thread.blockAt(0, 2).visible,
+              "typed: the folded group's rows are invisible (the adapter owns visibility, B1)");
         check(thread.setBlockExpanded(0, 2, true), "typed: opening a tool row reports open");
-        check(thread.blockExpanded(0, 2), "typed: the row's disclosure took");
+        check(thread.blockExpanded(0, 2), "typed: the row's pin took");
         thread.setBlockExpanded(0, 2, false);
-        check(!thread.blockExpanded(0, 2), "typed: closing it clears the bit");
+        check(!thread.blockExpanded(0, 2), "typed: closing it stores closed");
 
-        // A second adapter bound to the same state answers the same thing where
-        // the state is shared: the group header's bit lives in openWorkGroups,
-        // which both adapters read through, while a row's disclosure lives in
-        // the adapter's own set - the row seam is per-adapter.
+        // A second adapter bound to the same state answers the same thing:
+        // every pin lives in the shared ChatTab maps (DD-6), keyed by the
+        // persisted turn id - no per-adapter expansion state survives.
         tui::store::ThreadStoreAdapter other(state);
         other.bind(state);
         check(other.groupCount() == 1 && other.groupAt(0).id == 42,
@@ -377,24 +379,28 @@ int main(int argc, char** argv) {
         check(other.blockAt(0, 2).label == "TOOL" && other.blockAt(0, 2).summary == "grep",
               "typed: ...and the same block view");
         check(other.expanded(42) == thread.expanded(42) && !other.expanded(42),
-              "typed: the shared group bit answers through both adapters");
-        check(!other.blockExpanded(0, 2), "typed: a row's disclosure stays per-adapter");
+              "typed: the shared group pin answers through both adapters");
+        check(other.setBlockExpanded(0, 2, true) && thread.blockExpanded(0, 2),
+              "typed: a row's pin is shared state, written through either adapter");
 
-        // Opening the group is task 6's minimal rule: every row it owns draws
-        // open, and the shared set makes that true through both adapters.
+        // Opening the group pins it open (DD-6): the header draws open - and a
+        // settled batch inside a re-opened group shows its owner folded (§7.5's
+        // ownerOpen = pin ?? batchLive, a Done turn's batchLive is false).
         thread.setExpanded(42, true);
-        check(thread.expanded(42) && other.expanded(42), "typed: setExpanded opens the header");
-        check(state.chat.openWorkGroups.count(42) == 1,
-              "typed: the header's bit lives in the shared work-group set, keyed by the turnId");
-        check(thread.blockExpanded(0, 2) && other.blockExpanded(0, 2),
-              "typed: an open group draws the rows it owns open");
+        check(thread.expanded(42) && other.expanded(42), "typed: setExpanded pins the header open");
+        check(state.chat.groupPins.count(42) == 1 && state.chat.groupPins.at(42),
+              "typed: the group pin lives in the shared map, keyed by the turnId");
+        check(thread.blockAt(0, 0).visible && thread.blockExpanded(0, 0),
+              "typed: the pinned group's owner row draws, folded (a settled batch)");
+        check(!thread.blockAt(0, 2).visible,
+              "typed: the folded owner keeps its children hidden (I-5)");
 
-        // The header row toggles through the SAME set `setExpanded()` uses, so
+        // The header row toggles through the SAME map `setExpanded()` uses, so
         // the two seams agree on the group header by construction: close it
         // through the row seam and the group seam reads closed, then reopen.
         thread.setBlockExpanded(0, 0, false);
         check(!thread.expanded(42),
-              "typed: the row seam's header toggle lands in the group seam's set");
+              "typed: the row seam's header toggle lands in the group seam's map");
         check(thread.setBlockExpanded(0, 0, true),
               "typed: reopening the header through the row seam reports open");
         check(thread.blockExpanded(0, 0) && thread.expanded(42),
@@ -446,110 +452,175 @@ int main(int argc, char** argv) {
               "typed legacy: a meta-less first prose is still the query row");
     }
 
-    // --- Task 8: the per-group override and the maximal-mode fold ---------------
+    // --- Task 10: the mode matrix and the absolute pins (design §7.5) ----------
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
         thread.bind(state);
-        state.chat.typedTurns.turnUpsert(turn(42, 1, 3));
-        state.chat.typedTurns.blockUpsert(block(42, "q", 0, 0, "", "what is v5?"));
-        state.chat.typedTurns.blockUpsert(block(42, "call-1", 2, 3, "grep", "call body", "", 1500));
+        state.chat.typedTurns.turnUpsert(turn(42, 1, 3)); // Done: never live
+        state.chat.typedTurns.blockUpsert(
+            block(42, "q", 0, 0, "", "what is v5?")); // the query row (batchId "")
+        state.chat.typedTurns.blockUpsert(block(42, "th", 1, 1, "", "hmm", "b0"));
+        state.chat.typedTurns.blockUpsert(block(42, "content#0", 0, 0, "", "working on it", "b0"));
+        state.chat.typedTurns.blockUpsert(
+            block(42, "call-1", 2, 2, "grep", "call body", "b0", 1500)); // in flight
+        // The layout: the header, the batch's owner row, then the children in
+        // DD-5's order (reasoning, content, calls), then the plain notice. The
+        // answer projects as the turn-level row outside the group.
+        state.chat.typedTurns.blockUpsert(block(42, "ans", 3, 1, "", "done"));
+        state.chat.typedTurns.blockUpsert(block(42, "note", 4, 1, "", "heads up"));
+        check(thread.blockAt(0, 0).kind == tui::model::BlockKind::WorkGroup &&
+                  thread.blockAt(0, 1).label == "AGENT" && thread.blockAt(0, 1).ownsBatch &&
+                  thread.blockAt(0, 2).label == "Thinking" &&
+                  thread.blockAt(0, 3).label == "AGENT" && thread.blockAt(0, 4).label == "TOOL" &&
+                  thread.blockAt(0, 5).label == "SYSTEM" &&
+                  thread.blockAt(0, tui::store::kQueryRow).label == "YOU" &&
+                  thread.blockAt(0, tui::store::kAnswerRow).label == "ANSWER",
+              "task 10: the fixture projects as header, owner, children, notice, query, answer");
 
-        // Maximal mode (the sheet flips the pref, the frame mirrors it here).
+        // MINIMAL, settled (the factory cell): born folded, minimal-style; the
+        // query and the answer draw beside the folded header, nothing else does.
+        check(state.chat.threadMinimalMode && !thread.groupOpen(42) &&
+                  thread.groupStyleIsMinimal(42),
+              "task 10: minimal + settled folds the group, minimal-style");
+        check(thread.blockAt(0, 0).visible && !thread.blockAt(0, 0).expanded,
+              "task 10: ...the header draws folded");
+        check(!thread.blockAt(0, 1).visible && !thread.blockAt(0, 2).visible &&
+                  !thread.blockAt(0, 3).visible && !thread.blockAt(0, 4).visible &&
+                  !thread.blockAt(0, 5).visible,
+              "task 10: ...the owner, the children and the notice draw nothing (I-5)");
+        check(thread.blockAt(0, tui::store::kQueryRow).visible &&
+                  thread.blockAt(0, tui::store::kAnswerRow).visible,
+              "task 10: ...the query and the answer draw in both modes (§4.6)");
+        check(thread.blockAt(0, tui::store::kQueryRow).expanded &&
+                  thread.blockAt(0, tui::store::kAnswerRow).expanded,
+              "task 10: ...and the turn-level rows are never folded state");
+
+        // MAXIMAL, settled: still folded (a settled group folds in both modes)
+        // but the SHAPE is maximal - never the minimal chips (DD-14).
         state.chat.threadMinimalMode = false;
-        check(!thread.groupMinimal(42), "task 8: the unpinned group follows the mode (maximal)");
-        check(thread.blockExpanded(0, 0) && thread.blockExpanded(0, 1),
-              "task 8: a maximal batch draws open on its own (F5)");
+        check(!thread.groupOpen(42) && !thread.groupStyleIsMinimal(42),
+              "task 10: maximal + settled folds the group, maximal-style");
+        check(!thread.blockAt(0, 1).visible, "task 10: ...the owner still draws nothing");
 
-        // The fold is the pin maximal cannot express through the mode: a
-        // click pins the group ForceClosed, keyed by the persisted turn id.
-        check(!thread.setBlockExpanded(0, 0, false),
-              "task 8: folding the header in maximal reports closed");
-        check(!thread.blockExpanded(0, 0) && !thread.expanded(42), "task 8: the fold took");
-        check(thread.groupMinimal(42),
-              "task 8: the pinned group draws the task 6 shape (override first, mode second)");
-        check(state.chat.groupOverrides.count(42) == 1 &&
-                  state.chat.groupOverrides.at(42) == tui::store::GroupOverride::ForceClosed,
-              "task 8: the pin lives in the session-local map, keyed by the turnId");
-        check(state.chat.openWorkGroups.count(42) == 0,
-              "task 8: the maximal fold never touches the minimal set");
+        // MAXIMAL, live: the one cell whose DEFAULT is open - the liveness
+        // default (I-12), not a pin: the map stays empty.
+        state.chat.typedTurns.turnUpsert(turn(42, 0, 3)); // Running
+        check(thread.groupOpen(42) && !thread.groupStyleIsMinimal(42) &&
+                  state.chat.groupPins.empty(),
+              "task 10: maximal + live opens the group on its own, no pin stored");
+        check(thread.blockAt(0, 1).visible && thread.blockAt(0, 1).expanded,
+              "task 10: ...the live batch's owner draws open");
+        check(thread.blockAt(0, 2).visible && thread.blockAt(0, 2).expanded &&
+                  thread.blockAt(0, 3).visible && thread.blockAt(0, 3).expanded &&
+                  thread.blockAt(0, 4).visible && thread.blockAt(0, 4).expanded,
+              "task 10: ...the in-flight children draw open with it");
+        check(thread.blockAt(0, 5).visible,
+              "task 10: ...and the notice draws with the open group (plainVisible = groupOpen)");
 
-        // A click back to the mode's own default removes the pin - the map
-        // never grows a stale row.
-        check(thread.setBlockExpanded(0, 0, true),
-              "task 8: reopening the folded header in maximal reports open");
-        check(thread.blockExpanded(0, 0) && state.chat.groupOverrides.count(42) == 0,
-              "task 8: the pin is gone - maximal draws open on its own");
-
-        // The pin survives a mode flip within the session (override first).
-        state.chat.groupOverrides[42] = tui::store::GroupOverride::ForceClosed;
+        // MINIMAL, live: folded and minimal-style, but the streamed content
+        // segment draws on its own (I-11, B1) - never the owner or the cards.
         state.chat.threadMinimalMode = true;
-        check(!thread.blockExpanded(0, 0) && thread.groupMinimal(42),
-              "task 8: a ForceClosed pin holds the fold across the flip to minimal");
+        check(!thread.groupOpen(42) && thread.groupStyleIsMinimal(42),
+              "task 10: minimal + live keeps the group folded, minimal-style");
+        check(!thread.blockAt(0, 1).visible && !thread.blockAt(0, 2).visible &&
+                  !thread.blockAt(0, 4).visible,
+              "task 10: ...the owner, the reasoning and the call draw nothing");
+        check(thread.blockAt(0, 3).visible,
+              "task 10: ...the live content segment draws with no owner row (I-11)");
+
+        // The leaked Running call: a Done turn holds nothing open even with a
+        // call still in flight - turnLive gates every liveness default.
+        state.chat.typedTurns.turnUpsert(turn(42, 1, 3)); // Done again
         state.chat.threadMinimalMode = false;
-        check(!thread.blockExpanded(0, 0) && thread.groupMinimal(42),
-              "task 8: ...and in maximal, where the pin is the only fold");
+        check(!thread.groupOpen(42) && !thread.blockAt(0, 1).expanded &&
+                  !thread.blockAt(0, 4).expanded,
+              "task 10: a leaked Running call in a Done turn holds nothing open");
 
-        // The ForceOpen consult (the enum's other word): a group pinned
-        // ForceOpen draws maximal-style even in minimal mode.
+        // I-13, the row pin: a click stored closed stays closed across the
+        // mode flip AND the liveness change, then a click stored open stays
+        // open where the liveness default is fold. Absolute, always stored.
+        state.chat.typedTurns.turnUpsert(turn(42, 0, 3)); // live again
+        check(!thread.setBlockExpanded(0, 4, false),
+              "task 10: closing the in-flight card in the live maximal group reports closed");
+        check(!thread.blockAt(0, 4).expanded, "task 10: the card's pin took");
+        check(state.chat.rowPins.count(42) == 1 && state.chat.rowPins.at(42).at("call-1") == false,
+              "task 10: the row pin lives in the shared map, keyed by the wire block id");
+
+        // B2, in a group the user re-opened: pin the folded minimal group
+        // open, then pin its settled owner open - the owner draws open, the
+        // content draws under it folded, the reasoning and the card closed.
         state.chat.threadMinimalMode = true;
-        state.chat.groupOverrides[42] = tui::store::GroupOverride::ForceOpen;
-        check(!thread.groupMinimal(42) && thread.blockExpanded(0, 0) && thread.expanded(42),
-              "task 8: a ForceOpen pin draws the group maximal-style in minimal mode");
-        state.chat.groupOverrides.erase(42);
-        check(thread.blockAt(0, 1).kind == tui::model::BlockKind::ToolStep,
-              "task 8: the block views are unchanged by the pin work");
-
-        // Review F1: a ForceClosed pin written in maximal must not swallow a
-        // minimal open click. The pin survives the flip by design - and a
-        // minimal open click now erases it, because a ForceClosed pin is
-        // redundant in minimal (the mode draws the fold on its own). Without
-        // the erase the click reports open yet the group stays folded for
-        // the rest of the session.
+        state.chat.typedTurns.turnUpsert(turn(42, 1, 3)); // settled
+        thread.setExpanded(42, true);                     // the group pin: open in minimal
+        check(thread.groupOpen(42) && !thread.groupStyleIsMinimal(42),
+              "task 10: the group pinned open in minimal draws maximal-style (DD-14)");
+        check(thread.blockAt(0, 1).visible && !thread.blockAt(0, 1).expanded,
+              "task 10: the group draws its owner, folded (the settled batch)");
+        check(thread.setBlockExpanded(0, 1, true), "task 10: pinning the owner open reports open");
+        check(thread.blockAt(0, 1).visible && thread.blockAt(0, 1).expanded,
+              "task 10: the owner's pin draws it open in the pinned-open group");
+        check(thread.blockAt(0, 3).visible && !thread.blockAt(0, 3).expanded,
+              "task 10: ...the settled content draws under it, folded (B2)");
+        check(thread.blockAt(0, 2).visible && !thread.blockAt(0, 2).expanded &&
+                  thread.blockAt(0, 4).visible && !thread.blockAt(0, 4).expanded,
+              "task 10: ...the reasoning and the card draw closed under the open owner (I-5)");
         state.chat.threadMinimalMode = false;
-        state.chat.groupOverrides[42] = tui::store::GroupOverride::ForceClosed;
-        state.chat.threadMinimalMode = true;
-        check(!thread.blockExpanded(0, 0),
-              "task 8 fix: the maximal fold survives the flip into minimal");
-        check(thread.setBlockExpanded(0, 0, true),
-              "task 8 fix: the minimal open click on the stale pin reports open");
-        check(thread.blockExpanded(0, 0) && state.chat.groupOverrides.empty() &&
-                  state.chat.openWorkGroups.count(42) == 1,
-              "task 8 fix: the open erased the pin - the group draws open, the map is clean");
+        check(thread.blockAt(0, 1).visible && thread.blockAt(0, 1).expanded &&
+                  thread.blockAt(0, 4).visible && !thread.blockAt(0, 4).expanded,
+              "task 10: the pins survive the flip to maximal - open owner, closed card (I-13)");
+        check(thread.setBlockExpanded(0, 4, true) && thread.blockAt(0, 4).expanded,
+              "task 10: reopening the card stores open over the closed pin");
 
-        // The group seam agrees: setExpanded() in minimal also drops the pin.
-        state.chat.openWorkGroups.erase(42);
-        state.chat.groupOverrides[42] = tui::store::GroupOverride::ForceClosed;
+        // segmentVisible: a live batch whose owner the user closed hides its
+        // content segment too - the minimal-only clause does not rescue a
+        // maximal group's closed owner.
+        state.chat.typedTurns.turnUpsert(turn(42, 0, 3)); // live
+        state.chat.threadMinimalMode = false;
+        check(!thread.setBlockExpanded(0, 1, false),
+              "task 10: closing the live owner reports closed");
+        check(!thread.blockAt(0, 1).expanded && !thread.blockAt(0, 3).visible,
+              "task 10: the closed owner hides its live segment as well (segmentVisible)");
+        check(!thread.blockAt(0, 2).visible && !thread.blockAt(0, 4).visible,
+              "task 10: ...and its reasoning and card (childVisible = ownerVisible && ownerOpen)");
+
+        // DD-14: the STYLE is the fold, not the mode. A minimal group pinned
+        // open draws maximal-style; a folded maximal group never reports the
+        // minimal style.
+        check(!thread.groupStyleIsMinimal(42),
+              "task 10: the maximal group pinned open is maximal-style");
+        state.chat.threadMinimalMode = true;
+        state.chat.typedTurns.turnUpsert(turn(42, 1, 3)); // settled: the default folds
+        state.chat.groupPins.erase(42);                   // drop the group pin: the default answers
+        check(thread.groupStyleIsMinimal(42),
+              "task 10: the settled minimal group is minimal-style");
         thread.setExpanded(42, true);
-        check(thread.expanded(42) && state.chat.groupOverrides.empty() &&
-                  state.chat.openWorkGroups.count(42) == 1,
-              "task 8 fix: the group seam's minimal open drops the pin too");
+        check(!thread.groupStyleIsMinimal(42),
+              "task 10: the minimal group pinned open draws maximal-style (DD-14)");
+        check(thread.blockAt(0, 1).visible,
+              "task 10: ...the pinned-open minimal group draws its owner");
+        thread.setExpanded(42, false);
+        check(thread.groupStyleIsMinimal(42) && !thread.blockAt(0, 1).visible,
+              "task 10: ...and pinning it closed restores the minimal fold");
 
-        // ...and the symmetric close: a close click in minimal erases a pin
-        // as well - the mode draws the fold on its own, so nothing survives.
-        state.chat.openWorkGroups.erase(42);
-        state.chat.groupOverrides[42] = tui::store::GroupOverride::ForceOpen;
-        check(!thread.setBlockExpanded(0, 0, false),
-              "task 8 fix: closing a ForceOpen-pinned group in minimal reports closed");
-        check(!thread.blockExpanded(0, 0) && thread.groupMinimal(42) &&
-                  state.chat.groupOverrides.empty(),
-              "task 8 fix: the close erased the pin - the mode owns the fold, the map is clean");
-
-        // Review F2: the row defaults read the group's EFFECTIVE mode, not
-        // the global one - a minimal group pinned open draws the task 7
-        // anatomy, its tool cards open.
-        state.chat.threadMinimalMode = true;
-        state.chat.groupOverrides[42] = tui::store::GroupOverride::ForceOpen;
-        check(thread.blockExpanded(0, 1), "task 8 fix: the pinned group's tool card defaults open "
-                                          "(the row default reads the group's effective mode)");
-        state.chat.groupOverrides.erase(42);
+        // The folded group of either mode keeps the query and the ANSWER but
+        // not the notice (the turn-level rows vs the group-level plain row).
+        check(thread.blockAt(0, tui::store::kQueryRow).visible &&
+                  thread.blockAt(0, tui::store::kAnswerRow).visible &&
+                  !thread.blockAt(0, 5).visible,
+              "task 10: the folded group keeps the query and the answer, drops the notice");
+        state.chat.threadMinimalMode = false;
+        check(thread.blockAt(0, tui::store::kQueryRow).visible &&
+                  thread.blockAt(0, tui::store::kAnswerRow).visible &&
+                  !thread.blockAt(0, 5).visible,
+              "task 10: the same in maximal - the fold, not the mode, decides");
     }
 
-    // --- Task 8: the entry points reset the pins (§7) ---------------------------
+    // --- Task 10: the entry points reset the pins (§7) ---------------------------
     {
         TuiState* state = tuiCreateState();
         check(state != nullptr && state->inner != nullptr,
-              "task 8: tuiCreateState succeeds for the override cases");
+              "task 10: tuiCreateState succeeds for the pin cases");
         auto wstr = [](const char* s) { return String{s, std::strlen(s)}; };
         TuiTurn wt{};
         wt.id = 77;
@@ -561,19 +632,25 @@ int main(int argc, char** argv) {
         wb.kind = 0;
         wb.status = 1;
         tuiSetTurns(state, &wt, 1, &wb, 1);
-        auto& pins = state->inner->chat.groupOverrides;
-        // The clear must run on a map that holds something (review F4): on a
-        // fresh state the empty map would make the assert vacuous.
-        pins[77] = ::llmfun::tui::store::GroupOverride::ForceClosed;
+        auto& groupPins = state->inner->chat.groupPins;
+        auto& rowPins = state->inner->chat.rowPins;
+        // The clear must run on maps that hold something (review F4): on a
+        // fresh state the empty maps would make the asserts vacuous.
+        groupPins[77] = false;
+        rowPins[77]["q"] = true;
         tuiSetTurns(state, &wt, 1, &wb, 1);
-        check(pins.empty(), "task 8: a session switch leaves no pin behind");
-        pins[77] = ::llmfun::tui::store::GroupOverride::ForceClosed;
-        // A compression re-emit (turnRemove + re-upsert) drops the turn's pin.
+        check(groupPins.empty() && rowPins.empty(),
+              "task 10: a session switch leaves no pin behind");
+        groupPins[77] = false;
+        rowPins[77]["q"] = true;
+        // A compression re-emit (turnRemove + re-upsert) drops the turn's pins.
         tuiTurnRemove(state, 77);
-        check(pins.count(77) == 0, "task 8: the turn's pin dies with the turn");
-        pins[77] = ::llmfun::tui::store::GroupOverride::ForceOpen;
+        check(groupPins.count(77) == 0 && rowPins.count(77) == 0,
+              "task 10: the turn's pins die with the turn");
+        groupPins[77] = true;
+        rowPins[77]["q"] = true;
         tuiThreadClear(state);
-        check(pins.empty(), "task 8: a clear empties the map");
+        check(groupPins.empty() && rowPins.empty(), "task 10: a clear empties both maps");
         tuiSetTurns(state, &wt, 1, &wb, 1);
         tuiDestroyState(state);
     }
@@ -916,9 +993,10 @@ int main(int argc, char** argv) {
                   segment.hasBody,
               "task 9: the batch's content child is a body segment - no disclosure of its own "
               "(DD-7)");
-        check(!thread.setBlockExpanded(0, 3, true) && thread.blockAt(0, 3).expanded,
-              "task 9: a body segment cannot be opened - the guard answers false and pins nothing "
-              "(I-11)");
+        check(!thread.setBlockExpanded(0, 3, true) && !thread.blockAt(0, 3).expanded &&
+                  state.chat.rowPins.empty(),
+              "task 9: a body segment cannot be opened - the guard answers false, pins nothing, "
+              "and the open state stays the derived one (I-11, §7.5 childOpen)");
         check(thread.blockText(0, 3) == "working",
               "task 9: the segment's own text is still its body");
 

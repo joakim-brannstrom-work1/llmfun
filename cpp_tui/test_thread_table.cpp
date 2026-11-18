@@ -585,10 +585,16 @@ void checkSourceToggleDeclines() {
         tui::TuiState state;
         state.iniFilename = "";
         setup(state, kTableBody, true);
-        // Minimal mode folds a work group's rows behind its header (design §6):
-        // the transcript only draws once the group is open, so this case opens it
-        // the way a click on the header would.
+        // Minimal mode folds a work group's rows behind its header, and a
+        // settled batch's owner defaults folded (matrix row 420), so the
+        // transcript only draws once the group, the owner row and the card
+        // are pinned open (DD-6: each click pins one row, absolute). The
+        // block layout under the typed store: block 0 is the group's header,
+        // block 1 is the batch's owner row (Assistant), block 2 the seeded
+        // tool card (the batch's only call).
         state.threadAdapter.setBlockExpanded(0, 0, true);
+        state.threadAdapter.setBlockExpanded(0, 1, true);
+        state.threadAdapter.setBlockExpanded(0, 2, true);
         Grid grid;
         for (int i = 0; i < 2; ++i)
             grid = frame(state);
@@ -597,13 +603,13 @@ void checkSourceToggleDeclines() {
         check(grid.countCell(kTopLeft) == 0, "a tool transcript is not bridged into a grid");
         check(grid.contains("| Tool | Calls | Time |"), "the transcript is drawn verbatim");
 
-        // The tool row is the work group's second block (block 0 is the group's header,
-        // and the seeded tool card is the only content row).
-        const model::BlockId id = blockIdAt(state, 0, 1);
+        // The tool row is the work group's third block: block 0 is the group's
+        // header, block 1 the batch's owner row, block 2 the seeded tool card.
+        const model::BlockId id = blockIdAt(state, 0, 2);
         check(id.valid() && id.kind == model::BlockKind::ToolStep,
               "premise: the focused block is the tool row");
         state.ui.thread.focus = id;
-        check(!state.threadAdapter.blockHasTable(0, 1),
+        check(!state.threadAdapter.blockHasTable(0, 2),
               "a verbatim row has no table to show (the adapter says so)");
 
         // The composer holds the keyboard at startup: `Esc` is the chain's blur step.

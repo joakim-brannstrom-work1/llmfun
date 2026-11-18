@@ -872,9 +872,10 @@ void tuiSetTurns(TuiState* state, const TuiTurn* turns, size_t turnCount, const 
         typedBlocks.push_back(std::move(nb));
     }
     state->inner->chat.typedTurns.setTurns(std::move(typedTurns), std::move(typedBlocks));
-    // A session switch re-emits the whole snapshot (task 8): no per-group
-    // override survives it - the new session's groups start on the mode.
-    state->inner->chat.groupOverrides.clear();
+    // A session switch re-emits the whole snapshot (DD-6): no pin survives it -
+    // the new session's turns start unpinned, their groups on the mode.
+    state->inner->chat.rowPins.clear();
+    state->inner->chat.groupPins.clear();
 }
 
 void tuiTurnUpsert(TuiState* state, const TuiTurn* turn) {
@@ -916,18 +917,20 @@ void tuiTurnRemove(TuiState* state, int64_t turnId) {
     if (!state || !state->inner)
         return;
     state->inner->chat.typedTurns.turnRemove(turnId);
-    // The turn's pin dies with the turn (task 8, §7): a compression re-emit
-    // (turnRemove + re-upsert) leaves no orphan override behind.
-    state->inner->chat.groupOverrides.erase(turnId);
+    // The turn's pins die with the turn (DD-6, §7): a compression re-emit
+    // (turnRemove + re-upsert) leaves no stale pin behind.
+    state->inner->chat.rowPins.erase(turnId);
+    state->inner->chat.groupPins.erase(turnId);
 }
 
 void tuiThreadClear(TuiState* state) {
     if (!state || !state->inner)
         return;
     state->inner->chat.typedTurns.threadClear();
-    // A clear is a reset (task 8): the overrides are session-local state and
+    // A clear is a reset (DD-6): the pins are session-local state and
     // the session's thread is gone.
-    state->inner->chat.groupOverrides.clear();
+    state->inner->chat.rowPins.clear();
+    state->inner->chat.groupPins.clear();
 }
 
 /* Compile-time linkage between the C enum (tui_api.h) and the internal C++

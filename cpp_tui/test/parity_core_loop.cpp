@@ -1079,11 +1079,11 @@ void stepStream(Harness& h) {
           "stream: the query and the streamed content are the turn's blocks");
     check(!h.core->readyStatus, "stream: the frame knows a run is in flight");
     if (h.text()) {
-        // Minimal mode folds the live turn's work rows too: the streamed prose
-        // is a work row, so while it streams it stays behind the header - the
-        // query row is what carries the turn on screen.
-        check(!h.last.hasText("read the tree"),
-              "stream: the streamed text folds behind the header");
+        // Minimal mode keeps the live tail's prose on screen under the folded
+        // header (matrix row 421, B1: the segment clause evaluates first) -
+        // the query row carries the turn, the segment draws under it.
+        check(h.last.hasText("read the tree"),
+              "stream: the live tail's prose draws under the folded header");
         check(h.last.hasText("WORK"), "stream: the live turn's header is drawn");
         check(h.last.hasText("Stop"),
               "stream: the composer's action is Stop while a run is active");
@@ -1753,23 +1753,23 @@ void checkBattery() {
     const std::string again = goldenText(h, 120, 36, "parity-battery");
     check(first == again, "battery 1: the same session renders byte-identical twice");
 
-    // The override seam (task 8) in maximal mode: pin the first turn's group
-    // closed - session-local state keyed by the persisted turn id - and check
-    // the pinned fold survives further frames byte-identically.
+    // The pin seam (task 10) against the liveness default: maximal at rest
+    // folds the replayed groups (§7.5), and a pin answers whatever was
+    // stored - open here - surviving further frames byte-identically.
     h.core->ui.prefs.threadMinimal = false;
     h.idle(2); // the frame's mirror applies the mode and drops the stale hints
     check(!h.core->threadAdapter.minimalMode(),
           "battery 1: the maximal mirror reached the adapter");
     check(h.core->threadAdapter.groupCount() == 2, "battery 1: one group per replayed turn");
     const std::size_t pinned = h.core->threadAdapter.groupAt(0).id;
-    check(!h.core->threadAdapter.groupMinimal(pinned),
-          "battery 1: maximal draws the work group open");
-    h.core->threadAdapter.setExpanded(pinned, false);
+    check(!h.core->threadAdapter.groupOpen(pinned) &&
+              !h.core->threadAdapter.groupStyleIsMinimal(pinned),
+          "battery 1: maximal at rest folds the work group, maximal-style (§7.5)");
+    h.core->threadAdapter.setExpanded(pinned, true);
     h.idle(2);
-    check(h.core->threadAdapter.groupMinimal(pinned),
-          "battery 1: the pin folds the group against the mode");
-    check(h.core->chat.groupOverrides.size() == 1,
-          "battery 1: the pin is one session-local override");
+    check(h.core->threadAdapter.groupOpen(pinned),
+          "battery 1: the pin opens the group against the liveness default");
+    check(h.core->chat.groupPins.size() == 1, "battery 1: the pin is one session-local entry");
     const std::string pinnedA = goldenText(h, 120, 36, "parity-battery");
     h.idle(2);
     check(pinnedA == goldenText(h, 120, 36, "parity-battery"),
@@ -1801,14 +1801,19 @@ void checkBattery() {
     for (std::size_t k = 0; k < h.core->chat.typedTurns.blockCount(live); ++k)
         anyOk = anyOk || h.core->chat.typedTurns.blockAt(live, k).status == TuiBlockStatus_Ok;
     check(!anyOk, "battery 2: no block of the stopped turn claims Ok");
-    check(h.last.hasText("partial answer so far"), "battery 2: the partial answer stays");
     // The run bracket is exception-safe: the unwinding fired ready, so the
     // composer is back to Send once the stopped run ends.
+    // The turn closed (Interrupted), so its group folds and the streamed
+    // content folds with it (matrix row 422) - the partial answer lives on
+    // in the store (the checks above), not on screen.
     tuiReadyStatus(h.handle.get(), 1);
     h.idle(2);
     check(h.core->readyStatus, "battery 2: the unwinding restored the ready flag");
-    if (h.text())
+    if (h.text()) {
         check(h.last.hasText("Send"), "battery 2: Send is restored once the run ends");
+        check(!h.last.hasText("partial answer so far"),
+              "battery 2: the partial answer folds with the closed group");
+    }
 
     // 3. Compression re-emission (§7): the affected turns are removed and
     // re-emitted as one summary turn, and no stale
@@ -1822,7 +1827,7 @@ void checkBattery() {
     const std::size_t pinned3 = h.core->threadAdapter.groupAt(0).id;
     h.core->threadAdapter.setExpanded(pinned3, false);
     h.idle(1);
-    check(h.core->chat.groupOverrides.count(static_cast<long long>(pinned3)) == 1,
+    check(h.core->chat.groupPins.count(static_cast<long long>(pinned3)) == 1,
           "battery 3 premise: the first turn's pin is in place");
     const std::int64_t firstTurn3 = h.core->chat.typedTurns.turnAt(0).id;
     const std::int64_t secondTurn3 = h.core->chat.typedTurns.turnAt(1).id;
@@ -1833,8 +1838,8 @@ void checkBattery() {
           "battery 3: the removes cascade (turn + its blocks)");
     check(!h.last.hasText("read the logs"),
           "battery 3: the removed turns stop rendering (no stale group)");
-    check(h.core->chat.groupOverrides.empty(),
-          "battery 3: the removed turn's pin died with it (no orphan override)");
+    check(h.core->chat.groupPins.empty(),
+          "battery 3: the removed turn's pin died with it (no orphan entry)");
     upsertTurn(h, firstTurn3, TuiTurnState_Done, 1);
     upsertBlock(h, firstTurn3, "notice", std::to_string(firstTurn3) + "#0", TuiBlockKind_Notice,
                 TuiBlockStatus_None, "system", "earlier context summarized");
@@ -1845,7 +1850,13 @@ void checkBattery() {
           "battery 3: the summary turn re-emitted");
     check(h.core->threadAdapter.groupCount() == 1,
           "battery 3: the group list follows the re-emission");
-    check(h.last.hasText("earlier context summarized"), "battery 3: the summary renders");
+    // The notice rides a batch of the Done turn, whose group is closed at
+    // rest, so it folds with the group (§7.5 plainVisible = groupOpen). Open
+    // question for the user (review M5): a compression summary that never
+    // renders may be a product-level gap the design never weighed - open
+    // issue 5 covered the query/answer rows only.
+    check(!h.last.hasText("earlier context summarized"),
+          "battery 3: the summary notice folds with the closed group");
 
     // 4. The 1000-turn session: the cap evicts oldest-first, the
     // turn-paged window bounds what renders, and the height hints stay
@@ -1966,7 +1977,12 @@ void checkBattery() {
     check(replayed != nullptr && replayed->kind == TuiBlockKind_Tool &&
               replayed->status == TuiBlockStatus_Cancelled,
           "battery 6: the interrupted call replays as Cancelled");
-    check(h.last.hasText("write_file"), "battery 6: the replayed call is drawn");
+    // The turn is Interrupted, so its group is closed at rest and the
+    // replayed card folds behind it (§7.5 childVisible) - the honest
+    // Cancelled status lives in the store (the checks around here), and
+    // the row renders once the user pins its owner open (DD-6).
+    check(!h.last.hasText("write_file"),
+          "battery 6: the replayed call folds with the closed group");
     bool replayOk = false;
     for (std::size_t k = 0; k < h.core->chat.typedTurns.blockCount(crossLive); ++k)
         replayOk =
@@ -2028,7 +2044,19 @@ void checkBattery() {
           "battery 8: the call's upsert merges and the pair set rides along");
     h.core->ui.prefs.threadMinimal = false;
     h.idle(2);
-    check(h.last.hasText("RESULT path = t.log"), "battery 8: the merged pair set renders");
+    // Both calls responded, so the live turn's newest batch is settled: its
+    // owner folds mid-turn (matrix rows 420/422 - the default open is live
+    // tail && unsettled) and the cards hide behind it. The merged pair set
+    // still renders once the rows are pinned open (DD-6): the pin is
+    // absolute and survives the liveness default.
+    check(!h.last.hasText("RESULT path = t.log"),
+          "battery 8: the settled owner folds its cards even mid-turn");
+    const std::size_t rows8 = h.core->threadAdapter.blockCount(0);
+    for (std::size_t b = 1; b < rows8; ++b)
+        h.core->threadAdapter.setBlockExpanded(0, b, true);
+    h.idle(2);
+    check(h.last.hasText("RESULT path = t.log"),
+          "battery 8: the merged pair set renders once the rows are pinned open");
 
     // 9. The busy-edge battery: the composer reacts to the real ready
     // crossing - Stop while the run is in flight, Send once it ends. The

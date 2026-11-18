@@ -438,13 +438,26 @@ struct ThreadFixture {
         (void)type;
     }
 
-    /// The task-8 override the fold yields to: opening the newest group draws
-    /// every row it owns again, maximal-style (design §6).
-    void openNewestGroup() {
-        const std::int64_t id = seed.liveTurnId != 0 ? seed.liveTurnId : seed.turnSeq;
-        if (id != 0)
-            state.chat.openWorkGroups.insert(static_cast<std::size_t>(id));
+    /// The task-10 pins the fold yields to: a group pinned open draws every
+    /// row it owns again, and a row pinned open keeps its children drawn -
+    /// maximal-style only while its turn is live, everything else explicit
+    /// (design §7.5). The scene callers want the full row anatomy, so the
+    /// batch owners are pinned open along with the group.
+    void openGroup(std::int64_t id) {
+        if (id == 0)
+            return;
+        state.chat.groupPins[static_cast<std::int64_t>(id)] = true;
+        auto& a = state.threadAdapter;
+        for (std::size_t g = 0; g < a.groupCount(); ++g) {
+            if (a.groupAt(g).id != static_cast<std::size_t>(id))
+                continue;
+            for (std::size_t b = 0; b < a.blockCount(g); ++b)
+                if (a.blockAt(g, b).ownsBatch)
+                    a.setBlockExpanded(g, b, true);
+        }
     }
+
+    void openNewestGroup() { openGroup(seed.liveTurnId != 0 ? seed.liveTurnId : seed.turnSeq); }
 
     /// Draw the thread into the 100x30 frame and answer the captured grid.
     Grid draw(bool acceptKeys = true, const std::function<void(ImGuiIO&)>& inject = nullptr) {
@@ -1011,7 +1024,11 @@ void checkStreaming() {
     reasoning.openNewestGroup();
     grid = reasoning.draw();
     check(grid.contains("Thinking"), "the opened group draws the thinking row");
-    check(grid.contains("REASONING-TEXT-VISIBLE"), "and the reasoning itself (got a blank row?)");
+    // The batch holds no call in flight, so the row's own open state is the
+    // pins-or-liveness answer `false` (§7.5): the text waits behind its fold
+    // until a row pin opens it. The group pin alone is not a row pin (DD-6).
+    check(!grid.contains("REASONING-TEXT-VISIBLE"),
+          "the reasoning text waits behind its fold (the batch holds no call in flight)");
 
     // The counted variant (the design names it, so it is pinned): once the
     // streaming response's calls exist - even only Pending - the live edge
@@ -1042,10 +1059,19 @@ void checkStreaming() {
     both.addStream(MsgKind::Assistant, "STREAM-PROSE", "STREAM-THINKING");
     grid = both.draw();
     check(!grid.contains("STREAM-THINKING"), "minimal folds the streamed reasoning");
-    check(!grid.contains("STREAM-PROSE"), "and the streamed prose - the live edge is the fold's");
+    // The content segment is the one child the fold keeps visible on its own
+    // (I-11, B1/FR-5): the newest batch of a live turn draws its prose even
+    // though the owner above it never drew.
+    check(grid.contains("STREAM-PROSE"),
+          "the streamed prose draws under the fold (the content segment's own clause)");
     both.openNewestGroup();
     grid = both.draw();
-    check(grid.contains("STREAM-THINKING"), "the opened group draws the reasoning");
+    // The reasoning row draws (the pinned-open owner), but its text waits
+    // behind its own fold - the batch holds no call in flight, so the
+    // pins-or-liveness answer is `false` (§7.5, DD-6).
+    check(grid.contains("Thinking"), "the opened group draws the reasoning row (closed)");
+    check(!grid.contains("STREAM-THINKING"),
+          "the reasoning text waits for a row pin (the batch holds no call in flight)");
     check(grid.contains("STREAM-PROSE"), "and the prose");
     check(grid.rowText(0).find("STREAM-PROSE") == std::string::npos,
           "the prose is not on the reasoning row");
@@ -1266,8 +1292,9 @@ void checkCrossGroupIdentity() {
     fixture.state.ui.view = model::ThreadView::Ready;
     fixture.addStream(MsgKind::Assistant, "stream-prose", "stream-reasoning");
     // Minimal folds both turns' work rows behind their headers; the row-level
-    // identities below are the opened groups' (the task-8 override).
-    fixture.state.chat.openWorkGroups.insert(1);
+    // identities below are the pinned-open groups' (the task-10 pins: the
+    // group pin and the batch owners' row pins, both absolute).
+    fixture.openGroup(1);
     fixture.openNewestGroup();
     Grid grid = fixture.draw();
 
@@ -1366,11 +1393,13 @@ void checkCrossGroupIdentity() {
     check(g_clipboard == "stream-prose",
           "`y` on the streamed body copies the stream (got '" + g_clipboard + "')");
 
-    // The stream's Thinking row: the row above its open body. The live edge's
-    // folded count-only row sits at the group's bottom and says the same
-    // bare word - a 0-call stream draws "Thinking" twice - so the list's row is
-    // addressed by its body, never by the word alone.
-    const int streamThinking = rowOf(afterStreamBody, "stream-reasoning") - 1;
+    // The stream's Thinking row: the row directly above its prose segment's
+    // header ("AGENT  stream-prose" draws as one row). The live edge's folded
+    // count-only shadow row sits at the group's bottom and says the same bare
+    // word - so the list's row is addressed by the body text, never the word.
+    // The reasoning's text waits behind its fold (the batch holds no call in
+    // flight); the click below pins it open, and the text then draws.
+    const int streamThinking = rowOf(afterStreamBody, "stream-prose") - 1;
     check(streamThinking >= 0, "the streamed reasoning row is on screen");
     Grid afterStreamThinking = clickRow(streamThinking);
     check(fixture.state.ui.thread.focus == model::BlockId{2,
@@ -1543,7 +1572,11 @@ void checkCopyFromEveryBlock() {
         // Thinking case: the live edge also draws a folded "Thinking" shadow
         // line under the group's rows, which a bottom-up label search would
         // hit first - and the shadow is not a focusable row.
-        const int bodyRow = c.stream ? findRow(grid, c.want) : -1;
+        // The walk-up anchors on the case's DRAWN body text: the streamed
+        // Thinking case's copy target is the reasoning text, which waits
+        // behind its fold - the prose segment under the group's rows is
+        // what is on screen, and its label row is the Thinking row above.
+        const int bodyRow = c.stream ? findRow(grid, *c.text ? c.text : c.want) : -1;
         int row = -1;
         for (int y = bodyRow; bodyRow >= 0 && y >= 0 && row < 0; --y)
             if (grid.rowText(y).find(c.label) != std::string::npos)
@@ -1572,8 +1605,8 @@ void checkCopyFromEveryBlock() {
         pointer.openNewestGroup();
         const Grid before = pointer.draw();
         // Same body-relative lookup as above: the streamed Thinking case's
-        // label row sits above its body, under the live-edge shadow line.
-        const int beforeBody = c.stream ? findRow(before, c.want) : -1;
+        // label row sits above its prose segment, under the live-edge shadow.
+        const int beforeBody = c.stream ? findRow(before, *c.text ? c.text : c.want) : -1;
         int menuRow = -1;
         for (int y = beforeBody; beforeBody >= 0 && y >= 0 && menuRow < 0; --y)
             if (before.rowText(y).find(c.label) != std::string::npos)
@@ -2335,6 +2368,16 @@ int rowOfSub(const Grid& g, const std::string& needle) {
     return -1;
 }
 
+/// The column a substring starts at on its row, -1 when absent: the shape
+/// checks read the drawn grid, so an indent is an answer too.
+int colOfSub(const Grid& g, const std::string& needle) {
+    const int y = rowOfSub(g, needle);
+    if (y < 0)
+        return -1;
+    const std::size_t col = g.rowText(y).find(needle);
+    return col == std::string::npos ? -1 : static_cast<int>(col);
+}
+
 /// The response-owned fold's target shape, as assertions over the four
 /// builders above. Every check here is red until the task that owns it lands:
 /// T7/T8/T9/T10 the projection, T11/T13 the view, T15 the live edge.
@@ -2361,6 +2404,17 @@ void checkOwnerShape() {
         check(g.contains("Next I will move the loader out of core."),
               "maxlonglive: its content draws");
         check(g.contains("TOOL  execute_command"), "maxlonglive: its live card draws");
+        // The owners are flat siblings - the drawRow indent leak used to
+        // stair-step each folded batch's owner under the previous one - and
+        // the live batch's children share the one indent C7 gives them.
+        const int ownerA = colOfSub(g, "AGENT - 1.1 s");
+        const int ownerB = colOfSub(g, "AGENT - 1.2 s");
+        check(ownerA >= 0 && ownerA == ownerB,
+              "maxlonglive: folded owners stay flat siblings, no staircase");
+        const int thinking = colOfSub(g, "Thinking");
+        const int card = colOfSub(g, "TOOL  execute_command");
+        check(thinking >= 0 && thinking == card,
+              "maxlonglive: the live batch's children share one indent");
     }
     { // maxnotice (T8): the batch block first, the interleaved notice after it
         ThreadFixture f;

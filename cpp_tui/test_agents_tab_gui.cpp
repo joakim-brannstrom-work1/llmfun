@@ -123,8 +123,8 @@ tui::AgentStream coderStream() {
     failed.meta = "no such file";
     failed.body = "read_file: no such file";
     stream.chat.typedTurns.blockUpsert(std::move(failed));
-    // The committed group is one the user opened: the work rows show.
-    stream.chat.openWorkGroups.insert(1);
+    // The committed group is one the user pinned open: the work rows show.
+    stream.chat.groupPins[1] = true;
     // The live run: a Running turn whose reasoning and content are still arriving.
     TypedTurn live;
     live.id = 2;

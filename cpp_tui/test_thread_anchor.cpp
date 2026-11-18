@@ -385,7 +385,7 @@ int main(int argc, char** argv) {
 
     // --- A click on a row *inside* an agent group (review round 1) --------------
     // The rows inside an `AssistantWork` group toggle the group's own fold (the
-    // typed store's `openWorkGroups` bit keyed by the turn id), which a fresh
+    // typed store's `groupPins` bit keyed by the turn id), which a fresh
     // sync reports as a toggle. The adapter has to see that too: a collapsed
     // agent step is the same kind of user action as a collapsed group - it
     // must hand the view over, or the next content pins the view back to the bottom.

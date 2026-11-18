@@ -533,10 +533,10 @@ void checkThrottle() {
     Fixture fast;
     fast.seed.runStart("stream this");
     fast.state.threadAdapter.storedGroupCount(); // prime: the store holds the run's start
-    // Minimal folds the live turn's work rows behind its header (task 6): open
-    // the group so the streamed body draws, and draw once so the opened group's
-    // own rebuild is spent before the storm the check below measures.
-    fast.state.chat.openWorkGroups.insert(fast.seed.liveTurnId);
+    // Minimal folds the live turn's work rows behind its header (§7.5): pin the
+    // group open so the streamed body draws, and draw once so the pinned-open
+    // group's own rebuild is spent before the storm the check below measures.
+    fast.state.chat.groupPins[static_cast<std::int64_t>(fast.seed.liveTurnId)] = true;
     fast.draw();
     const auto buildsBefore = fast.state.threadAdapter.groupBuilds();
     // 300 ticks as fast as D's loop sends them (no frame between): the store merges every
@@ -776,10 +776,10 @@ void checkFenceFallback() {
     // The typed live turn has no fence fallback to take: its body is D's merged
     // content block, and an opened live turn draws its body raw - the text as
     // it arrived, fence opener and all (minimal folds the work rows, so the
-    // check opens the group first).
+    // check pins the group open first).
     Fixture fixture;
     fixture.stream("## Heading\n\n- item\n\n```python\n", "", kT0);
-    fixture.state.chat.openWorkGroups.insert(fixture.seed.liveTurnId);
+    fixture.state.chat.groupPins[static_cast<std::int64_t>(fixture.seed.liveTurnId)] = true;
     Grid grid = fixture.draw();
     check(grid.contains("Heading") && grid.contains("item"),
           "a live body that ends inside a fence still draws - the renderer absorbs the open fence");

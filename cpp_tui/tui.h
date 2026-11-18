@@ -172,20 +172,14 @@ struct ChatTabSessionPanel {
 };
 
 struct ChatTab {
-    /// Ids of the expanded assistant-work groups. The key is the group's id -
-    /// the typed store's persisted turn id - so a click and a read cannot
-    /// disagree (D-GROUPID), and an evicted turn can never hand its fold to a
-    /// neighbour.
-    std::set<size_t> openWorkGroups;
+    /// The rows the user pinned open or closed, and the groups they pinned,
+    /// as ABSOLUTE session state (DD-6): the key is the persisted turnId, the
+    /// row key the wire block id (or `batch#<batchId>` for an owner row),
+    /// never a row index - so a click and a read cannot disagree (D-GROUPID),
+    /// and an evicted turn can never hand its pin to a neighbour.
+    std::map<std::int64_t, std::map<std::string, bool>> rowPins; // turnId -> rowId -> open
+    std::map<std::int64_t, bool> groupPins;                      // turnId -> open
     store::TypedThreadStore typedTurns;
-
-    /// The session-local per-group override (design §6, task 8): one group
-    /// pinned against the mode (`store::GroupOverride`). Keyed by the persisted
-    /// turn id (D3/W3: group id = turn id), so an upsert or a rebuild never
-    /// orphans one. Cleared by a session switch (`tuiSetTurns`) and a clear
-    /// (`tuiThreadClear`); a turn's entry is dropped with the turn
-    /// (`tuiTurnRemove`, §7: no stale override survives a compression re-emit).
-    std::unordered_map<long long, store::GroupOverride> groupOverrides;
 
     /// Whether the thread draws in minimal mode (design §6): folded work groups
     /// with header-only steps, streamed prose hidden behind the answer chip.

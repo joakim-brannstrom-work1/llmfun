@@ -177,7 +177,7 @@ struct HeightHint {
 
 /// The thread's cross-frame view state.
 ///
-/// Expansion is kept by the store itself (`ChatTab::openWorkGroups`,
+/// Expansion is kept by the store itself (`ChatTab::rowPins` / `groupPins`,
 /// keyed by the typed store's turn id) and this state only reads it: one store with two readers, so
 /// a click and a read cannot disagree (`UiState` carries the same note).
 ///
@@ -244,23 +244,12 @@ struct ThreadState {
     /// Exactly one block is focused at a time.
     BlockId focus;
 
-    /// The thinking disclosures the user opened, keyed by the block's identity
-    /// (task 26). A stored thinking row is `{its group, its message id, Thinking}`;
-    /// the stream's reasoning is `{the stream group, the reserved stream id,
-    /// Thinking}` and is seeded open when the stream group is born.
-    ///
-    /// The store has no thinking expansion, and ImGui's tree storage is not a place to
-    /// keep state (a windowed render cannot read it back). So this is plain data, and
-    /// the adapter - the one place that maps a block to its state - reads and writes it,
-    /// exactly as it reads the v4 sets for a message's own disclosure.
-    std::set<BlockId> thinkingOpen;
-
     /// The blocks whose table source is showing (design §6.8, D-TABLE, task 37): `s` on a
     /// focused block flips its membership, and the transform writes the block's top-level
     /// tables as a `llmfun-table-source` fence instead of a `llmfun-table` one.
     ///
-    /// Plain data for the same reason as `thinkingOpen`: the expansion is the *view's*, the
-    /// block's identity is the adapter's, and neither may keep ImGui storage. Cleared with the
+    /// Plain data: the expansion is the *view's*, the block's identity is the
+    /// adapter's, and neither may keep ImGui storage. Cleared with the
     /// rest of the thread state on a clear or a session switch (`reset()`), because group ids
     /// restart at 1 and a flag would otherwise land on the next session's block.
     std::set<BlockId> tableSource;
@@ -378,8 +367,8 @@ inline std::int64_t agentClockMs() {
 /// by owner: preferences (persisted), the per-frame derivation (`view`,
 /// `offline`), and the thread's view state (`follow`, `earlierGroups`, `thread`).
 ///
-/// Expansion is kept in one store (`ChatTab::openWorkGroups` for a work group's
-/// fold, keyed by the typed store's turn id), reached through
+/// Expansion is kept in one store (`ChatTab::groupPins` for a work group's
+/// fold, `ChatTab::rowPins` for a row's, keyed by the typed store's turn id), reached through
 /// `store::ThreadStoreAdapter::expanded()/setExpanded()`: one store with two readers,
 /// so a click and a read cannot disagree (`ThreadState` carries the same note).
 struct UiState {

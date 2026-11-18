@@ -1265,8 +1265,11 @@ void checkDrilldownMount() {
         step.meta = "read 120 lines";
         step.body = "src/app.d";
         stream.chat.typedTurns.blockUpsert(std::move(step));
-        // The committed group is one the user opened: the work rows show.
-        stream.chat.openWorkGroups.insert(1);
+        // The committed group is one the user pinned open: the work rows show.
+        // The task-10 pins are absolute (DD-6): the group pin and the batch
+        // owner's row pin - the owner row never draws open from a group pin.
+        stream.chat.groupPins[1] = true;
+        stream.chat.rowPins[1]["batch#1#0"] = true;
     }
     {
         TypedTurn turn;
@@ -1487,23 +1490,29 @@ void checkStructuredToolRows() {
     probe.bind(state.left.agents.front().chat, probeView);
     check(probe.groupCount() == 4, "premise: the note turns and the run's group make four groups");
     const std::size_t work = probe.groupCount() - 1;
-    const model::BlockDesc readDesc = probe.blockAt(work, 1);
+    // The group's rows: the WORK header, the batch's owner row (DD-13), then
+    // the batch's children in canonical order - the calls are blocks 2 and 3.
+    const model::BlockDesc readDesc = probe.blockAt(work, 2);
     check(readDesc.label == std::string("TOOL"), "the structured call row keeps its role label");
     check(readDesc.summary == "read_file", "the call's summary is the tool name");
     check(readDesc.state == model::BlockState::Ok, "the merged call states its result's ok");
-    check(readDesc.hasBody && probe.blockText(work, 1) == "src/app.d",
+    check(readDesc.hasBody && probe.blockText(work, 2) == "src/app.d",
           "the merged call's body stays its arguments");
-    const model::BlockDesc writeDesc = probe.blockAt(work, 2);
+    const model::BlockDesc writeDesc = probe.blockAt(work, 3);
     check(writeDesc.summary == "write_file" && writeDesc.state == model::BlockState::Failed,
           "a failed result states itself failed");
-    check(writeDesc.hasBody && probe.blockText(work, 2) == "out.txt",
+    check(writeDesc.hasBody && probe.blockText(work, 3) == "out.txt",
           "the second merged call's body stays its arguments too");
 
     // On screen: the composed names draw in the thread's column, not in the inspector
     // beside it (whose lane mirror also carries the tool name - the column is the
-    // test). The run's turn is opened first (F7): minimal folds its rows, and the
-    // names ride the open cards' headers.
-    state.left.agents.front().chat.openWorkGroups.insert(run);
+    // test). The run's turn is pinned open first (F7): minimal folds its rows,
+    // and the names ride the open cards' headers. The pins are absolute (DD-6):
+    // the group pin and the batch owner's row pin together.
+    state.left.agents.front().chat.groupPins[static_cast<std::int64_t>(run)] = true;
+    for (std::size_t b = 0; b < probe.blockCount(work); ++b)
+        if (probe.blockAt(work, b).ownsBatch)
+            probe.setBlockExpanded(work, b, true);
     model::focusAgentLane(state.ui, "coder");
     Grid agentGrid;
     shellFrameGrid(state, w, h, agentGrid);
