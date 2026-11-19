@@ -1195,6 +1195,107 @@ int main(int argc, char** argv) {
               "the settled card 2");
     }
 
+    // Task 18 / DD-9, I-10: the Answer's own batch suppresses its content
+    // child - the answer text draws once, on the turn-level ANSWER row.
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.threadMinimalMode =
+            false; // maximal: the rows' visibility is not the question here
+        state.chat.typedTurns.turnUpsert(turn(42, 1, 5));
+        auto query = block(42, "q", 0, 0, "", "what is v5?", "42#q");
+        query.meta = "user";
+        state.chat.typedTurns.blockUpsert(query);
+        // Batch 42#1: reasoning + content + a settled call - untouched by the
+        // drop (the drop is the ANSWER's batch's, not every batch's).
+        state.chat.typedTurns.blockUpsert(block(42, "think#1", 1, 3, "", "reasoning", "42#1"));
+        state.chat.typedTurns.blockUpsert(
+            block(42, "content#1", 0, 3, "", "an interim note", "42#1", 900));
+        state.chat.typedTurns.blockUpsert(block(42, "call#1", 2, 3, "bash", "ls -R", "42#1"));
+        // Batch 42#2, the ANSWER's batch: a content child whose preamble DIFFERS
+        // from the answer (R-3) and a settled call. The Answer block names 42#2.
+        state.chat.typedTurns.blockUpsert(
+            block(42, "content#2", 0, 3, "", "a differing preamble", "42#2", 300));
+        state.chat.typedTurns.blockUpsert(block(42, "call#2", 2, 3, "grep", "grep -r x", "42#2"));
+        state.chat.typedTurns.blockUpsert(block(42, "ans", 3, 0, "", "the answer body", "42#2"));
+
+        // Row list: [header, owner1, think, content1, call1, owner2, call2] -
+        // 42#2's content child is gone (I-10), the owner survived on its call.
+        check(thread.blockCount(0) == 7,
+              "task 18: the ANSWER's batch contributes no content child (DD-9, I-10)");
+        check(
+            thread.blockAt(0, 3).kind == tui::model::BlockKind::Assistant &&
+                thread.blockText(0, 3) == "an interim note",
+            "task 18: another batch's content child still draws - the drop is the answer batch's");
+        // The differing preamble is lost (R-3's recorded trade-off): no group row
+        // carries it, and the answer text exists exactly once - on the ANSWER row.
+        int preambleRows = 0;
+        int answerTextRows = 0;
+        for (std::size_t b = 0; b < thread.blockCount(0); ++b) {
+            const std::string text = thread.blockText(0, b);
+            preambleRows += text == "a differing preamble" ? 1 : 0;
+            answerTextRows += text == "the answer body" ? 1 : 0;
+        }
+        check(preambleRows == 0,
+              "task 18: the answer batch's differing preamble is lost (R-3, accepted)");
+        check(answerTextRows == 0, "task 18: the answer text draws on no group row");
+        check(thread.blockText(0, tui::store::kAnswerRow) == "the answer body" &&
+                  thread.blockAt(0, tui::store::kAnswerRow).label == "ANSWER",
+              "task 18: the answer text draws once, on the turn-level ANSWER row");
+        // The dropped child's facts survived it: the owner's duration was read
+        // in the bucket pass (DD-8), and the owner copies nothing - the text
+        // lives on the ANSWER row, so a second copy offer would duplicate it.
+        check(thread.blockAt(0, 5).label == "AGENT" && thread.blockAt(0, 5).timingS == 0.3,
+              "task 18: the owner still carries the dropped content's duration (DD-8)");
+        check(!thread.blockAt(0, 5).copyable,
+              "task 18: the answer batch's owner copies nothing - the ANSWER row is the copy");
+    }
+
+    // Task 18: no Answer row, no drop - every batch keeps its content child.
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.threadMinimalMode = false;
+        state.chat.typedTurns.turnUpsert(turn(43, 0, 2)); // a live turn, never answered
+        auto query = block(43, "q", 0, 0, "", "what is v5?", "43#q");
+        query.meta = "user";
+        state.chat.typedTurns.blockUpsert(query);
+        state.chat.typedTurns.blockUpsert(
+            block(43, "content#0", 0, 2, "", "still working", "43#0", 300));
+        state.chat.typedTurns.blockUpsert(block(43, "call#0", 2, 2, "bash", "ls -R", "43#0"));
+        check(thread.blockCount(0) == 4,
+              "task 18: with no Answer row nothing is dropped - header, owner, content, call");
+        check(thread.blockText(0, 2) == "still working",
+              "task 18: the content child draws when the turn has no ANSWER");
+    }
+
+    // Task 18 / DD-15: a batch whose ONLY child was the suppressed content row
+    // loses its owner too - and the header's step count stays what the wire
+    // says (stepCount reads the store, above the projection; §0.3's accepted
+    // hole).
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.typedTurns.turnUpsert(turn(44, 1, 2));
+        auto query = block(44, "q", 0, 0, "", "what is v5?", "44#q");
+        query.meta = "user";
+        state.chat.typedTurns.blockUpsert(query);
+        state.chat.typedTurns.blockUpsert(
+            block(44, "content#0", 0, 3, "", "the answer, streamed", "44#0", 700));
+        state.chat.typedTurns.blockUpsert(
+            block(44, "ans", 3, 0, "", "the answer, streamed", "44#0"));
+        check(thread.batchCount(0) == 1, "task 18 / DD-15: the emptied batch is still a bucket - "
+                                         "the drop is the rows', not the batching's");
+        check(thread.blockCount(0) == 1 && thread.blockAt(0, 0).label == "WORK",
+              "task 18 / DD-15: no content child, no owner - the header is the batch's only row");
+        check(thread.blockAt(0, 0).steps == 1,
+              "task 18 / DD-15: the step count stays what the wire says (1) - the accepted hole");
+        check(thread.blockText(0, tui::store::kAnswerRow) == "the answer, streamed",
+              "task 18 / DD-15: the answer text still draws once");
+    }
     // Task 7 / FR-23: the one chips composer.
     {
         using tui::store::chipsText;

@@ -463,6 +463,19 @@ void ThreadStoreAdapter::syncTyped() const {
         for (std::size_t i = 0; i < entry.batches.size(); ++i)
             entry.batches[i].chips = chipsText(batchCalls[i]);
 
+        // DD-9, I-10: the Answer's own batch suppresses its content child, so
+        // the answer text draws once, on the turn-level ANSWER row. D names the
+        // batch on the Answer block itself (the row's typedBatchId), so the
+        // projection reads it and needs no heuristic (NFR-3: no id parsing).
+        // The batch's facts were all read in the bucket pass above - its
+        // duration, its chips, its step weight - so the drop moves no count
+        // (§0.3); a batch whose only child was this content row loses its
+        // owner with it (DD-15), and its step count stays what the wire says.
+        // R-3's accepted trade-off: a final response whose preamble differs
+        // from its answer loses that preamble.
+        const std::string answerBatch =
+            entry.hasAnswer ? entry.answerRow.typedBatchId : std::string();
+
         // The emission (task 8): the wire order decides only WHERE each batch's
         // block starts - at its first row's index (H8). The block itself is
         // canonical: one owner row (DD-13) when a child survived the drops
@@ -497,7 +510,15 @@ void ThreadStoreAdapter::syncTyped() const {
                 const bool bodyLess =
                     child.typedBody.empty() && (child.kind == model::BlockKind::Assistant ||
                                                 child.kind == model::BlockKind::Thinking);
-                if (!bodyLess)
+                // DD-9's drop, kind-scoped: the answer batch's CONTENT child
+                // never draws - the ANSWER row carries the text (I-10). The
+                // batch's reasoning and calls are not the answer; they stay.
+                // Guarded on hasAnswer: without an Answer row no batch is
+                // suppressed, answerBatch being empty must not mean "batch
+                // empty-string".
+                const bool answerOwned = entry.hasAnswer && answerBatch == child.typedBatchId &&
+                                         child.kind == model::BlockKind::Assistant;
+                if (!bodyLess && !answerOwned)
                     kept.push_back(std::move(child));
             }
             // DD-5's order, stable: each rank keeps its own wire order, so the
