@@ -696,6 +696,115 @@ The typed turn/block model the thread draws from since the v6 cutover
 
 ---
 
+## Thread modes: the response-owned fold
+
+The thread view has two modes. Minimal (the factory default,
+`ChatTab::threadMinimalMode`) folds every response into one log line;
+maximal opens every response while its turn runs. Both shapes come from one
+projection: `store/thread_store.cpp` derives, per row, an open state and a
+`visible` bit, and `views/thread.cpp` draws exactly the rows whose `visible`
+is set — the view keeps no exception list of its own. This chapter is the
+behaviour the code implements now; `plan/maximal_investigation.md` stays as
+the record of the fold it replaced.
+
+### Vocabulary
+
+| Term | Meaning |
+|---|---|
+| turn | one user query and everything the agent did for it; one `TuiTurn` (state `Running`/`Done`/`Interrupted`), one group. A turn closes on every run exit — `Done` when the answer landed, `Interrupted` otherwise; `Cancelled` is a call status, never a turn state |
+| response | one model reply inside a turn; its blocks share the batch id `<turnId>#<n>` (query, vision and notice blocks share `<turnId>#q`) |
+| batch | the projection's bucket for one response (`BatchEntry`) |
+| owner row | the synthetic `AGENT` row that represents a response and owns the fold; its pin key is `batch#<batchId>`, it carries the response's duration and tool chips, and it has no body of its own |
+| child | a row an owner owns: the `Thinking` row, the content segment, one card per tool call |
+| body segment | the header-less row that draws the response's streamed content |
+| settled | a batch that holds at least one tool call and none of them still live (`hasAnyCall && allSettled`) |
+| live tail | the newest batch of a turn whose state is `Running` (`isNewest`) |
+| pin | an absolute user expansion choice, stored verbatim, keyed by row/group id |
+| live edge | the chips line / `Thinking` shadow line the minimal fold draws under a group's header |
+
+Two render profiles: the text grid separates with `" - "`, the pixel/GUI
+profile with `" · "` (`views/blocks.cpp`'s `separator()`). Header widths are
+measured in text units against the profile's metrics, never counted as
+characters.
+
+### The fold
+
+The derivation lives in `store/thread_store.cpp`; nothing about the fold is
+stored except the pins.
+
+- `groupOpen(groupId)` — the group pin first (absolute: what a click stored is
+  the answer), otherwise the liveness default: maximal (`!threadMinimalMode`)
+  and the turn live. Maximal at rest folds like minimal; no fabricated
+  `Cancelled` turn state exists.
+- `groupStyleIsMinimal(groupId)` = `threadMinimalMode && !groupOpen(groupId)` —
+  the shape, not the fold: a pinned-open minimal group and a live maximal group
+  both draw maximal-style.
+- `ownerOpen` — the row pin first, else `batchLiveFor`: the turn live, the
+  batch the turn's newest, and the batch unsettled (`!allSettled ||
+  !hasAnyCall`). A child row's default is `childLiveFor` — the same but
+  `!allSettled` only — so a settled batch folds its children with its owner.
+- A settled batch folds to `> <duration> - [chips]` (grid spelling): the
+  header row carries the disclosure mark and the `FAIL` ink around
+  `composeBlockHeader`'s text, which carries the duration and the tool chips
+  `[bash] [grep]` with `+N` for the distinct names past three (one composer,
+  `chipsText`, for the owner header and the live chips line; first occurrence
+  wins, no duplicates) and — folded only — no role word. `Thinking` carries no
+  duration.
+- The `Answer` block's batch contributes no content child: the answer is the
+  response's message, and drawing its streamed preamble beside it would
+  repeat the text.
+
+### Visibility (the one rule)
+
+`resolveVisible` answers one bit per row, and the view draws iff it is set
+(`drawRow` returns before touching any cursor state when it is clear). The
+group's header row and the turn's query/answer rows always draw; the segment
+clause is the content segment only.
+
+```
+ownerVisible   = groupOpen(g)                                # owners never draw under a fold
+plainVisible   = groupOpen(g)                                # a notice/vision row follows its group
+childVisible   = ownerVisible && ownerOpen                   # thinking, cards
+segmentVisible = (ownerVisible && ownerOpen)
+                 or (groupStyleIsMinimal(g) && turnLive && batch.isNewest)   # the content segment
+```
+
+The segment clause is the minimal fold's one mercy: the newest batch of a
+live turn draws its prose under the folded header with no owner row above
+it. A hidden block (`TuiBlockFlag_Hidden = 8`, decided by the sender) weighs
+0 in `stepCount` and draws nothing. (`ownerVisible` / `plainVisible` are the
+projection's own comment names; `ownerOpen` is its local; `childVisible` /
+`segmentVisible` are labels used here for the two clauses that share
+`resolveVisible`'s tail.)
+
+### The live edge
+
+Minimal style, newest group only: the chips line naming the calls in flight
+while one runs, and the folded `Thinking` shadow while reasoning streams with
+no content yet. Neither ever draws in maximal, and neither draws for a group
+that is open.
+
+### Pins
+
+A pin is absolute and session state: stored verbatim even when it equals the
+default, so it survives mode flips and the turn's liveness changes
+(`setExpanded` / `setBlockExpanded`). Group pins live in
+`ChatTab::groupPins`, row pins in `ChatTab::rowPins`; both go with the thread
+on a clear or a session switch, and a removed turn takes its pins with it
+(`tuiTurnRemove`). Pruning the pins of an evicted turn and a "collapse all"
+affordance are future work (`doc/todo.md`).
+
+### Anchors and hints
+
+The group header is the anchor: the view samples its screen position as the
+group draws (`anchorGroupId` / `anchorPending`), so a batch folding or
+opening in place never scrolls the thread. The height hint (`measureHint()`
+over `UiState::thread.hints`) is an estimate from `lineCountEstimate`,
+computed at sync time from header + plain rows + owner rows — it does not
+move with the fold; the drawn height replaces it after the first frame.
+
+---
+
 ## Internal C++ API
 
 The internal C++ API (`tui.h` / `tui.cpp`) is used by `tui_api.cpp` and `main.cpp` (via the C API). All functions are in the `llmfun::tui` namespace.
