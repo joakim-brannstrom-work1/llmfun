@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -1309,6 +1310,118 @@ int main(int argc, char** argv) {
         check(chipsText({"bash", "bash", "grep"}) == "[bash] [grep]",
               "task 7 / FR-23: a repeated name chips once (first occurrence wins)");
         check(chipsText({"", "bash"}) == "[bash]", "task 7 / FR-23: an empty name never chips");
+    }
+    // Task 19's scene review, as the §10.3 checks that need no screen: the
+    // store answers alone.
+    { // C12: the query batch never grows an owner (DD-4, restated).
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.threadMinimalMode = false;
+        state.chat.typedTurns.turnUpsert(turn(45, 0, 2)); // a live turn, never answered
+        auto query = block(45, "q", 0, 0, "", "what is v5?", "45#q");
+        query.meta = "user";
+        state.chat.typedTurns.blockUpsert(query);
+        state.chat.typedTurns.blockUpsert(
+            block(45, "content#0", 0, 2, "", "still working", "45#0", 900));
+        state.chat.typedTurns.blockUpsert(block(45, "call#0", 2, 2, "bash", "ls -R", "45#0"));
+        int owners = 0;
+        for (std::size_t b = 0; b < thread.blockCount(0); ++b)
+            owners += thread.blockAt(0, b).ownsBatch ? 1 : 0;
+        check(owners == 1 && thread.blockCount(0) == 4, "the query batch never grows an owner");
+    }
+    { // C13: the hidden verdict's weight (DD-12): with hiddenTools = [] the
+      // step count is unchanged; with the default each hidden call weighs 2.
+        TypedThreadStore store;
+        store.turnUpsert(turn(46, 1, 4));
+        auto query = block(46, "q", 0, 0, "", "what is v5?", "46#q");
+        query.meta = "user";
+        store.blockUpsert(query);
+        auto content = block(46, "content#0", 0, 3, "", "working", "46#0", 1200);
+        content.meta = "assistant";
+        store.blockUpsert(content);
+        TypedBlock done1 = block(46, "done#0", 2, 3, "task_done", "the answer", "46#0");
+        done1.flags |= tui::store::kBlockFlagHidden;
+        store.blockUpsert(done1);
+        TypedBlock done2 = block(46, "done#1", 2, 3, "task_done", "the answer", "46#0");
+        done2.flags |= tui::store::kBlockFlagHidden;
+        store.blockUpsert(done2);
+        const int withDefault = tui::store::stepCount(store, 46);
+        store.blockUpsert(block(46, "done#0", 2, 3, "task_done", "the answer", "46#0"));
+        store.blockUpsert(block(46, "done#1", 2, 3, "task_done", "the answer", "46#0"));
+        const int withEmpty = tui::store::stepCount(store, 46);
+        check(withDefault == 1 && withEmpty == 5 && withEmpty - withDefault == 4,
+              "stepCount with hiddenTools = [] is unchanged; with the default it is "
+              "-2 per hidden call");
+    }
+    { // D14: no row id repeats within a turn (I-6) - the owner's namespace cannot
+      // collide with the plain rows'.
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.threadMinimalMode = false;
+        state.chat.typedTurns.turnUpsert(turn(47, 1, 6));
+        auto query = block(47, "q", 0, 0, "", "what is v5?", "47#q");
+        query.meta = "user";
+        state.chat.typedTurns.blockUpsert(query);
+        state.chat.typedTurns.blockUpsert(
+            block(47, "think#0", 1, 0, "", "reading the layout", "47#1", 0));
+        state.chat.typedTurns.blockUpsert(
+            block(47, "content#1", 0, 3, "", "moving the loader", "47#1", 4100));
+        state.chat.typedTurns.blockUpsert(block(47, "call#1", 2, 3, "bash", "ls -R", "47#1", 1100));
+        state.chat.typedTurns.blockUpsert(
+            block(47, "content#2", 0, 3, "", "the answer body", "47#2", 700));
+        state.chat.typedTurns.blockUpsert(
+            block(47, "call#2", 2, 3, "grep", "grep -r x", "47#2", 800));
+        state.chat.typedTurns.blockUpsert(block(47, "ans", 3, 0, "", "the answer body", "47#2"));
+        std::set<tui::model::BlockId> ids;
+        bool repeat = false;
+        const std::size_t rows = thread.blockCount(0);
+        for (std::size_t b = 0; b < rows; ++b)
+            if (!ids.insert(thread.blockAt(0, b).id()).second)
+                repeat = true;
+        // The count is the projection's too: header, batch 47#1's owner and
+        // three children, batch 47#2's owner and its kept call (the answer
+        // batch's content child is dropped, DD-9) - an unexpected row drop or
+        // insert fails this check with the id set's repeat answer spare.
+        check(rows == 7 && !repeat, "no row id repeats within a turn");
+    }
+    { // D15: a pin survives the default flipping (I-13, DD-16) - the owner's
+      // default flips open and closed around a call's lifecycle and the pin
+      // answers the same way the whole time.
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.threadMinimalMode = false;
+        state.chat.typedTurns.turnUpsert(turn(48, 0, 2)); // a live turn
+        auto query = block(48, "q", 0, 0, "", "what is v5?", "48#q");
+        query.meta = "user";
+        state.chat.typedTurns.blockUpsert(query);
+        state.chat.typedTurns.blockUpsert(
+            block(48, "content#0", 0, 3, "", "still working", "48#0", 900));
+        state.chat.typedTurns.blockUpsert(
+            block(48, "call#0", 2, 3, "bash", "ls -R", "48#0", 1100)); // settled: default closed
+        state.chat.groupPins[48] = true; // the group stays drawn the whole time
+        // The owner row by kind, not by index (the plan's row rule): the one
+        // ownsBatch row in the turn's list, so a projection reorder fails with
+        // a diagnosable count instead of a misleading "pin lost".
+        std::size_t ownerRow = 0;
+        int ownerCount = 0;
+        for (std::size_t b = 0; b < thread.blockCount(0); ++b)
+            if (thread.blockAt(0, b).ownsBatch) {
+                ownerRow = b;
+                ++ownerCount;
+            }
+        const bool pinned = ownerCount == 1 && thread.setBlockExpanded(0, ownerRow, true) &&
+                            thread.blockAt(0, ownerRow).expanded;
+        state.chat.typedTurns.blockUpsert(
+            block(48, "call#0", 2, 2, "bash", "ls -R", "48#0")); // back in flight: default open
+        const bool overOpenDefault = thread.blockAt(0, ownerRow).expanded;
+        state.chat.typedTurns.blockUpsert(block(48, "call#0", 2, 3, "bash", "ls -R", "48#0",
+                                                1100)); // settled again: default closed
+        const bool overClosedDefault = thread.blockAt(0, ownerRow).expanded;
+        check(pinned && overOpenDefault && overClosedDefault,
+              "a pin survives the default flipping");
     }
 
     if (g_failures != 0) {

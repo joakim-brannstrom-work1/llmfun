@@ -2537,9 +2537,9 @@ int colOfSub(const Grid& g, const std::string& needle) {
     return col == std::string::npos ? -1 : static_cast<int>(col);
 }
 
-/// The response-owned fold's target shape, as assertions over the four
-/// builders above. Every check here is red until the task that owns it lands:
-/// T7/T8/T9/T10 the projection, T11/T13 the view, T15 the live edge.
+/// The response-owned fold's §10.3 review checks (task 19), as assertions over
+/// the four builders above: the projection (T7-T10), the view (T11-T13) and the
+/// live edge (T15) all landed, so every check here is green.
 void checkOwnerShape() {
     { // maxlong (T10, T13): a folded group draws its header, no owner, no card, then the answer
         ThreadFixture f;
@@ -2649,6 +2649,177 @@ void checkOwnerShape() {
         const Grid g = f.draw();
         check(g.contains("[bash] [grep] [read_file] +1"),
               "the live chips line folds past three the way the owner header spells");
+    }
+    // Task 19's scene review, as the §10.3 checks: the four builders' facts,
+    // each stated once over the drawn grid.
+    { // A1: the owner header's three facts in one row (FR-8, FR-23).
+        ThreadFixture f;
+        buildMaxChips(f);
+        f.state.chat.groupPins[1] = true; // a folded group draws its header only
+        const Grid g = f.draw();
+        const std::string shut =
+            std::string(ui::icon(ui::Icon::DisclosureClosed, ui::GlyphSet::Glyphs));
+        check(g.contains(shut + " 1.2 s - [bash] [grep] [read_file] +1"),
+              "the owner header carries chips, duration and a disclosure mark");
+    }
+    { // A2: a live batch draws its whole block open - reasoning, content, cards.
+        ThreadFixture f;
+        buildMaxLongLive(f);
+        const Grid g = f.draw();
+        const std::string open =
+            std::string(ui::icon(ui::Icon::DisclosureOpen, ui::GlyphSet::Glyphs));
+        check(g.contains(open + " AGENT - [execute_command]") && g.contains("Thinking") &&
+                  g.contains("Next I will move the loader out of core.") &&
+                  g.contains("TOOL  execute_command"),
+              "a live batch draws open with its thinking, content and cards");
+    }
+    { // A3: the last call settles the batch - the owner folds to duration and
+      // chips, with no role word and no content segment (§4.6's fold, DD-8).
+        ThreadFixture f;
+        f.state.chat.threadMinimalMode = false;
+        f.seed.runStart("sweep the tree");
+        f.seed.upsertBlock(1, "content#0", "1#0", TuiBlockKind_Prose, TuiBlockStatus_None,
+                           "assistant", "listing the tree", nullptr, 3200);
+        f.seed.upsertBlock(1, "tool#0", "1#0", TuiBlockKind_Tool, TuiBlockStatus_Pending, nullptr,
+                           "dub test", "execute_command", 0);
+        f.seed.upsertBlock(1, "tool#0", "1#0", TuiBlockKind_Tool, TuiBlockStatus_Ok, nullptr,
+                           "dub test", "execute_command", 3200); // the result settles the call
+        const Grid g = f.draw();
+        const std::string shut =
+            std::string(ui::icon(ui::Icon::DisclosureClosed, ui::GlyphSet::Glyphs));
+        check(g.contains(shut + " 3.2 s - [execute_command]") && !g.contains("AGENT") &&
+                  !g.contains("listing the tree"),
+              "the last call folds it to '> 3.2 s - [chips]', with no role word");
+    }
+    { // A4: a reasoning-less batch folds the same way.
+        ThreadFixture f;
+        f.state.chat.threadMinimalMode = false;
+        f.seed.runStart("sweep the tree");
+        f.seed.upsertBlock(1, "tool#0", "1#0", TuiBlockKind_Tool, TuiBlockStatus_Pending, nullptr,
+                           "grep -r x", "grep", 0);
+        f.seed.upsertBlock(1, "tool#0", "1#0", TuiBlockKind_Tool, TuiBlockStatus_Ok, nullptr,
+                           "grep -r x", "grep", 2700);
+        const Grid g = f.draw();
+        const std::string shut =
+            std::string(ui::icon(ui::Icon::DisclosureClosed, ui::GlyphSet::Glyphs));
+        check(g.contains(shut + " [grep]") && !g.contains("Thinking") && !g.contains("AGENT"),
+              "a reasoning-less batch folds the same way");
+    }
+    { // A5: a content-only batch's folded owner previews the content's first
+      // line (§7.3.7) - no calls, no chips, the one line instead.
+        ThreadFixture f;
+        f.state.chat.threadMinimalMode = false;
+        f.seed.upsertTurn(1, TuiTurnState_Done, 3);
+        f.seed.upsertBlock(1, "query", "1#q", TuiBlockKind_Prose, TuiBlockStatus_None, "user",
+                           "sweep the tree");
+        f.seed.upsertBlock(1, "content#0", "1#0", TuiBlockKind_Prose, TuiBlockStatus_None,
+                           "assistant", "the tree has 3 files", nullptr, 1200);
+        f.state.chat.groupPins[1] = true; // a settled group folds by default
+        const Grid g = f.draw();
+        const std::string shut =
+            std::string(ui::icon(ui::Icon::DisclosureClosed, ui::GlyphSet::Glyphs));
+        check(g.contains(shut + " 1.2 s  the tree has 3 files"),
+              "a content-only batch previews its first line");
+    }
+    { // A6: a failed call marks the folded header (FR-9, FR-13).
+        ThreadFixture f;
+        f.state.chat.threadMinimalMode = false;
+        f.seed.upsertTurn(1, TuiTurnState_Done, 3);
+        f.seed.upsertBlock(1, "query", "1#q", TuiBlockKind_Prose, TuiBlockStatus_None, "user",
+                           "sweep the tree");
+        f.seed.upsertBlock(1, "content#0", "1#0", TuiBlockKind_Prose, TuiBlockStatus_None,
+                           "assistant", "listing the tree", nullptr, 900);
+        f.seed.upsertBlock(1, "tool#0", "1#0", TuiBlockKind_Tool, TuiBlockStatus_Failed, nullptr,
+                           "boom", "bash", 1100);
+        f.state.chat.groupPins[1] = true;
+        const Grid g = f.draw();
+        const std::string shut =
+            std::string(ui::icon(ui::Icon::DisclosureClosed, ui::GlyphSet::Glyphs));
+        check(g.contains(shut + " 900 ms - [bash] FAIL"), "a failed call marks the folded header");
+    }
+    { // A7: an owner with no surviving child is absent (DD-15).
+        ThreadFixture f;
+        f.state.chat.threadMinimalMode = false;
+        f.seed.upsertTurn(1, TuiTurnState_Done, 2);
+        f.seed.upsertBlock(1, "query", "1#q", TuiBlockKind_Prose, TuiBlockStatus_None, "user",
+                           "sweep the tree");
+        f.seed.upsertBlock(1, "content#0", "1#0", TuiBlockKind_Prose, TuiBlockStatus_None,
+                           "assistant", "", nullptr, 900); // a body-less content row
+        f.state.chat.groupPins[1] = true;
+        const Grid g = f.draw();
+        check(!g.contains("AGENT") && !g.contains("WORK"),
+              "an owner with no surviving child is absent");
+    }
+    {                    // B8: minimal keeps the live content row and draws no owner row (FR-5).
+        ThreadFixture f; // minimal is the factory default
+        f.seed.runStart("what is the answer");
+        f.seed.content("The answer is still arriving. A second paragraph, so the body has more "
+                       "than one line.");
+        const Grid g = f.draw();
+        check(g.contains("The answer is still arriving") && !g.contains("AGENT"),
+              "minimal keeps the live content row and draws no owner row");
+    }
+    { // B9: the live content row disappears when the turn closes (§4.5).
+        ThreadFixture f;
+        f.seed.runStart("what is the answer");
+        f.seed.content("The answer is still arriving.");
+        const bool drawnLive = f.draw().contains("The answer is still arriving");
+        f.seed.upsertTurn(1, TuiTurnState_Done, 1); // the turn closes
+        const bool drawnDone = f.draw().contains("The answer is still arriving");
+        check(drawnLive && !drawnDone, "the content row disappears when the turn closes");
+    }
+    { // B10: neither the shadow line nor the chips line ever draws in maximal.
+        ThreadFixture f;
+        buildMaxLongLive(f);
+        const Grid g = f.draw();
+        check(rowsWith(g, "[execute_command]") == 1 && rowsWith(g, "Thinking") == 1,
+              "neither the shadow line nor the chips line ever draws in maximal");
+    }
+    { // C11: a hidden block weighs 0 and draws nothing (D3, DD-12's default).
+        ThreadFixture f;
+        f.state.chat.threadMinimalMode = false;
+        f.seed.runStart("sweep the tree");
+        f.seed.tool("bash", "listing", TuiBlockStatus_Ok, "42 lines", 1100);
+        store::TypedBlock card = f.state.chat.typedTurns.blockAt(1, 1);
+        card.flags |= store::kBlockFlagHidden;
+        f.state.chat.typedTurns.blockUpsert(card);
+        const Grid g = f.draw();
+        check(tui::store::stepCount(f.state.chat.typedTurns, 1) == 0 && !g.contains("bash") &&
+                  !g.contains("[bash]"),
+              "a hidden block weighs 0 and draws nothing");
+    }
+    { // D16: a re-opened settled batch shows its content with its thinking and
+      // cards folded (§4.6's fourth art) - the folded children draw their bare
+      // headers, never their bodies.
+        ThreadFixture f;
+        f.state.chat.threadMinimalMode = false;
+        f.seed.upsertTurn(1, TuiTurnState_Done, 5);
+        f.seed.upsertBlock(1, "query", "1#q", TuiBlockKind_Prose, TuiBlockStatus_None, "user",
+                           "sweep the tree");
+        f.seed.upsertBlock(1, "reasoning#0", "1#0", TuiBlockKind_Reasoning, TuiBlockStatus_None,
+                           nullptr, "reading the layout", nullptr, 0);
+        f.seed.upsertBlock(1, "content#0", "1#0", TuiBlockKind_Prose, TuiBlockStatus_None,
+                           "assistant", "moving the loader", nullptr, 4100);
+        f.seed.upsertBlock(1, "tool#0", "1#0", TuiBlockKind_Tool, TuiBlockStatus_Ok, nullptr,
+                           "ls -R", "bash", 1100);
+        f.seed.upsertBlock(1, "tool#1", "1#0", TuiBlockKind_Tool, TuiBlockStatus_Ok, nullptr,
+                           "grep -r", "grep", 1200);
+        f.state.chat.groupPins[1] = true; // the group folds on a settled default
+        const Grid folded = f.draw();
+        const std::string shut =
+            std::string(ui::icon(ui::Icon::DisclosureClosed, ui::GlyphSet::Glyphs));
+        const int owner = rowOfSub(folded, "4.1 s - [bash] [grep]");
+        const auto clickRow = [&](int y) {
+            f.draw(true, [y](ImGuiIO& in) { in.AddMousePosEvent(5.0f, static_cast<float>(y)); });
+            f.draw(true, [](ImGuiIO& in) { in.AddMouseButtonEvent(0, true); });
+            f.draw(true, [](ImGuiIO& in) { in.AddMouseButtonEvent(0, false); });
+            return f.draw(true);
+        };
+        const Grid opened = owner >= 0 ? clickRow(owner) : folded;
+        check(owner >= 0 && opened.contains(shut + " Thinking") &&
+                  opened.contains(shut + " TOOL  bash") && opened.contains("moving the loader") &&
+                  !opened.contains("reading the layout"),
+              "a re-opened settled batch shows its content with thinking and cards folded");
     }
 }
 

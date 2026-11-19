@@ -876,8 +876,15 @@ model::BlockDesc ThreadStoreAdapter::blockAt(size_t k, std::size_t b) const {
     // Every row previews something: a tool card its tool name (set in the
     // switch), every other row its body's first line. Thinking has no preview:
     // its label is the count only and its open body is the full text (D3).
-    if (block->kind != model::BlockKind::ToolStep && block->kind != model::BlockKind::Thinking)
-        out.summary = oneLine(block->typedBody);
+    // The owner's preview is the batch's own face (§7.3.7): the chips when the
+    // batch has calls, the content's first line when it has none - an owner has
+    // no body of its own to preview (DD-13), and a batch with calls keeps the
+    // summary empty, the chips carrying its face.
+    if (block->kind != model::BlockKind::ToolStep && block->kind != model::BlockKind::Thinking) {
+        out.summary = block->ownsBatch && !entry.batches[block->batch].hasAnyCall
+                          ? oneLine(entry.batches[block->batch].contentBody)
+                          : oneLine(block->typedBody);
+    }
     // A card's body room is the args text OR its RESULT rows: an
     // empty-args card with a result still opens onto the result lines, so
     // `hasBody` covers both - a body-less, result-less card (a Cancelled one)
