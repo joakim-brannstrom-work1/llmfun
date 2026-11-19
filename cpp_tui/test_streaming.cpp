@@ -6,8 +6,9 @@
 //
 //   1. the sources   the streaming state is the frame's (`refreshStreamClock` is called once per
 //                    frame in `views/shell.cpp`), no view names a v4 type, a profile flag or a
-//                    display size, and the bounded window counts the *stored* groups
-//                    (`storedGroupCount`).
+//                    display size, the bounded window counts the *stored* groups
+//                    (`storedGroupCount`), and no production source names a retired fold symbol
+//                    or a pipeline literal (the gate, a closed file list).
 //   2. the clock     a fake clock drives every number: the answer's elapsed time and the
 //                    reasoning's duration (0 while it is still reasoning, frozen when the answer
 //                    begins).
@@ -462,6 +463,42 @@ void checkSource() {
     if (readWholeFile(dir + "/views/shell.cpp", shell))
         check(shell.find("refreshStreamClock") != std::string::npos,
               "the frame layer derives the live answer's clock once per frame");
+}
+
+// The gate (task 22): a retired fold symbol or a wire literal never returns to
+// the production tree. Production sources only: a fixture may name a hidden
+// tool (that is what a fixture is for), a shipped source may not - so the scan
+// is this closed file list, never a recursive walk. A new file needs a new row
+// here: the list is the set of files where these tokens last lived - the
+// paired headers and the rest of the production tree are a follow-up wave's
+// extension, not this gate's closure. `groupMinimal` is on the list because
+// the split into `groupOpen`/`groupStyleIsMinimal` is the point (DD-14) - a
+// returning `groupMinimal` would silently re-conflate style with openness.
+void checkRetiredNames() {
+    const std::string dir = TEST_STREAMING_SOURCE_DIR;
+    const char* kProduction[] = {"store/thread_store.cpp",
+                                 "store/thread_store.h",
+                                 "store/typed_thread_store.cpp",
+                                 "store/typed_thread_store.h",
+                                 "views/thread.cpp",
+                                 "views/blocks.cpp",
+                                 "views/palette.cpp",
+                                 "model/block.h",
+                                 "tui.h",
+                                 "tui_api.cpp"};
+    const char* kRetired[] = {
+        "thinkingOpen",     "batchTools", "groupOverrides", "openWorkGroups",  "typedRowOpen_",
+        "kHiddenToolNames", "task_done",  "taskDone",       "pipeline_output", "groupMinimal"};
+    for (const char* file : kProduction) {
+        std::string source;
+        const bool readable = readWholeFile(dir + "/" + file, source);
+        check(readable && !source.empty(), std::string("readable: ") + file);
+        if (!readable || source.empty())
+            continue;
+        for (const char* token : kRetired)
+            check(source.find(token) == std::string::npos,
+                  std::string(file) + " names no retired token (" + token + ")");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,6 +1072,7 @@ int main(int argc, char** argv) {
         [](const ui::Metrics&) {}); // warm-up: the text backend builds its atlas on the first frame
 
     checkSource();
+    checkRetiredNames();
     checkClock();
     checkThrottle();
     checkHeader();

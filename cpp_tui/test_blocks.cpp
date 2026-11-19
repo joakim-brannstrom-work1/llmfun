@@ -1836,9 +1836,10 @@ void checkBodylessBlocks() {
         }
     }
 
-    // The live answer's body before its first character: the typed store's empty
-    // content block draws no row of its own, and minimal folds the work rows -
-    // the opened group's reasoning row carries the live turn until text arrives.
+    // The live answer's body before its first character: the projection drops a
+    // body-less content row outright (D6), so the empty segment cannot reach the
+    // live edge and draw a bare `AGENT` row under the folded header - the
+    // group's reasoning row carries the live turn until text arrives.
     {
         ThreadFixture fixture;
         fixture.addStream(MsgKind::Assistant, "", "reasoning only");
