@@ -315,6 +315,14 @@ public:
     bool expanded(size_t id) const;
     void setExpanded(size_t id, bool open);
 
+    /// Forget every pin (task 24, DD-6): the fold's escape hatch. The pins are
+    /// absolute, so a user who pinned twenty rows needs one action that clears
+    /// them all at once - and it *clears*, never writes: writing `false` into
+    /// every live row's pin would pin against the default and defeat the fold
+    /// the user asked to restore. The next frame draws every group on its mode
+    /// default. Unbound, a no-op.
+    void collapseAll();
+
     /// The height `id` is expected to need, in the active profile's units
     /// (cells / px): the cached drawn height once the group has been rendered in
     /// *this* box, otherwise `lineCountEstimate` rows. A hint for paging and

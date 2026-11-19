@@ -655,6 +655,60 @@ int main(int argc, char** argv) {
         tuiSetTurns(state, &wt, 1, &wb, 1);
         tuiDestroyState(state);
     }
+    // --- Task 24: the upsert prunes dead pins, and `collapseAll` forgets them all ---
+    {
+        TuiState* state = tuiCreateState();
+        check(state != nullptr && state->inner != nullptr,
+              "task 24: tuiCreateState succeeds for the prune cases");
+        auto& groupPins = state->inner->chat.groupPins;
+        auto& rowPins = state->inner->chat.rowPins;
+        TuiTurn wt{};
+        wt.state = 1;
+        wt.messageCount = 1;
+        wt.reserved = 0;
+        wt.id = 1;
+        tuiTurnUpsert(state, &wt);
+        // Pin the oldest turn before it is the one capacity evicts.
+        groupPins[1] = true;
+        rowPins[1]["q"] = true;
+        for (std::int64_t id = 2; id <= static_cast<std::int64_t>(TypedThreadStore::kMaxTurns) + 1;
+             ++id) {
+            wt.id = id;
+            tuiTurnUpsert(state, &wt);
+        }
+        check(state->inner->chat.typedTurns.turnCount() == TypedThreadStore::kMaxTurns,
+              "task 24: the upserts filled the window to the cap");
+        check(groupPins.count(1) == 0 && rowPins.count(1) == 0,
+              "task 24: the evicted turn's pins are pruned by the upsert");
+        // The pins of a turn the store still holds survive the same upserts.
+        groupPins[TypedThreadStore::kMaxTurns] = true;
+        rowPins[TypedThreadStore::kMaxTurns]["q"] = true;
+        wt.id = static_cast<std::int64_t>(TypedThreadStore::kMaxTurns);
+        tuiTurnUpsert(state, &wt);
+        check(groupPins.count(wt.id) == 1 && rowPins.count(wt.id) == 1,
+              "task 24: a live turn's pins survive its own upsert");
+        tuiDestroyState(state);
+    }
+    {
+        tui::TuiState state;
+        tui::store::ThreadStoreAdapter thread(state);
+        thread.bind(state);
+        state.chat.typedTurns.turnUpsert(turn(42));
+        state.chat.threadMinimalMode = true; // the default folds: what a cleared pin falls back to
+        thread.setExpanded(42, true);
+        state.chat.rowPins[42]["q"] = true;
+        check(thread.expanded(42), "task 24: the pinned group draws open");
+        thread.collapseAll();
+        check(state.chat.groupPins.empty() && state.chat.rowPins.empty(),
+              "task 24: collapseAll forgets every pin");
+        check(!thread.expanded(42),
+              "task 24: ...so the next frame draws on the mode default, folded");
+        check(state.chat.groupPins.empty() && state.chat.rowPins.empty(),
+              "task 24: collapseAll clears rather than writes - no pin against the default");
+        tui::store::ThreadStoreAdapter unbound;
+        unbound.collapseAll(); // a no-op, never a crash
+        check(!unbound.bound(), "task 24: collapseAll on an unbound adapter is a no-op");
+    }
 
     // --- A gone turn takes its caches with it -----------------------------------
     {

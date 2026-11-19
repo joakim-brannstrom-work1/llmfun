@@ -654,8 +654,8 @@ void scenarioOpenClose() {
     for (const char* label : {"New session", "Focus composer", "Toggle rail", "Toggle inspector"})
         checkGrid(findRowIn(open, label, rect) >= 0,
                   std::string("S1: action row '") + label + "' is drawn");
-    checkGrid(findRowIn(open, "ALL 24", rect) >= 0,
-              "S1: the title row counts every row of every section (13 actions + 7 command lines "
+    checkGrid(findRowIn(open, "ALL 25", rect) >= 0,
+              "S1: the title row counts every row of every section (14 actions + 7 command lines "
               "+ the Raw Log + 3 sessions)");
     checkGrid(findRowIn(open, "Esc close", rect) >= 0, "S1: the hint row lists the keys");
     checkGrid(countResultRows(open, rect) == 5, "S1: the viewport shows 5 result rows at 80x24");
@@ -907,14 +907,14 @@ void scenarioGroups() {
     resetClean();
     openPalette();
     CellRect rect = paletteRect();
-    checkGrid(findRowIn(grid(), "ALL 24", rect) >= 0,
-              "S4: the title row starts on ALL with every row (13 actions + 7 commands + raw log + "
+    checkGrid(findRowIn(grid(), "ALL 25", rect) >= 0,
+              "S4: the title row starts on ALL with every row (14 actions + 7 commands + raw log + "
               "3 sessions)");
 
     pressKey(ImGuiKey_Tab);
     check(g_state.palette.groupIndex == 1, "S4: Tab moved to the ACTIONS group");
     rect = paletteRect();
-    checkGrid(findRowIn(grid(), "ACTIONS 13", rect) >= 0, "S4: the title row shows ACTIONS 13");
+    checkGrid(findRowIn(grid(), "ACTIONS 14", rect) >= 0, "S4: the title row shows ACTIONS 14");
     checkGrid(findRowIn(grid(), "Alpha refactor", rect) < 0, "S4: session rows are filtered out");
 
     pressKey(ImGuiKey_Tab);
@@ -942,7 +942,7 @@ void scenarioGroups() {
     pressKey(ImGuiKey_Tab);
     check(g_state.palette.groupIndex == 0, "S4: the cycle wraps to ALL after the last group");
     rect = paletteRect();
-    checkGrid(findRowIn(grid(), "ALL 24", rect) >= 0, "S4: the title row is back on ALL");
+    checkGrid(findRowIn(grid(), "ALL 25", rect) >= 0, "S4: the title row is back on ALL");
 
     pressShiftTab();
     check(g_state.palette.groupIndex == 4, "S4: Shift+Tab steps back to DEVELOPER");

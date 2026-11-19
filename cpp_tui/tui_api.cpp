@@ -887,6 +887,23 @@ void tuiTurnUpsert(TuiState* state, const TuiTurn* turn) {
     t.messageCount = turn->messageCount;
     state->inner->chat.typedTurns.turnUpsert(t);
     state->inner->chat.typedTurns.evictForCapacity(turn->id);
+    // The eviction took whole turns out of the store; their pins would be memory
+    // kept for nothing (DD-6, M3) - a pin for a turn nobody can draw. Prune by
+    // turn id, never by row index: the row list churns while a response streams.
+    auto& rowPins = state->inner->chat.rowPins;
+    for (auto it = rowPins.begin(); it != rowPins.end();) {
+        if (state->inner->chat.typedTurns.turnById(it->first) == nullptr)
+            it = rowPins.erase(it);
+        else
+            ++it;
+    }
+    auto& groupPins = state->inner->chat.groupPins;
+    for (auto it = groupPins.begin(); it != groupPins.end();) {
+        if (state->inner->chat.typedTurns.turnById(it->first) == nullptr)
+            it = groupPins.erase(it);
+        else
+            ++it;
+    }
 }
 
 void tuiBlockUpsert(TuiState* state, const TuiBlock* block) {

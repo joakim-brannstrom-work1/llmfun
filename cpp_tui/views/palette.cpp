@@ -110,6 +110,11 @@ constexpr const char* kIdCopyAnswer = "actions.copyLastAnswer";
 constexpr const char* kIdStopRun = "actions.stopRun";
 constexpr const char* kIdQuit = "actions.quit";
 constexpr const char* kIdLoadEarlier = "actions.loadEarlier";
+/// The fold's escape hatch (task 24, DD-6). The pins are absolute, so one row is
+/// what forgets them all - and the row is the action's only keyboard path: no
+/// chord, because a new one would collide with the terminal's own bytes
+/// (`doc/ui_keys.md`).
+constexpr const char* kIdCollapseAll = "actions.collapseAll";
 constexpr const char* kIdToggleRail = "actions.toggleRail";
 constexpr const char* kIdToggleInspector = "actions.toggleInspector";
 /// Focus mode (task 43). The grid's only way in: `F11` is a function key no terminal delivers and
@@ -572,6 +577,14 @@ bool performRow(const PaletteItem& item, PaletteState& p, TuiState& state) {
         // three entry points).
         requestEarlierPage(state.ui);
         return true;
+    case model::Action::CollapseAll:
+        // The fold's escape hatch (task 24, DD-6): the pins are absolute, so one action
+        // forgets them all - the same call the keymap's dispatch makes, through the adapter
+        // that owns the maps. The palette row is the action's only keyboard path (a new
+        // chord would collide with the terminal's own bytes), and clearing is right in every
+        // state: nothing here can disable a fold the user asked to restore.
+        state.threadAdapter.collapseAll();
+        return true;
     case model::Action::ToggleInspector:
         // One rule, one home: the same `model::toggleInspector()` the `Ctrl+O` row performs, with
         // the same *drawn* state as its input (`state.inspector.open`) - so the palette and the
@@ -825,6 +838,15 @@ std::vector<PaletteItem> paletteActions(const TuiState& state, const std::string
     items.push_back({kIdLoadEarlier, kGroupActions, "Load earlier",
                      "Show the groups older than the window (PgUp)", threadHiddenGroups(state) != 0,
                      model::Action::LoadEarlier});
+    // The fold's escape hatch (task 24, DD-6): the pins are absolute, so a user
+    // who pinned twenty rows needs one action that forgets them all. Always
+    // enabled: clearing an empty set of pins is the same no-op the fold asks for,
+    // and there is no state where forgetting pins is wrong. The palette is the
+    // action's keyboard path (`Ctrl+K`, type, Enter) - no chord, because a new
+    // one would collide with the terminal's own bytes (`doc/ui_keys.md`).
+    items.push_back({kIdCollapseAll, kGroupActions, "Collapse all",
+                     "Fold every group back onto its mode's default", true,
+                     model::Action::CollapseAll});
     items.push_back(
         {kIdQuit, kGroupActions, "Quit", "Close the UI (Ctrl+Q)", true, model::Action::Quit});
     // The Raw Log (task 33). Its own group, because the design keeps the developer surface out

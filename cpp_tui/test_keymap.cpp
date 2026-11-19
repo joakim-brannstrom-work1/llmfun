@@ -3,8 +3,9 @@
 // Task 11's contract for quit and key hygiene (D-KEYMAP / D-ESC):
 //
 //   * one binding table, focus-aware: no two rows claim the same (chord, scope)
-//     pair, every `Action` of the registry is reachable through the table or
-//     through the `Esc` chain, a plain key never fires while a text field has
+//     pair, every `Action` of the registry is reachable through the table,
+//     through the `Esc` chain, or through its palette row, a plain key never
+//     fires while a text field has
 //     the keyboard, and an overlay is a trap except for the chords it lists
 //     itself;
 //   * `Ctrl+Q` quits, one press per quit, exactly one hint line in the UI log and
@@ -48,6 +49,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <string>
 #include <vector>
@@ -135,6 +137,10 @@ bool findDuplicatePair(const model::Keymap& keymap, std::string& what) {
 }
 
 void checkRegistry() {
+    // The harness state (defined with the interaction section below): the
+    // palette row walk needs a live state to read, and `paletteActions` answers
+    // from the model alone, so an unrendered state is enough.
+    extern llmfun::tui::TuiState g_state;
     g_phase = "R1 collisions";
     std::string what;
     check(!findDuplicatePair(model::defaultKeymap(), what),
@@ -159,6 +165,13 @@ void checkRegistry() {
                 reachable[static_cast<int>(action)] = true;
         }
     }
+    // The palette is the third entry point (task 24, D-PALETTE): an action with
+    // no chord and no escape step - `Collapse all` - is reachable through its
+    // row alone, so the table walk above would report the contract violated.
+    std::deque<std::string> paletteIds;
+    for (const views::PaletteItem& item : views::paletteActions(g_state, std::string(), paletteIds))
+        if (item.action != model::Action::None)
+            reachable[static_cast<int>(item.action)] = true;
     const model::EscapeContext escapeContexts[] = {{true, false, false},
                                                    {false, true, false},
                                                    {false, false, true},

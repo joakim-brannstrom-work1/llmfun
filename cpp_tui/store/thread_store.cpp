@@ -742,6 +742,18 @@ void ThreadStoreAdapter::setExpanded(size_t id, bool open) {
     chat_->groupPins[static_cast<std::int64_t>(id)] = open;
 }
 
+void ThreadStoreAdapter::collapseAll() {
+    // The escape hatch (task 24, DD-6): the pins are absolute, so the user needs
+    // one action that forgets them all. It writes no status and stores no
+    // default - it only clears. `expandedGroup_` is the last-toggle latch, and
+    // a fold that just emptied has no anchor to offer the next frame.
+    if (!bound())
+        return;
+    chat_->rowPins.clear();
+    chat_->groupPins.clear();
+    expandedGroup_ = 0;
+}
+
 float ThreadStoreAdapter::measureHint(size_t id) const {
     const Entry* entry = entryFor(id);
     if (entry == nullptr || !bound())
