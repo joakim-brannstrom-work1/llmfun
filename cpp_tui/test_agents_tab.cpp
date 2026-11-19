@@ -20,8 +20,9 @@
 //   5. the interaction. A click drills into a lane, `m`/right-click opens the lane menu, the
 //      menu's `Stop lane` freezes one lane, and `Stop all` asks before it stops the run
 //      through the existing stop path (`tuiRequestCancel` -> `/stop`);
-//   6. the drill-down. The thread shows only that agent's transcript with `Back to main`, and
-//      the main transcript comes back byte-identical;
+//   6. the drill-down. The thread shows only that agent's transcript with `Back to main`, the
+//      main transcript comes back byte-identical, and the drill-down's mount draws the same row
+//      shape as the main thread's for the same turn (the second mount stays identical);
 //   7. the layout. The rail and the inspector are both up at 100x30 and at 1280x820;
 //   8. the goldens: lanes running, a failed lane, and the transcript drill-down.
 //
@@ -1550,6 +1551,168 @@ void checkStructuredToolRows() {
 }
 
 // ---------------------------------------------------------------------------
+// 9c. The second mount stays identical: the drill-down inherits the fold (R-7)
+// ---------------------------------------------------------------------------
+
+/// One seeded turn, the same on both mounts: a settled exchange whose batch
+/// carries thinking, two calls (one failed) and the answer, with the group and
+/// its owner row pinned open. The pins are absolute (DD-6) and live on the
+/// chat they are set on alone - the caller hands over one `ChatTab` at a time,
+/// so each mount folds by its own store's pins and never by another's.
+void seedFoldTurn(tui::ChatTab& chat) {
+    using llmfun::tui::store::TypedBlock;
+    using llmfun::tui::store::TypedTurn;
+    TypedTurn turn;
+    turn.id = 1;
+    turn.state = TuiTurnState_Done;
+    turn.messageCount = 2;
+    chat.typedTurns.turnUpsert(turn);
+    TypedBlock query;
+    query.turnId = 1;
+    query.id = "query";
+    query.batchId = "1#q";
+    query.kind = TuiBlockKind_Prose;
+    query.meta = "user";
+    query.body = "get the parser building";
+    chat.typedTurns.blockUpsert(std::move(query));
+    TypedBlock thinking;
+    thinking.turnId = 1;
+    thinking.id = "reasoning#0";
+    thinking.batchId = "1#0";
+    thinking.kind = TuiBlockKind_Reasoning;
+    thinking.flags = TuiBlockFlag_Collapsible;
+    thinking.body = "the parser's invariants, one by one";
+    chat.typedTurns.blockUpsert(std::move(thinking));
+    TypedBlock content;
+    content.turnId = 1;
+    content.id = "content#0";
+    content.batchId = "1#0";
+    content.kind = TuiBlockKind_Prose;
+    content.meta = "assistant";
+    content.body = "the parser builds again";
+    chat.typedTurns.blockUpsert(std::move(content));
+    TypedBlock read;
+    read.turnId = 1;
+    read.id = "call-1";
+    read.batchId = "1#0";
+    read.kind = TuiBlockKind_Tool;
+    read.status = TuiBlockStatus_Ok;
+    read.flags = TuiBlockFlag_Collapsible | TuiBlockFlag_DefaultOpen | TuiBlockFlag_Selectable;
+    read.title = "read_file";
+    read.meta = "read 120 lines";
+    read.body = "src/app.d";
+    read.durationMs = 800;
+    chat.typedTurns.blockUpsert(std::move(read));
+    TypedBlock write;
+    write.turnId = 1;
+    write.id = "call-2";
+    write.batchId = "1#0";
+    write.kind = TuiBlockKind_Tool;
+    write.status = TuiBlockStatus_Failed;
+    write.flags = TuiBlockFlag_Collapsible | TuiBlockFlag_DefaultOpen | TuiBlockFlag_Selectable;
+    write.title = "write_file";
+    write.meta = "disk full";
+    write.body = "out.txt";
+    write.durationMs = 2'400;
+    chat.typedTurns.blockUpsert(std::move(write));
+    // The answer rides its response's batch (DD-4): the batch's content child
+    // is the answer's to suppress (DD-9).
+    TypedBlock answer;
+    answer.turnId = 1;
+    answer.id = "answer";
+    answer.batchId = "1#0";
+    answer.kind = TuiBlockKind_Answer;
+    answer.body = "the parser builds again";
+    chat.typedTurns.blockUpsert(std::move(answer));
+    chat.groupPins[1] = true;
+    chat.rowPins[1]["batch#1#0"] = true;
+}
+
+/// The same turn, drawn twice: the main thread and the drill-down. Compare the
+/// *rows*, not pixels: kind, label, visible and expanded per row - the shape
+/// the fold produces.
+std::vector<model::BlockDesc> shapeOf(const llmfun::tui::store::ThreadStoreAdapter& a,
+                                      std::size_t group) {
+    std::vector<model::BlockDesc> out;
+    for (std::size_t b = 0; b < a.blockCount(group); ++b)
+        out.push_back(a.blockAt(group, b));
+    return out;
+}
+
+bool sameShape(const std::vector<model::BlockDesc>& mainRows,
+               const std::vector<model::BlockDesc>& drillRows) {
+    if (mainRows.size() != drillRows.size())
+        return false;
+    for (std::size_t r = 0; r < mainRows.size(); ++r) {
+        const model::BlockDesc& a = mainRows[r];
+        const model::BlockDesc& b = drillRows[r];
+        if (a.kind != b.kind || a.label != b.label || a.visible != b.visible ||
+            a.expanded != b.expanded || a.ownsBatch != b.ownsBatch ||
+            a.bodySegment != b.bodySegment)
+            return false;
+    }
+    return true;
+}
+
+void checkDrilldownShape() {
+    const int w = 100;
+    const int h = 30;
+    tui::TuiState state;
+    state.readyStatus = false;
+    state.ui.prefs.inspectorOpen = 1;
+    state.ui.prefs.tab = model::InspectorTab::Agents;
+    state.ui.view = model::ThreadView::Ready;
+    state.ui.agents.push_back(lane("coder", model::kAgentStateRunning, true, "read_file", 4200,
+                                   31'000, "the coder's private notes"));
+    tui::AgentStream stream;
+    stream.agentId = "coder";
+    seedFoldTurn(state.chat);  // the main mount's store
+    seedFoldTurn(stream.chat); // the drill-down's own store, the same turn
+    state.left.agents.push_back(stream);
+
+    // The main mount, drawn and read through its adapter.
+    Grid mainGrid;
+    shellFrameGrid(state, w, h, mainGrid);
+    check(state.threadAdapter.bound(), "premise: the main mount is bound");
+    check(state.threadAdapter.groupCount() == 1, "premise: the seed made one group");
+    const std::vector<model::BlockDesc> mainShape = shapeOf(state.threadAdapter, 0);
+    bool ownerDraws = false;
+    for (const model::BlockDesc& row : mainShape)
+        if (row.ownsBatch && row.visible)
+            ownerDraws = true;
+    check(ownerDraws, "premise: the pinned group's owner row is part of the shape");
+
+    // The drill-down, drawn through its own adapter over the agent's store.
+    model::focusAgentLane(state.ui, "coder");
+    Grid agentGrid;
+    shellFrameGrid(state, w, h, agentGrid);
+    check(state.agentThreadAdapter.bound(), "premise: the drill-down's mount is bound");
+    check(state.agentThreadAdapter.groupCount() == 1, "the drill-down sees the same groups");
+    const std::vector<model::BlockDesc> drillShape = shapeOf(state.agentThreadAdapter, 0);
+    check(sameShape(mainShape, drillShape),
+          "the drill-down draws the same shape as the main thread (kind, label, visible, "
+          "expanded, ownsBatch, bodySegment)");
+
+    // A pin set on the main mount lives on the main mount's `ChatTab` alone: the
+    // drill-down holds a different store, so its rows cannot move. R-7's
+    // mitigation is exactly this check - a divergence fails here, not by eye.
+    state.chat.rowPins[1]["batch#1#0"] = false;
+    state.ui.focusedAgent.clear();
+    Grid repinned;
+    shellFrameGrid(state, w, h, repinned);
+    bool ownerFolded = false;
+    for (const model::BlockDesc& row : shapeOf(state.threadAdapter, 0))
+        if (row.ownsBatch && row.visible && !row.expanded)
+            ownerFolded = true;
+    check(ownerFolded, "premise: the main mount's pin folded its owner row");
+    model::focusAgentLane(state.ui, "coder");
+    Grid pinnedAgent;
+    shellFrameGrid(state, w, h, pinnedAgent);
+    check(sameShape(drillShape, shapeOf(state.agentThreadAdapter, 0)),
+          "a pin set on the main mount does not leak into the drill-down");
+}
+
+// ---------------------------------------------------------------------------
 // 10. The rail and the inspector, standing at the same time
 // ---------------------------------------------------------------------------
 
@@ -1622,6 +1785,14 @@ std::string goldenText(const Scene& scene) {
     if (scene.layout == 2) {
         state.ui.focusedAgent = "coder";
         state.ui.view = model::ThreadView::Ready;
+        // The drill-down draws the agent's store through its own mount (the
+        // lane mirror is only the no-store fallback): the seeded, pinned-open
+        // turn is what puts the fold's rows - the owner row among them - on
+        // the screen this golden pins.
+        tui::AgentStream stream;
+        stream.agentId = "coder";
+        seedFoldTurn(stream.chat);
+        state.left.agents.push_back(stream);
     }
 
     // Two frames, and the second is captured: every harness shares one ImGui context, so a
@@ -1748,6 +1919,7 @@ int main(int argc, char** argv) {
     checkDrilldown();
     checkDrilldownMount();
     checkStructuredToolRows();
+    checkDrilldownShape();
     checkRailAndInspector();
     checkGoldens(update);
 
