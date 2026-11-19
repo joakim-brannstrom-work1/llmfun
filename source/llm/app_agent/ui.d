@@ -782,15 +782,18 @@ package final class TypedStreamMessageUpdater : IStreamCallback {
                 contextUsed: stat.context, contextMax: contextSize, compactAt: (contextSize * 9) / 10,
                 tokensPerSecond: stat.predictedPerSecond, model: modelName));
 
+        // One order on the wire too (design §7.6, DD-5): reasoning, then
+        // content, then the calls - the replay walk's order. Ids, batches
+        // and statuses are unchanged; the store merges in place either way.
+        if (!msg.reasoning.empty)
+            uiMsg.blockUpsert(makeBlockData(ctx.turnId, reasoningBlockId(ctx.batchIndex), ctx.batchId,
+                    TuiBlockKind_Reasoning, TuiBlockStatus_None,
+                    TuiBlockFlag_Collapsible, null, null, msg.reasoning, 0));
         // The batch's content-so-far block: same id/batchId every tick, so the
         // store merges in place and the last tick before the step walk wins.
         uiMsg.blockUpsert(makeBlockData(ctx.turnId, contentBlockId(ctx.batchIndex),
                 ctx.batchId, TuiBlockKind_Prose, TuiBlockStatus_None, 0, null,
                 ctx.role, msg.content, 0));
-        if (!msg.reasoning.empty)
-            uiMsg.blockUpsert(makeBlockData(ctx.turnId, reasoningBlockId(ctx.batchIndex), ctx.batchId,
-                    TuiBlockKind_Reasoning, TuiBlockStatus_None,
-                    TuiBlockFlag_Collapsible, null, null, msg.reasoning, 0));
 
         foreach (tool; tools.filter!(a => !a.id.empty)) {
             const body_ = summarizedCallBody(tool.arguments);

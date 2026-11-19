@@ -3719,12 +3719,15 @@ unittest {
             [StreamToolCall(toolName: "grep_files", arguments: `{`, id: "c1")], stat);
     updater.messageUpdate(StreamMessage("assistant", "C0", "T0"), [], stat);
     updater.streamMessageDone();
-    // blockUpserts: query, content#0, reasoning#0, c1 pending,
-    // content#0 + reasoning#0 (final tick, same ids), c1 running.
+    // blockUpserts: query, reasoning#0, content#0, c1 pending,
+    // reasoning#0 + content#0 (final tick, same ids), c1 running.
     assert(sink.blockUpserts.length == 7);
-    assert(sink.blockUpserts[1].id == "content#0" && sink.blockUpserts[1].body == "C");
+    assert(sink.blockUpserts[1].id == "reasoning#0"
+            && sink.blockUpserts[1].kind == TuiBlockKind_Reasoning && sink.blockUpserts[1].body == "T",
+            "the live tick emits reasoning before content (console parity, DD-5)");
     assert(sink.blockUpserts[3].id == "c1" && sink.blockUpserts[3].status == TuiBlockStatus_Pending);
-    assert(sink.blockUpserts[4].id == "content#0" && sink.blockUpserts[4].body == "C0",
+    assert(sink.blockUpserts[4].id == "reasoning#0" && sink.blockUpserts[4].body == "T0");
+    assert(sink.blockUpserts[5].id == "content#0" && sink.blockUpserts[5].body == "C0",
             "the tick upsert replaces in place (same id and batch)");
     assert(sink.blockUpserts[6].id == "c1" && sink.blockUpserts[6].status == TuiBlockStatus_Running,
             "stream-done flips the batch's pending calls to Running");
