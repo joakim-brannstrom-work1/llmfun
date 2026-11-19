@@ -3113,6 +3113,7 @@ unittest {
     assert(first.tokensPerSecond == 38.1,
             "tokensPerSecond is stat.predictedPerSecond, sent raw: "
             ~ first.tokensPerSecond.to!string);
+    assert(first.batch == 0, "the first tick is the run's first batch");
 
     // Two calls in one response: the array arrives in protocol order, so the last element is the
     // newest call - the tool name the row shows.
@@ -3130,6 +3131,7 @@ unittest {
     assert(last.role == "assistant", "the role crosses");
     assert(last.content == "done",
             "the content carries no tool decoration: tool traffic rides the structured rows");
+    assert(last.batch == 0, "no stream-done yet: the whole test is one batch");
 }
 
 @("the pipeline updater closes on the run boundary, not on a batch end") unittest {
@@ -3140,14 +3142,57 @@ unittest {
 
     // The tool loop fires streamMessageDone after every LLM request: a batch
     // end must close nothing, or one run becomes one drill-down group per
-    // batch. The close rides runDone, which fires once per run.
+    // batch. The close rides runDone, which fires once per run. The batch
+    // counter still moves: the payloads carry the batch index (task 27).
+    updater.messageUpdate(StreamMessage(content: "one"), null, ServerStat());
     updater.streamMessageDone();
+    updater.messageUpdate(StreamMessage(content: "two"), null, ServerStat());
     assert(sink.countOf("pipelineStreamDone") == 0,
             "a batch end is not the run boundary: nothing closes on it");
+    assert(sink.laneUpdates[0].batch == 0, "the first batch is batch 0");
+    assert(sink.laneUpdates[1].batch == 1,
+            "stream-done counts the batch: the next response is batch 1");
 
     updater.runDone();
     assert(sink.countOf("pipelineStreamDone") == 1,
             "the run's end closes the agent's turn exactly once");
+
+    // The same updater instance is reused for every run of its node (built once
+    // at build time), and a node re-runs in normal operation - its retry loop,
+    // loop edges. The counter must restart at 0 so the numbers stay "within the
+    // run" as the wire doc says; uniqueness across runs comes from the new
+    // run's new turn, not from the batch number.
+    updater.messageUpdate(StreamMessage(content: "three"), null, ServerStat());
+    assert(sink.countOf("pipelineStreamDone") == 1,
+            "the next run's stream is not closed by the last run's boundary");
+    assert(sink.laneUpdates[2].batch == 0, "the next run counts its batches from 0 again");
+}
+
+@("the pipeline updater tags the step's tool traffic with the finished batch") unittest {
+    import std.json : parseJSON;
+
+    auto sink = new TuiRecordingSink();
+    auto ui = new UiMessenger(sink);
+    auto updater = new PipelineStreamMessageUpdater(ui, 8192, "model-x");
+    updater.setId("coder");
+
+    // The real per-batch order: the response streams (batch N), stream-done
+    // counts it, then the step's tool calls/results emit - tagged with the
+    // finished batch N, so they group under the batch whose stream the
+    // drill-down just saw (the C++ builds batch-scoped ids from it, task 28).
+    auto step = ProcessResult(chat: [
+        Chat.MessageT(ToolMessage("t", parseJSON(`[]`))),
+        Chat.MessageT(ToolResponse("r", "call-1", "grep_files", true))
+    ]);
+    updater.messageUpdate(StreamMessage(content: "thinking out loud"), null, ServerStat());
+    updater.streamMessageDone();
+    updater.stepEvent(step);
+
+    assert(sink.laneUpdates.length == 1 && sink.laneUpdates[0].batch == 0,
+            "the streamed tick is batch 0");
+    assert(sink.toolCalls.length == 0 && sink.toolResults.length == 1, "setup: one result recorded");
+    assert(sink.toolResults[0].batch == 0,
+            "the step's traffic carries the finished batch, not the counter");
 }
 
 @("the pipeline emitter sends each step's tool calls and results as structured rows")
@@ -3173,7 +3218,7 @@ unittest {
         Chat.MessageT(ToolResponse("ok-2", "call-2", "write_file", false))
     ]);
 
-    emitStepToolEvents(ui, "coder", step);
+    emitStepToolEvents(ui, "coder", step, 0);
 
     assert(sink.toolCalls.length == 2,
             "one structured row per tool call: " ~ sink.toolCalls.length.to!string);
@@ -3181,6 +3226,7 @@ unittest {
     assert(sink.toolCalls[0].name == "grep_files", "the call's name travels");
     assert(sink.toolCalls[0].arguments == `{"pattern": "x"}`, "the call's arguments travel");
     assert(sink.toolCalls[0].id == "call-1", "the protocol id travels");
+    assert(sink.toolCalls[0].batch == 0, "the call carries the step's batch index");
     assert(sink.toolCalls[1].name == "write_file"
             && sink.toolCalls[1].id == "call-2", "the second call follows in chat order");
 
@@ -3191,6 +3237,8 @@ unittest {
     assert(sink.toolResults[0].text == "ok-1", "the response's text travels");
     assert(sink.toolResults[1].ok == 0, "a failed response reports ok=0");
     assert(sink.toolResults[1].text == "ok-2");
+    assert(sink.toolResults[0].batch == 0 && sink.toolResults[1].batch == 0,
+            "the responses carry the step's batch index too");
 
     // The lane rows are untouched by the emitter: content updates stay content.
     assert(sink.laneUpdates.length == 0, "the emitter sends no lane content updates");
@@ -3217,7 +3265,7 @@ unittest {
         Chat.MessageT(ToolResponse(big, "c", "write_file", true))
     ]);
 
-    emitStepToolEvents(ui, "coder", step);
+    emitStepToolEvents(ui, "coder", step, 0);
 
     assert(sink.toolCalls.length == 1 && sink.toolResults.length == 1,
             "setup: one call and one response recorded");
@@ -3245,7 +3293,7 @@ unittest {
         Chat.MessageT(ToolResponse("r", "x", "grep_files", true))
     ]);
 
-    emitStepToolEvents(ui, "coder", step);
+    emitStepToolEvents(ui, "coder", step, 0);
 
     assert(sink.toolCalls.length == 0, "no unusable entry emits a row");
     assert(sink.toolResults.length == 1 && sink.toolResults[0].text == "r",

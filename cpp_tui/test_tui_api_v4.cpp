@@ -16,9 +16,9 @@
 //     pinned, a snapshot round-trips into SessionEntry unchanged, and the fields
 //     the ABI must not carry (createdAt, unread, pinned) are absent;
 //   - the pipeline lane fields: PipelineChatMessage's size and offsets are
-//     pinned, the numbers, the tool name, and the rate round-trip into the
-//     lane the Agents tab draws, and `0/0` (no reading) is told apart from
-//     `0/8192` (a real zero);
+//     pinned, the numbers, the tool name, the rate, and the batch index
+//     round-trip into the lane the Agents tab draws, and `0/0` (no reading) is
+//     told apart from `0/8192` (a real zero);
 //   - the drop-chip seams: the two pop-one queues carry each drop's chip id,
 //     the by-id setter no-ops for an unknown id or ordinal, the snapshot
 //     reads the row in creation order with the workarea paths, the clear
@@ -1010,8 +1010,8 @@ void caseSessionRowFields() {
 void casePipelineLaneFields() {
     g_where = "case 1f: PipelineChatMessage lane fields";
 
-    static_assert(sizeof(PipelineChatMessage) == 104,
-                  "PipelineChatMessage is 104 bytes on the 64-bit ABI");
+    static_assert(sizeof(PipelineChatMessage) == 112,
+                  "PipelineChatMessage is 112 bytes on the 64-bit ABI (v16 appended the batch)");
     static_assert(offsetof(PipelineChatMessage, content) == 0, "content keeps offset 0");
     static_assert(offsetof(PipelineChatMessage, reasoning) == 16, "reasoning keeps offset 16");
     static_assert(offsetof(PipelineChatMessage, role) == 32, "role keeps offset 32");
@@ -1024,27 +1024,35 @@ void casePipelineLaneFields() {
     static_assert(offsetof(PipelineChatMessage, contextMax) == 88, "contextMax sits at offset 88");
     static_assert(offsetof(PipelineChatMessage, tokensPerSecond) == 96,
                   "tokensPerSecond sits at offset 96");
+    static_assert(offsetof(PipelineChatMessage, batch) == 104,
+                  "batch is appended at offset 104 (v16)");
     static_assert(sizeof(PipelineChatMessage::contextUsed) == 8 &&
                       sizeof(PipelineChatMessage::contextMax) == 8,
                   "the context numbers are 64-bit");
-    static_assert(TUI_API_VERSION == 15,
+    static_assert(TUI_API_VERSION == 16,
                   "the lane contract changed; bump one version per ABI event");
     static_assert(llmfun::tui::store::kBlockFlagHidden == TuiBlockFlag_Hidden,
                   "the store's flag mirror must track the wire flag it mirrors");
     static_assert(sizeof(SessionItem) == 80, "SessionItem is unaffected by the lane fields");
 
-    // The tool-call pair's wire pins: three Strings for a call. The result's
+    // The tool-call pair's wire pins: three Strings plus the batch for a call.
+    // The result's
     // `int ok` rides between two Strings and pads to the String alignment.
-    static_assert(sizeof(TuiToolCallParam) == 48,
-                  "TuiToolCallParam is three Strings on the 64-bit ABI");
+    static_assert(sizeof(TuiToolCallParam) == 56,
+                  "TuiToolCallParam is three Strings plus the batch on the 64-bit ABI");
     static_assert(offsetof(TuiToolCallParam, name) == 0, "the call's name keeps offset 0");
     static_assert(offsetof(TuiToolCallParam, arguments) == 16, "the arguments sit at offset 16");
     static_assert(offsetof(TuiToolCallParam, id) == 32, "the call id sits at offset 32");
-    static_assert(sizeof(TuiToolResultParam) == 40,
-                  "TuiToolResultParam pads the int to the String alignment (40 bytes)");
+    static_assert(offsetof(TuiToolCallParam, batch) == 48,
+                  "the call's batch is appended at offset 48 (v16)");
+    static_assert(
+        sizeof(TuiToolResultParam) == 48,
+        "TuiToolResultParam pads the int to the String alignment and appends the batch (48 bytes)");
     static_assert(offsetof(TuiToolResultParam, name) == 0, "the result's name keeps offset 0");
     static_assert(offsetof(TuiToolResultParam, ok) == 16, "ok sits at offset 16");
     static_assert(offsetof(TuiToolResultParam, text) == 24, "the result text sits at offset 24");
+    static_assert(offsetof(TuiToolResultParam, batch) == 40,
+                  "the result's batch is appended at offset 40 (v16)");
 
     // NULL-safe, and an empty agent id still registers nothing.
     tuiPipelineAgentUpdate(nullptr, makeStr("coder"), PipelineChatMessage{});
@@ -1159,8 +1167,8 @@ void casePipelineLaneFields() {
 void caseThreadTurnBlockFields() {
     g_where = "case: v5 turn/block layout";
 
-    static_assert(TUI_API_VERSION == 15,
-                  "this case pins the current generation (v15); bump one version per ABI event");
+    static_assert(TUI_API_VERSION == 16,
+                  "this case pins the current generation (v16); bump one version per ABI event");
 
     // TuiTurn: int64 + 3x int32 (+ a 4-byte tail pad) = 24 bytes on the 64-bit
     // ABI. The state and the message count follow the id; the reserved word
@@ -1665,8 +1673,8 @@ int main(int argc, char** argv) {
             (void)std::remove("llmfun_ui_log.txt");
     });
 
-    static_assert(TUI_API_VERSION == 15,
-                  "this contract test pins the current API generation (v15)");
+    static_assert(TUI_API_VERSION == 16,
+                  "this contract test pins the current API generation (v16)");
 
     caseNoneStateInert();
     caseLogRecords();

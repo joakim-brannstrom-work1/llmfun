@@ -33,11 +33,12 @@ interface TuiSink {
     void logFile(bool useFile);
     void streamRuntimeStatus(UiRuntimeStatus status);
     void pipelineStreamChatMessage(string agentId, string content, string thinking, string role,
-            double tokensPerSecond, string currentTool, long contextUsed, long contextMax);
+            double tokensPerSecond, string currentTool, long contextUsed,
+            long contextMax, long batch);
     void pipelineStreamDone(string agentId);
     void pipelineClear();
-    void pipelineToolCall(string agentId, string name, string arguments, string id);
-    void pipelineToolResult(string agentId, string name, int ok, string text);
+    void pipelineToolCall(string agentId, string name, string arguments, string id, long batch);
+    void pipelineToolResult(string agentId, string name, int ok, string text, long batch);
     void sessionList(UiSessionItem[] items);
     void initHistory(string[] history);
     void setTurns(UiTurnData[] turns, UiBlockData[] blocks);
@@ -87,21 +88,23 @@ class TuiChannelSink : TuiSink {
     }
 
     override void pipelineStreamChatMessage(string agentId, string content, string thinking, string role,
-            double tokensPerSecond, string currentTool, long contextUsed, long contextMax) {
+            double tokensPerSecond, string currentTool, long contextUsed,
+            long contextMax, long batch) {
         ch.uiMsg(UiPipelineStreamChatMessage(agentId, content, thinking, role,
-                tokensPerSecond, currentTool, contextUsed, contextMax));
+                tokensPerSecond, currentTool, contextUsed, contextMax, batch));
     }
 
     override void pipelineStreamDone(string agentId) {
         ch.uiMsg(UiPipelineStreamDone(agentId));
     }
 
-    override void pipelineToolCall(string agentId, string name, string arguments, string id) {
-        ch.uiMsg(UiPipelineToolCall(agentId, name, arguments, id));
+    override void pipelineToolCall(string agentId, string name,
+            string arguments, string id, long batch) {
+        ch.uiMsg(UiPipelineToolCall(agentId, name, arguments, id, batch));
     }
 
-    override void pipelineToolResult(string agentId, string name, int ok, string text) {
-        ch.uiMsg(UiPipelineToolResult(agentId, name, ok, text));
+    override void pipelineToolResult(string agentId, string name, int ok, string text, long batch) {
+        ch.uiMsg(UiPipelineToolResult(agentId, name, ok, text, batch));
     }
 
     override void pipelineClear() {
@@ -166,16 +169,18 @@ class TuiBlockedSink : TuiSink {
     }
 
     override void pipelineStreamChatMessage(string agentId, string content, string thinking, string role,
-            double tokensPerSecond, string currentTool, long contextUsed, long contextMax) {
+            double tokensPerSecond, string currentTool, long contextUsed,
+            long contextMax, long batch) {
     }
 
     override void pipelineStreamDone(string agentId) {
     }
 
-    override void pipelineToolCall(string agentId, string name, string arguments, string id) {
+    override void pipelineToolCall(string agentId, string name,
+            string arguments, string id, long batch) {
     }
 
-    override void pipelineToolResult(string agentId, string name, int ok, string text) {
+    override void pipelineToolResult(string agentId, string name, int ok, string text, long batch) {
     }
 
     override void pipelineClear() {
@@ -242,6 +247,7 @@ class TuiRecordingSink : TuiSink {
         string currentTool;
         long contextUsed;
         long contextMax;
+        long batch;
     }
 
     LaneUpdate[] laneUpdates;
@@ -253,6 +259,7 @@ class TuiRecordingSink : TuiSink {
         string name;
         string arguments;
         string id;
+        long batch;
     }
 
     ToolCallEvent[] toolCalls;
@@ -263,6 +270,7 @@ class TuiRecordingSink : TuiSink {
         string name;
         int ok;
         string text;
+        long batch;
     }
 
     ToolResultEvent[] toolResults;
@@ -321,9 +329,10 @@ class TuiRecordingSink : TuiSink {
     }
 
     override void pipelineStreamChatMessage(string agentId, string content, string thinking, string role,
-            double tokensPerSecond, string currentTool, long contextUsed, long contextMax) {
+            double tokensPerSecond, string currentTool, long contextUsed,
+            long contextMax, long batch) {
         laneUpdates ~= LaneUpdate(agentId, content, role, tokensPerSecond,
-                currentTool, contextUsed, contextMax);
+                currentTool, contextUsed, contextMax, batch);
         record("pipelineStreamChatMessage", agentId ~ ": " ~ content);
     }
 
@@ -331,13 +340,14 @@ class TuiRecordingSink : TuiSink {
         record("pipelineStreamDone", agentId);
     }
 
-    override void pipelineToolCall(string agentId, string name, string arguments, string id) {
-        toolCalls ~= ToolCallEvent(agentId, name, arguments, id);
+    override void pipelineToolCall(string agentId, string name,
+            string arguments, string id, long batch) {
+        toolCalls ~= ToolCallEvent(agentId, name, arguments, id, batch);
         record("pipelineToolCall", agentId ~ ": " ~ name);
     }
 
-    override void pipelineToolResult(string agentId, string name, int ok, string text) {
-        toolResults ~= ToolResultEvent(agentId, name, ok, text);
+    override void pipelineToolResult(string agentId, string name, int ok, string text, long batch) {
+        toolResults ~= ToolResultEvent(agentId, name, ok, text, batch);
         record("pipelineToolResult", agentId ~ ": " ~ name);
     }
 
@@ -443,21 +453,22 @@ class UiMessenger {
     }
 
     void pipelineStreamChatMessage(string agentId, string content, string thinking, string role,
-            double tokensPerSecond, string currentTool, long contextUsed, long contextMax) {
+            double tokensPerSecond, string currentTool, long contextUsed,
+            long contextMax, long batch) {
         sink.pipelineStreamChatMessage(agentId, content, thinking, role,
-                tokensPerSecond, currentTool, contextUsed, contextMax);
+                tokensPerSecond, currentTool, contextUsed, contextMax, batch);
     }
 
     void pipelineStreamDone(string agentId) {
         sink.pipelineStreamDone(agentId);
     }
 
-    void pipelineToolCall(string agentId, string name, string arguments, string id) {
-        sink.pipelineToolCall(agentId, name, arguments, id);
+    void pipelineToolCall(string agentId, string name, string arguments, string id, long batch) {
+        sink.pipelineToolCall(agentId, name, arguments, id, batch);
     }
 
-    void pipelineToolResult(string agentId, string name, int ok, string text) {
-        sink.pipelineToolResult(agentId, name, ok, text);
+    void pipelineToolResult(string agentId, string name, int ok, string text, long batch) {
+        sink.pipelineToolResult(agentId, name, ok, text, batch);
     }
 
     void pipelineClear() {
@@ -524,7 +535,8 @@ package string jsonStringAt(const JSONValue obj, string key) {
 
 /// Send every tool call in a ToolMessage's `toolCalls` JSON as its own structured
 /// message. Entries without a usable `function.name` are skipped.
-private void emitToolCallsFromJson(UiMessenger uiMsg, string agentId, const JSONValue toolCalls) {
+private void emitToolCallsFromJson(UiMessenger uiMsg, string agentId,
+        const JSONValue toolCalls, long batch) {
     if (toolCalls.type != JSONType.array)
         return;
     foreach (entry; toolCalls.array) {
@@ -537,22 +549,25 @@ private void emitToolCallsFromJson(UiMessenger uiMsg, string agentId, const JSON
         if (name.empty)
             continue;
         uiMsg.pipelineToolCall(agentId, name, truncatedForWire(jsonStringAt(*fn,
-                "arguments")), jsonStringAt(entry, "id"));
+                "arguments")), jsonStringAt(entry, "id"), batch);
     }
 }
 
 /// The per-step emitter: walk one completed step's chat in order and send
 /// each tool call and tool result as its own structured message, beside the streamed
 /// content instead of spliced into it. Tool messages and tool responses carry the
-/// traffic; finish reasons are never consulted. This is the pipeline's UI seam: the
-/// pipeline knows only IStepEventEmitter, and this function supplies the UI knowledge.
-void emitStepToolEvents(UiMessenger uiMsg, string agentId, ProcessResult result) {
+/// traffic; finish reasons are never consulted. `batch` is the index of the
+/// response the step belongs to: the step always follows that response's
+/// stream-done, so the emitter's traffic groups under the batch whose stream
+/// the drill-down just saw. This is the pipeline's UI seam: the pipeline knows
+/// only IStepEventEmitter, and this function supplies the UI knowledge.
+void emitStepToolEvents(UiMessenger uiMsg, string agentId, ProcessResult result, long batch) {
     foreach (ref msg; result.chat) {
         msg.match!((ToolMessage tool) {
-            emitToolCallsFromJson(uiMsg, agentId, tool.toolCalls);
+            emitToolCallsFromJson(uiMsg, agentId, tool.toolCalls, batch);
         }, (ToolResponse resp) {
             uiMsg.pipelineToolResult(agentId, resp.toolName, resp.success()
-                ? 1 : 0, truncatedForWire(resp.content));
+                ? 1 : 0, truncatedForWire(resp.content), batch);
         }, (Message _) {}, (VisionMessage _) {});
     }
 }
@@ -563,6 +578,13 @@ class PipelineStreamMessageUpdater : IStreamCallback, IStepEventEmitter, IRunDon
     long contextSize;
     string modelName;
     string agentId;
+
+    /// 0-based index of the batch whose stream is live: one LLM response of
+    /// the lane's run, counted on stream-done (DD-19) and reset by run-done -
+    /// the run is the boundary on both ends, so every run counts from 0 again
+    /// (re-runs of the same node: its retry loop, loop edges). The payloads
+    /// carry it so the C++ derives no step numbering of its own (DD-20).
+    long batchIndex;
 
     this(UiMessenger messenger, long contextSize, string modelName)
     in (messenger !is null, "UiMessenger must not be null") {
@@ -576,22 +598,33 @@ class PipelineStreamMessageUpdater : IStreamCallback, IStepEventEmitter, IRunDon
 
         uiMsg.pipelineStreamChatMessage(agentId: agentId, content: content, thinking: msg.reasoning, role: msg.role,
                 tokensPerSecond: stat.predictedPerSecond,
-                currentTool: tools.empty ? null : tools[$ - 1].toolName,
-                contextUsed: stat.context, contextMax: contextSize);
+                currentTool: tools.empty ? null : tools[$ - 1].toolName, contextUsed: stat.context,
+                contextMax: contextSize, batch: batchIndex);
     }
 
     override void streamMessageDone() {
-        // Deliberately empty: the tool loop fires this after every batch, and a
-        // batch end is not the run boundary - closing on it split one run into
-        // one drill-down group per batch. The close rides runDone below.
+        // The tool loop fires one per batch: count the batch that just ended. A
+        // batch end is not the run boundary (one drill-down group per run, not
+        // per batch), so this closes nothing - the close rides runDone below.
+        // A batch that streamed nothing is counted too (the scope(exit) fires on
+        // every exit): the number is an identity, not a dense sequence.
+        ++batchIndex;
     }
 
     override void runDone() {
         uiMsg.pipelineStreamDone(agentId);
+        // The run is the boundary (DD-19) on both ends: the next run of this
+        // node - its retry loop, a loop edge - counts from 0 again, so the
+        // numbers stay "within the run" as the wire doc promises. The ids stay
+        // unique across runs because a new run opens a new turn (new turnId).
+        batchIndex = 0;
     }
 
     override void stepEvent(ProcessResult result) {
-        emitStepToolEvents(uiMsg, agentId, result);
+        // The step follows the batch's stream-done (the agent's loop calls step
+        // after process returns), so the finished batch is the one below the
+        // counter - the batch whose stream the drill-down just saw.
+        emitStepToolEvents(uiMsg, agentId, result, batchIndex - 1);
     }
 
     override void setId(string id) {

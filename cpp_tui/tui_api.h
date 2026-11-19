@@ -24,9 +24,10 @@ extern "C" {
  */
 
 /* TUI_API_VERSION - API generation marker. Documentation only: no runtime
- * behavior depends on it.
+ * behavior depends on it. The one exception to "documentation only" is the
+ * record of a real ABI event: v16 grew the pipeline payloads (the batch index).
  */
-#define TUI_API_VERSION 15
+#define TUI_API_VERSION 16
 
 /* String — Plain old data struct representing a string slice.
  * Ownership rules:
@@ -81,6 +82,11 @@ void String_Free(String s);
  *   * `tokensPerSecond` - D's rate, sent raw: the UI formats it and never recomputes it.
  *     `0.0` means "no reading this tick" (a queued lane draws no rate), the same convention
  *     as a `contextUsed` of 0.
+ *   * `batch` - the 0-based per-response batch index within the lane's run. A batch
+ *     is one LLM response: its streamed content/reasoning ticks and its tool
+ *     calls/results all carry the same number, so the receiver can group them
+ *     (batch-scoped ids) without deriving any step numbering on its own. The
+ *     field is appended, so every offset before it stays stable (v16).
  */
 typedef struct PipelineChatMessage {
     String content;
@@ -93,6 +99,7 @@ typedef struct PipelineChatMessage {
                              * needed to make a ZERO unambiguous (0/8192 = a real zero, 0/0 = no
                              * reading at all); a contextUsed above 0 is drawn either way */
     double tokensPerSecond; /* D's per-response or rolling rate; 0.0 = no reading */
+    int64_t batch;          /* 0-based per-response batch index within the run */
 } PipelineChatMessage;
 
 /* TuiToolCallParam - One tool call a pipeline agent made.
@@ -106,6 +113,7 @@ typedef struct TuiToolCallParam {
     String name;      /* tool name, copied by the receiver */
     String arguments; /* truncated D-side to <=1000 chars */
     String id;        /* the call id, as sent by the model */
+    int64_t batch;    /* the batch index of the response that made the call (v16) */
 } TuiToolCallParam;
 
 /* TuiToolResultParam - The result of one tool call a pipeline agent made.
@@ -115,9 +123,10 @@ typedef struct TuiToolCallParam {
  * `bool` so the struct's padding is deterministic on every ABI.
  */
 typedef struct TuiToolResultParam {
-    String name; /* tool name (repeated from the call, keeps rows self-contained) */
-    int ok;      /* 1 = success, 0 = failure (saveData["success"], default 0) */
-    String text; /* result text, truncated D-side to <=1000 chars */
+    String name;   /* tool name (repeated from the call, keeps rows self-contained) */
+    int ok;        /* 1 = success, 0 = failure (saveData["success"], default 0) */
+    String text;   /* result text, truncated D-side to <=1000 chars */
+    int64_t batch; /* the batch index of the response that made the call (v16) */
 } TuiToolResultParam;
 
 /* SessionItem - One row of the session sidebar snapshot.

@@ -490,8 +490,8 @@ struct TextUserInterface {
         auto currentTool = msg.currentTool.toTuiString;
         String finish;
         tuiPipelineAgentUpdate(tuiState, id, PipelineChatMessage(content: content, reasoning: reasoning, role: role,
-                finishReason: finish, currentTool: currentTool, contextUsed: msg.contextUsed,
-                contextMax: msg.contextMax, tokensPerSecond: msg.tokensPerSecond));
+                finishReason: finish, currentTool: currentTool, contextUsed: msg.contextUsed, contextMax: msg
+                .contextMax, tokensPerSecond: msg.tokensPerSecond, batch: msg.batch));
     }
 
     void pipelineMessage(UiPipelineStreamDone msg) {
@@ -505,7 +505,7 @@ struct TextUserInterface {
         auto arguments = msg.arguments.toTuiString;
         auto callId = msg.id.toTuiString;
         tuiPipelineAgentToolCall(tuiState, id, TuiToolCallParam(name: name,
-                arguments: arguments, id: callId));
+                arguments: arguments, id: callId, batch: msg.batch));
     }
 
     void pipelineToolResult(UiPipelineToolResult msg) {
@@ -513,7 +513,7 @@ struct TextUserInterface {
         auto name = msg.name.toTuiString;
         auto text = msg.text.toTuiString;
         tuiPipelineAgentToolResult(tuiState, id, TuiToolResultParam(name: name,
-                ok: msg.ok, text: text));
+                ok: msg.ok, text: text, batch: msg.batch));
     }
 
     void pipelineClear() {
@@ -1202,6 +1202,9 @@ struct UiPipelineStreamChatMessage {
     string currentTool;
     long contextUsed;
     long contextMax;
+    /// 0-based per-response batch index within the lane's run (task 27): one
+    /// number per LLM response, shared by the batch's ticks and its tool traffic.
+    long batch;
 }
 
 struct UiPipelineStreamDone {
@@ -1213,6 +1216,8 @@ struct UiPipelineToolCall {
     string name;
     string arguments;
     string id;
+    /// The batch index of the response that made the call (task 27).
+    long batch;
 }
 
 struct UiPipelineToolResult {
@@ -1220,6 +1225,8 @@ struct UiPipelineToolResult {
     string name;
     int ok;
     string text;
+    /// The batch index of the response that made the call (task 27).
+    long batch;
 }
 
 struct UiPipelineClear {
