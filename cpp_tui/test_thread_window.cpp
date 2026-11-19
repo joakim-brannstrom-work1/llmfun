@@ -536,6 +536,15 @@ int main(int argc, char** argv) {
             typed_seed::Seeder seed{&state, 1};
             for (int i = 0; i < messages; ++i) {
                 seed.add(typed_seed::Seeder::Msg::User, "m" + std::to_string(i) + "\n" + body);
+                // The turn's response batch: a content row and two tool cards on
+                // "<turnId>#0" - the work rows bucketing and the fold read act on.
+                const std::int64_t id = seed.turnSeq;
+                const std::string batch = std::to_string(id) + "#0";
+                seed.add(typed_seed::Seeder::Msg::Assistant, body);
+                seed.upsertBlock(id, "step#0", batch, TuiBlockKind_Tool, TuiBlockStatus_Ok,
+                                 "bash ls", body, "bash ls", 1100);
+                seed.upsertBlock(id, "step#1", batch, TuiBlockKind_Tool, TuiBlockStatus_Ok,
+                                 "grep -rn", body, "grep -rn", 40);
                 if (i % 2 == 1)
                     seed.add(typed_seed::Seeder::Msg::FinalAnswer, body);
             }
@@ -543,9 +552,9 @@ int main(int argc, char** argv) {
             const size_t groups = thread.groupCount(); // the first call builds the list
             const auto t1 = std::chrono::steady_clock::now();
 
-            // One frame of the window's model work: 40 groups, each asked for its view,
-            // its height hint and its expansion state - the three calls the render loop
-            // makes per visible group.
+            // One frame of the window's model work: 40 groups, each asked for its
+            // view, its height hint, its expansion state, its row count and one
+            // row's fold - the reads the render loop makes per visible group.
             volatile double sink = 0.0;
             const int kFrames = 200;
             const auto t2 = std::chrono::steady_clock::now();
@@ -555,6 +564,10 @@ int main(int argc, char** argv) {
                     const tui::store::GroupView view = thread.groupAt(k);
                     sink = sink + thread.measureHint(view.id);
                     sink = sink + (thread.expanded(view.id) ? 1.0 : 0.0);
+                    const std::size_t blocks = thread.blockCount(k);
+                    sink = sink + static_cast<double>(blocks);
+                    if (blocks > 1)
+                        sink = sink + (thread.blockExpanded(k, 1) ? 1.0 : 0.0);
                 }
             }
             const auto t3 = std::chrono::steady_clock::now();
@@ -611,7 +624,9 @@ int main(int argc, char** argv) {
         check(ratio <= 2.0, "cost: the frame does not scale with the thread (1000 vs 125 turns: " +
                                 std::to_string(ratio) + "x)");
         // 40 groups x 2 id lookups per frame = 80 entries examined per frame, whatever
-        // the thread length: the counter agrees with the timing.
+        // the thread length: the counter agrees with the timing. The row-count and
+        // fold reads the projection added are index probes, not id lookups - they
+        // walk no entries, so the count stays at 80.
         check(largeWalks == 80u * 200u,
               "cost: 80 entries examined per frame (" + std::to_string(largeWalks) + ")");
     }
