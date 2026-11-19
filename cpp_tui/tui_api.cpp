@@ -702,17 +702,19 @@ void tuiPipelineAgentUpdate(TuiState* state, String agentId, PipelineChatMessage
     auto& agent = agentStore(*state->inner, id);
     agent.lastUpdate = std::chrono::system_clock::now();
 
-    // The batch's content-so-far block, same ids every tick, so the store merges in place
-    // and the newest tick wins - the typed stream updater's contract, mirrored
-    // for the coarser pipeline payload. The payload carries no batch boundary,
-    // so the run is one batch ("<turnId>#0") and the ids are batch-scoped.
+    // One batch per step, one reasoning/content pair per batch - the shape the
+    // main thread's typed walk emits (`app_agent/package.d`'s per-batch walk).
+    // The payload's `batch` is D's per-response counter, so the ids are
+    // batch-scoped and a step's ticks still merge in place: the newest tick of
+    // a batch wins, per batch, and the next batch starts a fresh pair.
     const std::int64_t turnId = openTypedTurn(agent);
-    const std::string batchId = std::to_string(turnId) + "#0";
-    upsertTypedBlock(agent, turnId, "content#0", batchId, TuiBlockKind_Prose, TuiBlockStatus_None,
-                     0, "", role_, c);
+    const std::string batchId = std::to_string(turnId) + "#" + std::to_string(msg.batch);
+    upsertTypedBlock(agent, turnId, "content#" + std::to_string(msg.batch), batchId,
+                     TuiBlockKind_Prose, TuiBlockStatus_None, 0, "", role_, c);
     if (!r.empty())
-        upsertTypedBlock(agent, turnId, "reasoning#0", batchId, TuiBlockKind_Reasoning,
-                         TuiBlockStatus_None, TuiBlockFlag_Collapsible, "", "", r);
+        upsertTypedBlock(agent, turnId, "reasoning#" + std::to_string(msg.batch), batchId,
+                         TuiBlockKind_Reasoning, TuiBlockStatus_None, TuiBlockFlag_Collapsible, "",
+                         "", r);
 
     mirrorLaneUpdate(*state->inner, id, role_, c, tool, ctxUsed, msg.tokensPerSecond);
 }
@@ -730,7 +732,7 @@ void tuiPipelineAgentToolCall(TuiState* state, String agentId, TuiToolCallParam 
 
     auto& agent = agentStore(*state->inner, id);
     const std::int64_t turnId = openTypedTurn(agent);
-    const std::string batchId = std::to_string(turnId) + "#0";
+    const std::string batchId = std::to_string(turnId) + "#" + std::to_string(call.batch);
     // The call's block, Pending (the merged step's walk upserts Ok/Failed over
     // it when the result lands). The in-flight slot remembers what a result
     // merges into, because the result payload carries no call id.
@@ -758,7 +760,7 @@ void tuiPipelineAgentToolResult(TuiState* state, String agentId, TuiToolResultPa
 
     auto& agent = agentStore(*state->inner, id);
     const std::int64_t turnId = openTypedTurn(agent);
-    const std::string batchId = std::to_string(turnId) + "#0";
+    const std::string batchId = std::to_string(turnId) + "#" + std::to_string(result.batch);
     if (agent.typedHasCall && agent.typedCallName == name) {
         // The merged step: the call's block gains its outcome, the result
         // summary rides `meta` and the call's arguments stay the body - the

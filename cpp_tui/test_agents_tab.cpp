@@ -1550,6 +1550,91 @@ void checkStructuredToolRows() {
     check(!state.agentThreadAdapter.bound(), "a pipeline clear unbinds the drill-down's adapter");
 }
 
+/// The batched steps: the pipeline path consumes task 27's batch index, so a
+/// two-step run draws the main thread's shape - one reasoning/content pair per
+/// batch, the ids batch-scoped (`<turnId>#<n>` / `reasoning#<n>`), the next
+/// batch a fresh pair instead of a tick overwriting the previous one's blocks.
+/// One typed turn per run is unchanged (DD-19); only the batches inside multiply.
+void checkPipelineBatchSteps() {
+    tui::TuiState state = drillState();
+    state.agentThreadAdapter = {};
+
+    const auto wire = [](const char* s) { return String{s, std::strlen(s)}; };
+    ::TuiState api{&state};
+
+    // Step 0: a tick with content and reasoning, then the step's tool call and
+    // its result - all on batch 0 (the zero value D sends for the first step).
+    PipelineChatMessage step0{};
+    step0.content = wire("step zero prose");
+    step0.reasoning = wire("step zero thinking");
+    step0.role = wire("assistant");
+    step0.batch = 0;
+    tuiPipelineAgentUpdate(&api, wire("coder"), step0);
+    TuiToolCallParam call{};
+    call.name = wire("read_file");
+    call.arguments = wire("src/app.d");
+    call.id = wire("call-1");
+    call.batch = 0;
+    tuiPipelineAgentToolCall(&api, wire("coder"), call);
+    TuiToolResultParam result{};
+    result.name = wire("read_file");
+    result.ok = 1;
+    result.text = wire("12 lines");
+    result.batch = 0;
+    tuiPipelineAgentToolResult(&api, wire("coder"), result);
+
+    // Step 1: its own tick on batch 1 - a different reasoning body, so an
+    // overwrite of the batch-0 block would be visible in the id alone.
+    PipelineChatMessage step1{};
+    step1.content = wire("step one prose");
+    step1.reasoning = wire("step one thinking");
+    step1.role = wire("assistant");
+    step1.batch = 1;
+    tuiPipelineAgentUpdate(&api, wire("coder"), step1);
+    tuiPipelineAgentDone(&api, wire("coder"));
+
+    check(state.left.agents.size() == 1, "premise: the run made the agent's store");
+    const tui::ChatTab& store = state.left.agents.front().chat;
+    check(store.typedTurns.turnCount() == 1,
+          "premise: one typed turn per run (DD-19), not per batch");
+    const std::int64_t run = store.typedTurns.turnAt(0).id;
+    const std::size_t blocks = store.typedTurns.blockCount(run);
+    check(blocks == 5, "the two steps make five blocks (two reasoning, two content, one call)");
+
+    // The batch-0 reasoning survived the batch-1 tick: the ids are batch-scoped,
+    // so the second step's pair landed beside the first instead of over it.
+    std::string reasoning0, reasoning1, callBatchId;
+    std::size_t distinctBatches = 0;
+    {
+        std::string seen[8];
+        std::size_t seenCount = 0;
+        for (std::size_t i = 0; i < blocks && i < 8; ++i) {
+            const auto& b = store.typedTurns.blockAt(run, i);
+            if (b.id == "reasoning#0")
+                reasoning0 = b.body;
+            if (b.id == "reasoning#1")
+                reasoning1 = b.body;
+            if (b.id == "call-1")
+                callBatchId = b.batchId;
+            bool fresh = true;
+            for (std::size_t s = 0; s < seenCount; ++s)
+                if (seen[s] == b.batchId)
+                    fresh = false;
+            if (fresh && seenCount < 8)
+                seen[seenCount++] = b.batchId;
+        }
+        distinctBatches = seenCount;
+    }
+    check(reasoning0 == "step zero thinking",
+          "the batch-1 tick did not overwrite batch 0's reasoning block");
+    check(reasoning1 == "step one thinking",
+          "the second step's reasoning landed under its own batch-scoped id");
+    check(distinctBatches == 2,
+          "the run's turn carries two batches (the ids are the wire's, per batch)");
+    check(callBatchId == std::to_string(run) + "#0",
+          "the step's tool call rides the batch that made it (batch 0)");
+}
+
 // ---------------------------------------------------------------------------
 // 9c. The second mount stays identical: the drill-down inherits the fold (R-7)
 // ---------------------------------------------------------------------------
@@ -1919,6 +2004,7 @@ int main(int argc, char** argv) {
     checkDrilldown();
     checkDrilldownMount();
     checkStructuredToolRows();
+    checkPipelineBatchSteps();
     checkDrilldownShape();
     checkRailAndInspector();
     checkGoldens(update);
