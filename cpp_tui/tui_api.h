@@ -599,6 +599,14 @@ void tuiAddLogMessageEx(TuiState* state, TuiLogLevel level, String summary, Stri
  */
 void tuiPipelineAgentUpdate(TuiState* state, String agentId, PipelineChatMessage msg);
 
+/* tuiPipelineAgentStart - one pipeline agent run started. `task` is inbound
+ * (copied by the receiver), the run's task as the node was invoked with. The
+ * drill-down draws it as the run's query row (the consumer is task_30's
+ * implementation; nothing consumes the event before that).
+ * Null-safe: no-op if state is NULL or agentId is empty.
+ */
+void tuiPipelineAgentStart(TuiState* state, String agentId, String task);
+
 /* Announce a tool call a pipeline agent made: the Agents tab draws it as a
  * row on the agent's transcript.
  * All String members are inbound — their data is copied internally.

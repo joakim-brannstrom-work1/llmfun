@@ -499,6 +499,12 @@ struct TextUserInterface {
         tuiPipelineAgentDone(tuiState, id);
     }
 
+    void pipelineMessage(UiPipelineAgentStart msg) {
+        auto id = msg.agentId.toTuiString;
+        auto task = msg.task.toTuiString;
+        tuiPipelineAgentStart(tuiState, id, task);
+    }
+
     void pipelineToolCall(UiPipelineToolCall msg) {
         auto id = msg.agentId.toTuiString;
         auto name = msg.name.toTuiString;
@@ -698,6 +704,7 @@ interface TUICommands {
     void uiMsg(UiLogFile m);
     void uiMsg(UiPipelineStreamChatMessage m);
     void uiMsg(UiPipelineStreamDone m);
+    void uiMsg(UiPipelineAgentStart m);
     void uiMsg(UiPipelineToolCall m);
     void uiMsg(UiPipelineToolResult m);
     void uiMsg(UiDropReport m);
@@ -1069,6 +1076,10 @@ class TextUserInterfaceActor : TUICommands {
         ui.pipelineMessage(m);
     }
 
+    void uiMsg(UiPipelineAgentStart m) {
+        ui.pipelineMessage(m);
+    }
+
     void uiMsg(UiPipelineToolCall m) {
         ui.pipelineToolCall(m);
     }
@@ -1209,6 +1220,12 @@ struct UiPipelineStreamChatMessage {
 
 struct UiPipelineStreamDone {
     string agentId;
+}
+
+struct UiPipelineAgentStart {
+    string agentId;
+    /// The task the node was invoked with: the drill-down's query row.
+    string task;
 }
 
 struct UiPipelineToolCall {

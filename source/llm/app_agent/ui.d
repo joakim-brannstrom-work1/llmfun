@@ -11,7 +11,7 @@ import std.stdio : writeln;
 import std.sumtype : match;
 
 import llm.types : ServerStat, StreamMessage, StreamToolCall, IStreamCallback,
-    IStepEventEmitter, IRunDoneEmitter, ProcessResult;
+    IStepEventEmitter, IRunDoneEmitter, IRunStartEmitter, ProcessResult;
 import llm.tui;
 import llmfun_tui;
 import my.path : Path;
@@ -36,6 +36,7 @@ interface TuiSink {
             double tokensPerSecond, string currentTool, long contextUsed,
             long contextMax, long batch);
     void pipelineStreamDone(string agentId);
+    void pipelineAgentStart(string agentId, string task);
     void pipelineClear();
     void pipelineToolCall(string agentId, string name, string arguments, string id, long batch);
     void pipelineToolResult(string agentId, string name, int ok, string text, long batch);
@@ -96,6 +97,10 @@ class TuiChannelSink : TuiSink {
 
     override void pipelineStreamDone(string agentId) {
         ch.uiMsg(UiPipelineStreamDone(agentId));
+    }
+
+    override void pipelineAgentStart(string agentId, string task) {
+        ch.uiMsg(UiPipelineAgentStart(agentId, task));
     }
 
     override void pipelineToolCall(string agentId, string name,
@@ -174,6 +179,9 @@ class TuiBlockedSink : TuiSink {
     }
 
     override void pipelineStreamDone(string agentId) {
+    }
+
+    override void pipelineAgentStart(string agentId, string task) {
     }
 
     override void pipelineToolCall(string agentId, string name,
@@ -275,6 +283,14 @@ class TuiRecordingSink : TuiSink {
 
     ToolResultEvent[] toolResults;
 
+    /// pipelineAgentStart calls in call order
+    struct AgentStartEvent {
+        string agentId;
+        string task;
+    }
+
+    AgentStartEvent[] agentStarts;
+
     int countOf(string kind) const {
         int n;
         foreach (c; calls)
@@ -283,13 +299,12 @@ class TuiRecordingSink : TuiSink {
         return n;
     }
 
-    /// The last Notice block body (task 5: a chat message IS a Notice block),
-    /// or "" when no notice was sent.
+    /// The last Notice block body or "" when no notice was sent.
     string lastNoticeBody() {
         foreach_reverse (b; blockUpserts)
             if (b.kind == TuiBlockKind_Notice)
                 return b.body;
-        return "";
+        return null;
     }
 
     UiSessionItem[] lastSessionList() {
@@ -338,6 +353,11 @@ class TuiRecordingSink : TuiSink {
 
     override void pipelineStreamDone(string agentId) {
         record("pipelineStreamDone", agentId);
+    }
+
+    override void pipelineAgentStart(string agentId, string task) {
+        agentStarts ~= AgentStartEvent(agentId, task);
+        record("pipelineAgentStart", agentId ~ ": " ~ task);
     }
 
     override void pipelineToolCall(string agentId, string name,
@@ -463,6 +483,10 @@ class UiMessenger {
         sink.pipelineStreamDone(agentId);
     }
 
+    void pipelineAgentStart(string agentId, string task) {
+        sink.pipelineAgentStart(agentId, task);
+    }
+
     void pipelineToolCall(string agentId, string name, string arguments, string id, long batch) {
         sink.pipelineToolCall(agentId, name, arguments, id, batch);
     }
@@ -573,68 +597,76 @@ void emitStepToolEvents(UiMessenger uiMsg, string agentId, ProcessResult result,
 }
 
 /// Forwards streaming pipeline output to the TUI (per-agent messages).
-class PipelineStreamMessageUpdater : IStreamCallback, IStepEventEmitter, IRunDoneEmitter {
-    UiMessenger uiMsg;
-    long contextSize;
-    string modelName;
-    string agentId;
+class PipelineStreamMessageUpdater : IStreamCallback, IStepEventEmitter,
+    IRunStartEmitter, IRunDoneEmitter {
+        UiMessenger uiMsg;
+        long contextSize;
+        string modelName;
+        string agentId;
 
-    /// 0-based index of the batch whose stream is live: one LLM response of
-    /// the lane's run, counted on stream-done (DD-19) and reset by run-done -
-    /// the run is the boundary on both ends, so every run counts from 0 again
-    /// (re-runs of the same node: its retry loop, loop edges). The payloads
-    /// carry it so the C++ derives no step numbering of its own (DD-20).
-    long batchIndex;
+        /// 0-based index of the batch whose stream is live: one LLM response of
+        /// the lane's run, counted on stream-done (DD-19) and reset by run-done -
+        /// the run is the boundary on both ends, so every run counts from 0 again
+        /// (re-runs of the same node: its retry loop, loop edges). The payloads
+        /// carry it so the C++ derives no step numbering of its own (DD-20).
+        long batchIndex;
 
-    this(UiMessenger messenger, long contextSize, string modelName)
-    in (messenger !is null, "UiMessenger must not be null") {
-        this.uiMsg = messenger;
-        this.contextSize = contextSize;
-        this.modelName = modelName;
+        this(UiMessenger messenger, long contextSize, string modelName)
+        in (messenger !is null, "UiMessenger must not be null") {
+            this.uiMsg = messenger;
+            this.contextSize = contextSize;
+            this.modelName = modelName;
+        }
+
+        override void messageUpdate(StreamMessage msg, StreamToolCall[] tools, ServerStat stat) {
+            string content = msg.content;
+
+            uiMsg.pipelineStreamChatMessage(agentId: agentId, content: content, thinking: msg.reasoning, role: msg
+                    .role, tokensPerSecond: stat.predictedPerSecond, currentTool: tools.empty
+                    ? null : tools[$ - 1].toolName,
+                    contextUsed: stat.context, contextMax: contextSize, batch: batchIndex);
+        }
+
+        override void streamMessageDone() {
+            // The tool loop fires one per batch: count the batch that just ended. A
+            // batch end is not the run boundary (one drill-down group per run, not
+            // per batch), so this closes nothing - the close rides runDone below.
+            // A batch that streamed nothing is counted too (the scope(exit) fires on
+            // every exit): the number is an identity, not a dense sequence.
+            ++batchIndex;
+        }
+
+        override void runDone() {
+            uiMsg.pipelineStreamDone(agentId);
+            // The run is the boundary (DD-19) on both ends: the next run of this
+            // node - its retry loop, a loop edge - counts from 0 again, so the
+            // numbers stay "within the run" as the wire doc promises. The ids stay
+            // unique across runs because a new run opens a new turn (new turnId).
+            batchIndex = 0;
+        }
+
+        override void runStart(string task) {
+            // Fired once per run, before the agent's first batch (the pipeline's
+            // submit site): the drill-down's query row - the task the node was
+            // invoked with. The turn it opens is the run's (closed by runDone).
+            uiMsg.pipelineAgentStart(agentId, task);
+        }
+
+        override void stepEvent(ProcessResult result) {
+            // The step follows the batch's stream-done (the agent's loop calls step
+            // after process returns), so the finished batch is the one below the
+            // counter - the batch whose stream the drill-down just saw.
+            emitStepToolEvents(uiMsg, agentId, result, batchIndex - 1);
+        }
+
+        override void setId(string id) {
+            agentId = id;
+        }
+
+        override IStreamCallback clone() {
+            return new PipelineStreamMessageUpdater(uiMsg, contextSize, modelName);
+        }
     }
-
-    override void messageUpdate(StreamMessage msg, StreamToolCall[] tools, ServerStat stat) {
-        string content = msg.content;
-
-        uiMsg.pipelineStreamChatMessage(agentId: agentId, content: content, thinking: msg.reasoning, role: msg.role,
-                tokensPerSecond: stat.predictedPerSecond,
-                currentTool: tools.empty ? null : tools[$ - 1].toolName, contextUsed: stat.context,
-                contextMax: contextSize, batch: batchIndex);
-    }
-
-    override void streamMessageDone() {
-        // The tool loop fires one per batch: count the batch that just ended. A
-        // batch end is not the run boundary (one drill-down group per run, not
-        // per batch), so this closes nothing - the close rides runDone below.
-        // A batch that streamed nothing is counted too (the scope(exit) fires on
-        // every exit): the number is an identity, not a dense sequence.
-        ++batchIndex;
-    }
-
-    override void runDone() {
-        uiMsg.pipelineStreamDone(agentId);
-        // The run is the boundary (DD-19) on both ends: the next run of this
-        // node - its retry loop, a loop edge - counts from 0 again, so the
-        // numbers stay "within the run" as the wire doc promises. The ids stay
-        // unique across runs because a new run opens a new turn (new turnId).
-        batchIndex = 0;
-    }
-
-    override void stepEvent(ProcessResult result) {
-        // The step follows the batch's stream-done (the agent's loop calls step
-        // after process returns), so the finished batch is the one below the
-        // counter - the batch whose stream the drill-down just saw.
-        emitStepToolEvents(uiMsg, agentId, result, batchIndex - 1);
-    }
-
-    override void setId(string id) {
-        agentId = id;
-    }
-
-    override IStreamCallback clone() {
-        return new PipelineStreamMessageUpdater(uiMsg, contextSize, modelName);
-    }
-}
 
 package bool blockDisplayable(UiBlockData b) {
     if (b.kind != TuiBlockKind_Tool)

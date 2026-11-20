@@ -3168,6 +3168,26 @@ unittest {
     assert(sink.laneUpdates[2].batch == 0, "the next run counts its batches from 0 again");
 }
 
+@("the pipeline updater forwards the run's start with the run's task") unittest {
+    auto sink = new TuiRecordingSink();
+    auto ui = new UiMessenger(sink);
+    auto updater = new PipelineStreamMessageUpdater(ui, 8192, "model-x");
+    updater.setId("coder");
+
+    // The pipeline's submit site fires runStart once per run, before the
+    // agent's first batch: the drill-down's query row - the task the node
+    // was invoked with (task 29; the C++ draws it, task 30).
+    updater.runStart("get the parser building");
+
+    assert(sink.agentStarts.length == 1, "one start row per run");
+    assert(sink.agentStarts[0].agentId == "coder", "the run's lane is the agent's own id");
+    assert(sink.agentStarts[0].task == "get the parser building", "the run's task travels");
+    assert(sink.laneUpdates.length == 0,
+            "the start row is not a lane content update: the query is its own row");
+    assert(sink.countOf("pipelineStreamDone") == 0,
+            "the start opens nothing's end: the turn closes on runDone, not here");
+}
+
 @("the pipeline updater tags the step's tool traffic with the finished batch") unittest {
     import std.json : parseJSON;
 

@@ -20,7 +20,7 @@ import llm.rag.rag : RAG;
 import llm.summary_agent : SummaryAgent;
 import llm.tool_call.pipeline : PipelineControlContext;
 import llm.types : IBasicAgent, IAgent, ProcessResult, IStreamCallback,
-    IStepEventEmitter, IRunDoneEmitter;
+    IStepEventEmitter, IRunDoneEmitter, IRunStartEmitter;
 
 public import llm.pipeline.graph;
 
@@ -91,10 +91,13 @@ class PipelineNode : Node {
         stepDelegate_ = cb;
     }
 
-    /// The run-done emitter, stored on the node like the step hook:
     /// onAgentComplete fires it once per run - the boundary the per-batch
     /// stream done cannot carry (the tool loop fires one after every batch).
     IRunDoneEmitter runDoneEmitter_;
+
+    /// the submit site fires it once per run, before the agent's first
+    /// batch, with the query the node was invoked with.
+    IRunStartEmitter runStartEmitter_;
 
     string output() @safe pure nothrow const @nogc {
         return ctx.output;
@@ -404,6 +407,8 @@ struct Pipeline {
 
         struct PendingTask {
             PipelineNode pn;
+            /// The query the submit site built for this run: the run's task.
+            string query;
         }
 
         PendingTask[] tasksToSubmit;
@@ -499,8 +504,9 @@ struct Pipeline {
                 // Increment pending before submitting (so it doesn't hit zero prematurely)
                 _pending++;
 
-                // Queue the task for submission outside the mutex
-                tasksToSubmit ~= PendingTask(pn);
+                // Queue the task (and its query - the run's task) for
+                // submission outside the mutex
+                tasksToSubmit ~= PendingTask(pn, query);
                 logger.tracef("[pipeline] submit(nodeId='%s') pending=%s", pn.id, _pending);
             }
 
@@ -551,6 +557,15 @@ struct Pipeline {
 
         // Submit tasks OUTSIDE the mutex to prevent deadlock (callbacks re-enter onAgentComplete which locks the same mutex)
         foreach (t; tasksToSubmit) {
+            // The drill-down's query row: the run's task, fired before the
+            // agent's first batch (the turn it opens is the run's). Fired at
+            // the actual submit, outside the mutex, so a task the interrupt
+            // gate dropped never opens a turn (no runStart without the run's
+            // runDone closing it) and the send cannot stall the pipeline-wide
+            // completion path - the run-done ride fires outside the mutex too.
+            if (t.pn.runStartEmitter_ !is null)
+                t.pn.runStartEmitter_.runStart(t.query);
+
             auto wrappedAgent = new PipelineAgent(t.pn.agent, t.pn);
             _pool.submit(wrappedAgent, (IAgent _, ProcessResult r) {
                 this.onAgentComplete(t.pn, r);
@@ -843,6 +858,8 @@ struct PipelineBuilder {
                     n.setStepDelegate(stepHookFor(em));
                 if (auto re = cast(IRunDoneEmitter) s)
                     n.runDoneEmitter_ = re;
+                if (auto rs = cast(IRunStartEmitter) s)
+                    n.runStartEmitter_ = rs;
             }
             g.add(n);
         }

@@ -89,10 +89,15 @@ interface IStepEventEmitter {
     void stepEvent(ProcessResult result);
 }
 
-/// What one agent run's completion hands the emitter: fired once per run, after
-/// the agent's last batch.
 interface IRunDoneEmitter {
+    /// fired once per run, after the agent's last batch.
     void runDone();
+}
+
+interface IRunStartEmitter {
+    /// fired once per run, before
+    /// the agent's first batch, with the task the node was invoked with.
+    void runStart(string task);
 }
 
 struct ServerStat {

@@ -678,6 +678,15 @@ void tuiInitQueryHistory(TuiState* state, const String* history, size_t count) {
     ::llmfun::tui::tuiInitQueryHistory(*state->inner, vec);
 }
 
+void tuiPipelineAgentStart(TuiState* state, String agentId, String task) {
+    // task 29 lands the emitter first; the drill-down's query row is drawn by
+    // task 30's implementation. Nothing consumes the event yet, so the run's
+    // start is a no-op on this side until then.
+    (void)state;
+    (void)agentId;
+    (void)task;
+}
+
 void tuiPipelineAgentUpdate(TuiState* state, String agentId, PipelineChatMessage msg) {
     // Copied field by field across the boundary, so the layout is a wire contract: `tui_api.h`
     // states it, `llm/tui/package.d` pins the same size in a `static assert`, and
