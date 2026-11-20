@@ -76,4 +76,3 @@
 
 # thread modes (the response-owned fold)
 - content lifetime differs by mode and which one is wanted is undecided: in maximal a settled batch's content folds away with its batch; in minimal the newest batch's content stays visible until the turn closes. The difference is one line in the shared visibility predicate, so either behavior is a one-line change - picking between them is a UX call, not a technical constraint.
-- pin-map cleanup, not a bug: when the turn cap drops the oldest turns, the fold-open/closed clicks you made on them are not removed - they linger in the pin maps (tiny, keyed by the never-reused turn id, so they can never misfire, and wiped on session switch or clear).
