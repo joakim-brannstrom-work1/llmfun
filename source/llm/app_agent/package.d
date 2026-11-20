@@ -267,6 +267,11 @@ struct AgentApp {
         }
 
         TypedEmitContext typedCtx_;
+        // The live turn context a pipeline turn displaces: /c can hold an
+        // interrupted agent turn across a /plan or /code run, so
+        // openPipelineTurnTyped parks it here and closePipelineTurnTyped
+        // restores it.
+        TypedEmitContext savedTypedCtx_;
         long[] typedEmittedTurnIds_;
         long noticeSeq_;
     }
@@ -1209,6 +1214,38 @@ struct AgentApp {
         }
         ctx.liveCalls = null;
         uiMsg.turnUpsert(UiTurnData(ctx.turnId, TuiTurnState_Interrupted, ctx.messageCount));
+    }
+
+    /// /plan and /code: open a display-only turn in the main store (DD-22).
+    /// A fresh turn id is allocated but no message is added to the history,
+    /// so nothing persists under it: a reload (or any replay rebuild) drops
+    /// the turn - it exists on the wire only. The opened context displaces
+    /// any live one (/c may hold an interrupted agent turn across a
+    /// pipeline run); closePipelineTurnTyped restores it.
+    package void openPipelineTurnTyped(string query) {
+        if (agent_ is null)
+            return; // one-shot CLI has no chat to allocate the turn from
+        savedTypedCtx_ = typedCtx_;
+        typedCtx_ = null;
+        agent_.chat.beginNewTurn();
+        this.emitTurnStartTyped(query);
+    }
+
+    /// /plan and /code: close the display-only turn explicitly. Done for a
+    /// completed run, Interrupted for a stopped one - NOT emitRunEndedTyped,
+    /// which would close a successful pipeline turn Interrupted (no Answer
+    /// block is ever emitted into a pipeline turn, so closedByAnswer is
+    /// always false there). The displaced live context (/c's interrupted
+    /// agent turn) comes back: the pipeline turn is spent either way.
+    package void closePipelineTurnTyped(bool stopped) {
+        auto ctx = typedCtx_;
+        typedCtx_ = savedTypedCtx_;
+        savedTypedCtx_ = null;
+        if (ctx is null)
+            return;
+        ctx.liveCalls = null;
+        uiMsg.turnUpsert(UiTurnData(ctx.turnId, stopped
+                ? TuiTurnState_Interrupted : TuiTurnState_Done, ctx.messageCount));
     }
 
     /// A compression progress notice as a Notice block. The body is the exact

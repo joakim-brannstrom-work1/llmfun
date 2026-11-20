@@ -2657,6 +2657,11 @@ unittest {
             "the thrown /plan run is bracketed by exactly one busy and one ready");
     assert(sink.calls[$ - 1].kind == "ready", "ready crosses when the /plan unwinding fires, last");
     assert(!app.runInFlight, "the /plan unwinding restores the in-flight flag");
+    // The thrown run still brackets its display-only turn: opened Running, the
+    // exceptional exit closes Interrupted - never stranded Running, never Done.
+    assert(sink.turnUpserts.length == 2 && sink.turnUpserts[0].state == TuiTurnState_Running
+            && sink.turnUpserts[1].state == TuiTurnState_Interrupted,
+            "the thrown /plan run closes its turn Interrupted");
 
     sink.calls.length = 0;
     app.slashCommands_.execute(app, "/code write the fix");
@@ -2664,6 +2669,10 @@ unittest {
             "the thrown /code run is bracketed by exactly one busy and one ready");
     assert(sink.calls[$ - 1].kind == "ready", "ready crosses when the /code unwinding fires, last");
     assert(!app.runInFlight, "the /code unwinding restores the in-flight flag");
+    assert(sink.turnUpserts.length == 4
+            && sink.turnUpserts[$ - 2].state == TuiTurnState_Running
+            && sink.turnUpserts[$ - 1].state == TuiTurnState_Interrupted,
+            "the thrown /code run closes Interrupted too");
 }
 
 @("the agent prompt file carries the drag&drop attachment marker line") unittest {
@@ -4022,6 +4031,90 @@ unittest {
     assert(sink.blockUpserts[2].body == `pattern="x"`,
             "the streamed body is the arguments, never a name( wrapper: "
             ~ sink.blockUpserts[2].body);
+}
+
+// DD-22: the /plan and /code turn is display-only - a fresh turn id opens on
+// the wire (Running + the query prose row) but no message is added to the
+// history, so a replay rebuild drops the turn; the run's notices attach to it
+// (a notice targets the store's newest turn) and the explicit close lands the
+// honest Done. Interrupted closes Interrupted, and the open/close pair swaps
+// the live context out and back (/c's interrupted agent turn survives).
+@("typed pipeline turn: display-only open, notices, explicit close, restore")
+unittest {
+    import std.datetime : dur;
+    import std.path : buildPath;
+
+    import llm.chat;
+
+    auto tmpDir = testArea("app_agent_typed_pipeline_turn");
+    scope (exit)
+        tmpDir.cleanup;
+    TuiRecordingSink sink;
+    auto app = typedTestApp(new SessionStore(buildPath(tmpDir, "chat").Path), tmpDir, sink);
+
+    // Open: a fresh turn on the wire, query row first (DD-5).
+    app.openPipelineTurnTyped("plan the fold");
+    assert(app.agent_.chat.currentTurnId() == 1, "the pipeline turn allocates a fresh id");
+    assert(sink.turnUpserts.length == 1 && sink.turnUpserts[0].id == 1
+            && sink.turnUpserts[0].state == TuiTurnState_Running);
+    assert(sink.blockUpserts.length == 1 && sink.blockUpserts[0].id == "query"
+            && sink.blockUpserts[0].batchId == "1#q"
+            && sink.blockUpserts[0].kind == TuiBlockKind_Prose
+            && sink.blockUpserts[0].meta == "user" && sink.blockUpserts[0].body == "plan the fold");
+
+    // Display-only: no history entry carries the turn, so a replay rebuild
+    // never sees it (dropped on reload).
+    assert(app.agent_.chat.getMessages().empty, "no message is added to the history");
+    app.sendChatMessage("running...");
+    assert(sink.blockUpserts[1].kind == TuiBlockKind_Notice
+            && sink.blockUpserts[1].body == "running...",
+            "the run's notices attach to the open pipeline turn");
+
+    // Close: Done explicitly - emitRunEndedTyped would close Interrupted.
+    app.closePipelineTurnTyped(false);
+    assert(sink.turnUpserts.length == 2 && sink.turnUpserts[1].id == 1
+            && sink.turnUpserts[1].state == TuiTurnState_Done && sink.turnUpserts[1].messageCount == 0,
+            "the pipeline turn closes Done, messageCount 0");
+    assert(sink.blockUpserts.length == 2, "the close adds no block");
+
+    // Reload drops the display-only turn: the replay snapshot is empty.
+    app.emitReplayTyped();
+    assert(sink.setTurnsSnapshots.length == 1 && sink.setTurnsSnapshots[0].turns.empty,
+            "the turn was never persisted, so the rebuild drops it");
+
+    // The spent context does not answer a later stop.
+    app.emitStopTyped();
+    assert(sink.turnUpserts.length == 2, "the context is spent");
+
+    // Interrupted: the interrupted /code run closes Interrupted.
+    auto tmpDir2 = testArea("app_agent_typed_pipeline_turn_stopped");
+    scope (exit)
+        tmpDir2.cleanup;
+    TuiRecordingSink sink2;
+    auto app2 = typedTestApp(new SessionStore(buildPath(tmpDir2, "chat").Path), tmpDir2, sink2);
+    app2.openPipelineTurnTyped("code it");
+    app2.closePipelineTurnTyped(true);
+    assert(sink2.turnUpserts[1].state == TuiTurnState_Interrupted,
+            "a stopped pipeline turn never claims Done");
+
+    // The displaced live context comes back: an interrupted agent turn held
+    // across a pipeline run survives the open/close pair for /c to resume.
+    auto tmpDir3 = testArea("app_agent_typed_pipeline_turn_restore");
+    scope (exit)
+        tmpDir3.cleanup;
+    TuiRecordingSink sink3;
+    auto app3 = typedTestApp(new SessionStore(buildPath(tmpDir3, "chat").Path), tmpDir3, sink3);
+    auto f = TypedFixture.make();
+    app3.agent_.chat.add(f.q);
+    app3.emitTurnStartTyped("agent q"); // the live agent turn, id 1
+    app3.openPipelineTurnTyped("plan it"); // displaces it, turn id 2
+    assert(sink3.turnUpserts[1].id == 2, "the pipeline turn is its own turn");
+    app3.closePipelineTurnTyped(false);
+    app3.emitStopTyped(); // must land on the AGENT turn, not the pipeline turn
+    assert(sink3.turnUpserts.length == 4 && sink3.turnUpserts[2].id == 2
+            && sink3.turnUpserts[2].state == TuiTurnState_Done && sink3.turnUpserts[3].id == 1
+            && sink3.turnUpserts[3].state == TuiTurnState_Interrupted,
+            "the displaced agent turn context is restored, not the pipeline turn");
 }
 
 // The RESULT pair payload: a JSON-object result unpacks to the byte-wise sorted,
