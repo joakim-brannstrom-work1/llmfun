@@ -3,21 +3,21 @@
 /// The typed payload (`TypedTurn`/`TypedBlock`) lives in `typed_thread_store.h`; this
 /// module is the only code that projects it, and `views/` sees `GroupView` and
 /// `model::BlockDesc` instead. That is what lets the thread be *mounted* in the workbench
-/// layout (task 18) without a view naming a store type, and what keeps a restyle
-/// (tasks 25/26) a view change while the store keeps working.
+/// layout without a view naming a store type, and what keeps a restyle
+/// a view change while the store keeps working.
 ///
 /// What this header may not name: `TypedThreadStore`'s map internals,
 /// `TuiState`'s layout. The aggregate is forward-declared and only
 /// the implementation sees it, so a view can include this header with no `tui.h`
 /// and no `cpp_tui` include directory.
 ///
-/// Group identity (D-GROUPID, P-Δ4): the adapter's group id IS the persisted
+/// Group identity: the adapter's group id IS the persisted
 /// turn id - never renumbered within a session, reset only by `reset()`
 /// (clear / session switch). Expansion is one store, not two:
-/// `expanded()/setExpanded()` are the seam a restyled header uses (task 26),
+/// `expanded()/setExpanded()` are the seam a restyled header uses,
 /// and they read and write the very pins the store keeps (`ChatTab::groupPins`
 /// for a work group's fold, `ChatTab::rowPins` for a row's - absolute state
-/// keyed by the turn id, DD-6), so the block model and the
+/// keyed by the turn id), so the block model and the
 /// store cannot disagree. A turn is born folded: there is no one-shot default
 /// expansion to seed, and `commitSeen()` is the view's once-per-frame shape
 /// (a deliberate no-op kept so a frame's render contract does not change with
@@ -187,19 +187,19 @@ public:
     /// frame layer's `bind()` makes it true again.
     bool bound() const { return chat_ != nullptr && thread_ != nullptr; }
 
-    /// The thread's mode (design §6): the tab's own flag
+    /// The thread's mode: the tab's own flag
     /// (`ChatTab::threadMinimalMode`, factory default minimal). Unbound, the
     /// adapter answers minimal - every default the view draws is the folded one.
     bool minimalMode() const;
 
-    /// Whether the group is drawn OPEN (design §4.5, §7.5): the group's
+    /// Whether the group is drawn OPEN: the group's
     /// absolute pin first (`ChatTab::groupPins`, keyed by the persisted turn
     /// id) - then the mode's liveness default, open only while the turn is
     /// live in maximal mode. Unbound, closed (every default the view draws is
     /// the folded one). Cheap: one map probe over the drawn window.
     bool groupOpen(size_t groupId) const;
 
-    /// Whether the group draws in the MINIMAL STYLE (DD-14): the mode is
+    /// Whether the group draws in the MINIMAL STYLE: the mode is
     /// minimal AND the group is not pinned or live-open. An opened minimal
     /// group draws maximal-style; a folded maximal group never draws the
     /// minimal chips. Unbound, true (the folded shape). Same cost.
@@ -256,14 +256,14 @@ public:
     /// How many response batches the turn projects (0 out of range) - a
     /// read-only count over the turn's bucketed batches, so the tests can pin
     /// the bucketing without reaching into the adapter. The query's batch is
-    /// not a response batch and is never counted (DD-4).
+    /// not a response batch and is never counted.
     std::size_t batchCount(size_t k) const;
 
     /// Whether block `b` draws at all, and whether it shows its body. Both read
-    /// the derived predicate (design §4.5, §7.5): the turn's liveness, the
+    /// the derived predicate: the turn's liveness, the
     /// batch's position and the user's absolute pins (`ChatTab::rowPins` /
     /// `groupPins`) - never a mode+kind fold. A click and a read cannot
-    /// disagree (D-GROUPID); a thinking disclosure is the view's own and lives
+    /// disagree; a thinking disclosure is the view's own and lives
     /// in `UiState`.
     bool blockExpanded(size_t k, std::size_t b) const;
     /// Flip a block's disclosure; answers the state it now has (false out of range,
@@ -275,16 +275,15 @@ public:
     /// every body would pay for a feature nobody pressed.
     std::string blockText(size_t k, std::size_t b) const;
 
-    /// Whether the block's copy strips the markdown fences (S-13): a `Code`
+    /// Whether the block's copy strips the markdown fences: a `Code`
     /// row copies its code, and a batch owner copies its batch's content - the
-    /// fences strip when THAT content is code (task 12, the copy goes through
+    /// fences strip when THAT content is code (the copy goes through
     /// the owner). The copy path's only fence question, answered here so the
     /// view never re-derives it (B1).
     bool blockCopyIsCode(size_t k, std::size_t b) const;
 
     /// Whether `s` has anything to show on block `b` of group `k`: the row is drawn as markdown
-    /// *and* `ui::bodyHasTable()` says its body holds a GFM table this profile draws as a grid
-    /// (design §6.8, task 37).
+    /// *and* `ui::bodyHasTable()` says its body holds a GFM table this profile draws as a grid.
     ///
     /// The detector is the answer - it is the same span list `bridgeTables()` rewrites - so the
     /// toggle and the renderer can never disagree about what a table is, and the predicate pays
@@ -315,7 +314,7 @@ public:
     bool expanded(size_t id) const;
     void setExpanded(size_t id, bool open);
 
-    /// Forget every pin (task 24, DD-6): the fold's escape hatch. The pins are
+    /// Forget every pin: the fold's escape hatch. The pins are
     /// absolute, so a user who pinned twenty rows needs one action that clears
     /// them all at once - and it *clears*, never writes: writing `false` into
     /// every live row's pin would pin against the default and defeat the fold
@@ -381,18 +380,18 @@ public:
     size_t renderCalls() const { return renderCalls_; }
 
 private:
-    /// One response batch of a turn (task 7): the facts the projection buckets
+    /// One response batch of a turn: the facts the projection buckets
     /// per `batchId`. Built while the turn's rows are bucketed - the query's
-    /// batch is not a response batch and gets none (DD-4). `firstRow` is the
+    /// batch is not a response batch and gets none. `firstRow` is the
     /// wire index of the batch's first row, kept for the bucket vector's
-    /// first-row order (I-7); the emission itself no longer reads it (the
+    /// first-row order; the emission does not read it (the
     /// owner row's placement comes from the sort, not from `firstRow`).
-    /// The facts read the batch's rows before any drop (DD-8): the emission's
-    /// drops and DD-5's order shape the row list, never these numbers.
+    /// The facts read the batch's rows before any drop: the emission's
+    /// drops and the batch's row order shape the row list, never these numbers.
     struct BatchEntry {
         std::string batchId;
         std::size_t firstRow = 0;
-        bool isNewest = false; ///< the turn's last bucket (I-12)
+        bool isNewest = false; ///< the turn's last bucket
         bool hasReasoning = false;
         bool hasContent = false;
         bool anyFailed = false;
@@ -401,27 +400,27 @@ private:
         bool allSettled = true;
         /// the batch holds at least one call (a ToolStep row): a call-less
         /// batch is never "settled" - its streaming prose would otherwise be
-        /// vacuously folded (the design-pseudocode bug I2 recorded)
+        /// vacuously folded (a design-pseudocode bug)
         bool hasAnyCall = false;
         int failedCalls = 0;
-        /// the batch's chips line (FR-23): composed once per rebuild by
+        /// the batch's chips line: composed once per rebuild by
         /// `chipsText()` over the batch's tool names, ready to draw
         std::string chips;
-        /// the batch's duration: the content block's `durationMs` (DD-8) -
+        /// the batch's duration: the content block's `durationMs` -
         /// a settled batch says "1.2s" in its header
         double durationS = 0.0;
-        /// the batch's surviving content body (FR-16): the first kept Assistant
+        /// the batch's surviving content body: the first kept Assistant
         /// child's `typedBody`, the owner row's copy source. Empty when the
         /// batch's content rows all dropped (a calls-only batch copies nothing).
         std::string contentBody;
-        /// the content body is a fenced code block (S-13, the store's own
+        /// the content body is a fenced code block (the store's own
         /// `code` fact on the child the body came from): the owner's copy
         /// strips the fences, the same answer the content row's own copy gave
-        /// before the fold (task 12 - the copy goes through the owner now).
+        /// before the fold (the copy goes through the owner).
         bool contentIsCode = false;
     };
 
-    /// One block of a group (design §4.5, task 26): the group's own header row, a
+    /// One block of a group: the group's own header row, a
     /// message's body row, or a message's thinking disclosure.
     ///
     /// Built with the group list (`sync()`), so `blockAt()` is a copy out of an
@@ -448,11 +447,11 @@ private:
         /// The typed block's batch id: the response's blocks share it, which
         /// is how the projection buckets a row into its batch.
         std::string typedBatchId;
-        /// The batch bookkeeping the projection fills (task 7): `batch` is the
+        /// The batch bookkeeping the projection fills: `batch` is the
         /// row's slot in `Entry::batches` (`kNoBatch` for a plain row - the
         /// query batch's rows and anything not bucketed); `batchOwned` says the
         /// row joined a response batch (a bucket child); `ownsBatch` marks the
-        /// synthetic owner row itself (DD-13) - the wire never sends it.
+        /// synthetic owner row itself - the wire never sends it.
         std::size_t batch = kNoBatch;
         bool batchOwned = false;
         bool ownsBatch = false;
@@ -481,9 +480,9 @@ private:
         /// The turn's live state off the wire (`TypedTurn::state`): Running from
         /// the upsert that opens the turn until the done/stop upsert closes it.
         bool turnLive = false;
-        /// The turn's response batches, in first-row order (I-7): one per
-        /// batch id that is not the query's (DD-4). The owner rows in `blocks`
-        /// project these (DD-13).
+        /// The turn's response batches, in first-row order: one per
+        /// batch id that is not the query's. The owner rows in `blocks`
+        /// project these.
         std::vector<BatchEntry> batches;
     };
 
@@ -511,25 +510,25 @@ private:
     /// The per-turn block fingerprint the revision compares (last rebuild's).
     mutable std::map<std::int64_t, std::uint64_t> typedFingerprints_;
 
-    /// The derived predicate (design §7.5): "does this row draw" and "is its
+    /// The derived predicate: "does this row draw" and "is its
     /// body open", both from the turn's liveness, the batch's position and the
     /// user's absolute pins. `blockAt()` fills `visible`/`expanded` from them;
     /// `blockExpanded()` is the open half. No mode+kind fold survives.
     bool resolveVisible(const Entry& entry, const BlockEntry& block) const;
     bool resolveOpen(const Entry& entry, const BlockEntry& block) const;
-    /// The batch's live flag (I-12 + FR-21's content clause): the turn is live,
+    /// The batch's live flag: the turn is live,
     /// the batch is the turn's newest and it is unsettled or still holds the
     /// turn's content. The OWNER's open default. False for a plain row.
     bool batchLiveFor(const Entry& entry, const BlockEntry& block) const;
-    /// A child row's live default (I-12): the turn is live, the batch is the
+    /// A child row's live default: the turn is live, the batch is the
     /// turn's newest and a call in it is still in flight - a batch with no call
     /// in flight folds its children behind their own pins.
     bool childLiveFor(const Entry& entry, const BlockEntry& block) const;
 
-    /// The typed-backed rebuild (design §4: group id = the persisted turnId).
+    /// The typed-backed rebuild (group id = the persisted turnId).
     void syncTyped() const;
 
-    /// Height hints used to live here; they are `UiState::thread.hints` now (the
+    /// Height hints live in `UiState::thread.hints` (the
     /// cache is view state, and it must be dropped by a session switch that this
     /// class does not observe). What stays is the box the cache was keyed by.
     ///
@@ -542,7 +541,7 @@ private:
     /// group id -> index in `groups_`. The lookup `expanded()`, `setExpanded()` and
     /// `measureHint()` need, as a map rather than a scan: a scan per call would be
     /// O(groups) per visible group per frame, i.e. exactly the per-frame walk of
-    /// the store that incremental enumeration exists to avoid (design §4.4).
+    /// the store that incremental enumeration exists to avoid.
     mutable std::map<size_t, size_t> indexById_;
     /// Group entries walked by `entryFor()` since the adapter was created (the
     /// incremental-enumeration counter; a map lookup walks nothing).
@@ -566,7 +565,7 @@ private:
     float groupTop_ = 0.0f;
 };
 
-/// The one chips composer (DD-18, FR-23): the running tool calls' names as the
+/// The one chips composer: the running tool calls' names as the
 /// live-edge chips line - `"[bash] [grep]"`, first three distinct names then
 /// `+N` (`"[bash] [grep] [read_file] +1"`), empty for no calls. The projection
 /// composes a batch's settled chips with it, and the view composes the live

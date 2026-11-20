@@ -158,7 +158,7 @@ void textAt(const ui::Metrics& m, const ui::Rect& clip, float x, float y, const 
     ImGui::SetCursorScreenPos(flow);
 }
 
-/// The composer's answer, split where the renderer splits its inks (C8): the
+/// The composer's answer, split where the renderer splits its inks: the
 /// chips run is the batch's data, not the role's word, so it draws in the
 /// quiet `textMid` beside the role ink. `text` is what `blockHeaderText()`
 /// returns; `chipsBegin`/`chipsEnd` are the chips run's byte offsets in it
@@ -172,14 +172,14 @@ struct HeaderRuns {
 HeaderRuns composeBlockHeader(const BlockView& block, const BlockDraw& draw, const ui::Metrics& m,
                               float availUnits) {
     const char* label = block.label.empty() ? defaultBlockLabel(block.kind) : block.label.c_str();
-    // Thinking carries neither a duration nor a count of its own (DD-8): the cost
+    // Thinking carries neither a duration nor a count of its own: the cost
     // is the owner's, so the disclosure says the bare word. Every other row keeps
     // the store's duration.
     const std::string timing =
         block.kind == BlockKind::Thinking ? std::string() : blockTimingLabel(block.timingS);
     if (block.kind == BlockKind::ToolStep) {
         // The tool card's header: `TOOL <name>` while the card streams,
-        // `TOOL <name> · <duration>` once the result lands (W7: exactly when
+        // `TOOL <name> · <duration>` once the result lands (exactly when
         // durationMs != 0 - never a placeholder). The header carries no token
         // counts - the wire fields stay, this render consumes none of them. A
         // failure paints its red FAIL word in `renderBlock`, never in the text
@@ -195,12 +195,12 @@ HeaderRuns composeBlockHeader(const BlockView& block, const BlockDraw& draw, con
         return HeaderRuns{text, 0, 0};
     }
 
-    // The composer (design §7.4, FR-8, FR-13): the parts join with the profile's
+    // The composer: the parts join with the profile's
     // separator, and the row is fitted to `availUnits` by dropping from the right
     // - chips one token at a time, then the duration, never the label.
     Chips chips = splitChips(block.chips);
     std::vector<std::string> parts;
-    // A folded batch owner drops the role word (FR-8): the duration and the
+    // A folded batch owner drops the role word: the duration and the
     // chips already say what the row is, and the mark + the fold say which batch.
     if (!block.ownsBatch || draw.expanded)
         parts.push_back(label);
@@ -268,7 +268,7 @@ HeaderRuns composeBlockHeader(const BlockView& block, const BlockDraw& draw, con
     }
 
     // The chips run's place in the fitted text: the renderer splits its inks
-    // at this boundary (C8), so the draw needs the byte offsets, not a re-parse.
+    // at this boundary, so the draw needs the byte offsets, not a re-parse.
     HeaderRuns runs;
     runs.text = text;
     if (hasChips) {
@@ -366,7 +366,7 @@ bool blockIsCompactRow(BlockKind kind) {
 
 bool blockHasDisclosure(const BlockView& block) {
     // The disclosure is a property of the row, not of its kind: a batch's
-    // owner row is a `BlockKind::Assistant` row and still folds (D15, C9a) -
+    // owner row is a `BlockKind::Assistant` row and still folds -
     // the AGENT word's row is the batch's own disclosure.
     return block.kind == BlockKind::WorkGroup || block.kind == BlockKind::Thinking ||
            block.kind == BlockKind::ToolStep || block.ownsBatch;
@@ -486,7 +486,7 @@ BlockResult renderBlock(const BlockView& block, const ui::Rect& rect, const ui::
     // folded or open, and every other state stays silent (success needs no mark).
     const float availUnits = std::max(0.0f, header.w - (penX - pos.x));
     const HeaderRuns runs = composeBlockHeader(block, draw, m, availUnits);
-    // C8: the header's inks split at the chips boundary - the role's word and
+    // The header's inks split at the chips boundary - the role's word and
     // the closed preview in the role's ink, the chips run in the quiet textMid
     // beside it (the chips are the batch's data, not the role's word). Each run
     // starts where the prefixes before it measure to, all off the same text.
@@ -502,7 +502,7 @@ BlockResult renderBlock(const BlockView& block, const ui::Rect& rect, const ui::
     // The failure is a word, not a state glyph: a failed tool card has always
     // painted red FAIL after its header, folded or open, and a batch owner now
     // does the same for its failed calls - one spelling of failure, wherever
-    // the row carries it (FR-23).
+    // the row carries it.
     const bool failed = block.failedCalls > 0 ||
                         (block.kind == BlockKind::ToolStep && block.state == BlockState::Failed);
     if (failed) {
@@ -547,10 +547,9 @@ BlockResult renderBlock(const BlockView& block, const ui::Rect& rect, const ui::
     //    `Copy` is disabled for a block that copies nothing: the item must not
     //    promise text the block does not have, and a disabled item copies
     //    nothing. A batch owner has no body of its own but IS the copy target
-    //    for its batch's content (FR-16/FR-22, `copyable`), so the item reads
+    //    for its batch's content (`copyable`), so the item reads
     //    the copy target, not the body. The keyboard half stays `y` on the
-    //    focused block, so copy never needs the terminal's own `Ctrl+C`
-    //    (plan/tui_copy_probe.md).
+    //    focused block, so copy never needs the terminal's own `Ctrl+C`.
     if (out.menuRequested || draw.menuOwner) {
         // No `SetNextWindowPos`: a mouse-opened popup already latches the pointer as its
         // position (`OpenPopupPos`), and setting one here would be left dangling for the

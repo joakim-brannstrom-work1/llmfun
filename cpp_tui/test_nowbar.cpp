@@ -71,7 +71,7 @@
 // `TuiState`: the ABI handle's private shape, shared with the other contract tests (one copy of
 // the layout for all of them).
 #include "test/tui_state_handle.h"
-#include "test/typed_seed.h" // typed turn/block seeding (the v4 message path is gone)
+#include "test/typed_seed.h" // typed turn/block seeding
 
 namespace ui = llmfun::tui::ui;
 namespace views = llmfun::tui::views;

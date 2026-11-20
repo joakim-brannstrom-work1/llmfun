@@ -30,9 +30,8 @@ private AgentStatus planHandler(ref AgentApp app, string arg) {
     app.uiMsg.pipelineClear;
     auto q = arg;
     bool interrupted;
-    // The display-only turn (DD-22) opens BEFORE the run's notices so they
-    // attach to it (a notice targets the store's newest turn). isActive()
-    // keeps the one-shot CLI byte-stable - the blocked sink draws nothing.
+    // The display-only turn opens BEFORE the run's notices so they
+    // attach to it (a notice targets the store's newest turn).
     if (app.uiMsg.isActive())
         app.openPipelineTurnTyped(q);
     // The close bracket registers immediately after the open (a throw in

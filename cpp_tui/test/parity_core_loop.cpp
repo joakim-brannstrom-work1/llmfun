@@ -563,7 +563,7 @@ void setSessions(Harness& h, const std::vector<SessionItem>& items) {
     tuiSetSessionList(h.handle.get(), items.data(), items.size());
 }
 
-/// The typed emitters stand in for D's typed path (task 5): every message the v4
+/// The typed emitters stand in for D's typed path: every message the
 /// harness appended becomes the turn/block upserts the D-side emitters send -
 /// a query prose block per user message, a content/answer block per assistant
 /// message, and one turn upsert per turn (Running when live, Done on replay).
@@ -598,8 +598,7 @@ void upsertBlock(Harness& h, std::int64_t turnId, const std::string& id, const s
     String_Free(b.body);
 }
 
-/// The harness's replay kinds: the three shapes a replayed exchange has (the
-/// v4 message enum they came from died with the cutover).
+/// The harness's replay kinds: the three shapes a replayed exchange has.
 enum class Msg { User, Assistant, FinalAnswer };
 
 /// A replayed exchange, exactly what `emitReplayTyped` sends at switch time:
@@ -918,7 +917,7 @@ void stepSelectSession(Harness& h) {
           "select: the replayed transcript is the thread's body");
     if (h.text()) {
         check(h.last.hasText("build the project"), "select: the replayed user message is drawn");
-        // Minimal mode (task 6) folds the replayed turn's work rows behind the
+        // Minimal mode folds the replayed turn's work rows behind the
         // header: the assistant prose is a work row, so the turn draws as its
         // header plus the query row - the work row's own text stays folded.
         check(h.last.hasText("WORK"), "select: the replayed turn's header is drawn");
@@ -1080,7 +1079,7 @@ void stepStream(Harness& h) {
     check(!h.core->readyStatus, "stream: the frame knows a run is in flight");
     if (h.text()) {
         // Minimal mode keeps the live tail's prose on screen under the folded
-        // header (matrix row 421, B1: the segment clause evaluates first) -
+        // header (the segment clause evaluates first) -
         // the query row carries the turn, the segment draws under it.
         check(h.last.hasText("read the tree"),
               "stream: the live tail's prose draws under the folded header");
@@ -1658,8 +1657,8 @@ void checkFocusMode(bool update) {
 }
 
 // ---------------------------------------------------------------------------
-// The cross-cutting battery (task 9, design P2-8): every §7 failure mode and
-// §8 scenario, end to end through the typed emitters. Correctness only - no
+// The cross-cutting battery: every failure mode and
+// scenario, end to end through the typed emitters. Correctness only - no
 // perf gate (the known-red policy): the bounded-cost properties are asserted
 // structurally, on store and window counters, never as a timing gate.
 // ---------------------------------------------------------------------------
@@ -1753,8 +1752,8 @@ void checkBattery() {
     const std::string again = goldenText(h, 120, 36, "parity-battery");
     check(first == again, "battery 1: the same session renders byte-identical twice");
 
-    // The pin seam (task 10) against the liveness default: maximal at rest
-    // folds the replayed groups (§7.5), and a pin answers whatever was
+    // The pin against the liveness default: maximal at rest
+    // folds the replayed groups, and a pin answers whatever was
     // stored - open here - surviving further frames byte-identically.
     h.core->ui.prefs.threadMinimal = false;
     h.idle(2); // the frame's mirror applies the mode and drops the stale hints
@@ -1764,7 +1763,7 @@ void checkBattery() {
     const std::size_t pinned = h.core->threadAdapter.groupAt(0).id;
     check(!h.core->threadAdapter.groupOpen(pinned) &&
               !h.core->threadAdapter.groupStyleIsMinimal(pinned),
-          "battery 1: maximal at rest folds the work group, maximal-style (§7.5)");
+          "battery 1: maximal at rest folds the work group, maximal-style");
     h.core->threadAdapter.setExpanded(pinned, true);
     h.idle(2);
     check(h.core->threadAdapter.groupOpen(pinned),
@@ -1775,7 +1774,7 @@ void checkBattery() {
     check(pinnedA == goldenText(h, 120, 36, "parity-battery"),
           "battery 1: the pinned fold renders byte-identical on the re-render");
 
-    // 2. Stop mid-batch (§7): the in-flight call goes Cancelled, the partial
+    // 2. Stop mid-batch: the in-flight call goes Cancelled, the partial
     // answer stays, and nothing is fabricated into an Ok.
     phase("battery: stop mid-batch");
     tuiThreadClear(h.handle.get());
@@ -1804,7 +1803,7 @@ void checkBattery() {
     // The run bracket is exception-safe: the unwinding fired ready, so the
     // composer is back to Send once the stopped run ends.
     // The turn closed (Interrupted), so its group folds and the streamed
-    // content folds with it (matrix row 422) - the partial answer lives on
+    // content folds with it - the partial answer lives on
     // in the store (the checks above), not on screen.
     tuiReadyStatus(h.handle.get(), 1);
     h.idle(2);
@@ -1815,10 +1814,10 @@ void checkBattery() {
               "battery 2: the partial answer folds with the closed group");
     }
 
-    // 3. Compression re-emission (§7): the affected turns are removed and
+    // 3. Compression re-emission: the affected turns are removed and
     // re-emitted as one summary turn, and no stale
     // group keeps orphaned block ids - the removed turn's pin dies with it
-    // (task 8's tuiTurnRemove).
+    // (tuiTurnRemove).
     phase("battery: compression re-emission");
     tuiThreadClear(h.handle.get());
     buildBatteryReplay(h);
@@ -1851,10 +1850,10 @@ void checkBattery() {
     check(h.core->threadAdapter.groupCount() == 1,
           "battery 3: the group list follows the re-emission");
     // The notice rides a batch of the Done turn, whose group is closed at
-    // rest, so it folds with the group (§7.5 plainVisible = groupOpen). Open
-    // question for the user (review M5): a compression summary that never
-    // renders may be a product-level gap the design never weighed - open
-    // issue 5 covered the query/answer rows only.
+    // rest, so it folds with the group (plainVisible = groupOpen). Open
+    // question: a compression summary that never renders may be a
+    // product-level gap the design never weighed - the pin checks covered
+    // the query/answer rows only.
     check(!h.last.hasText("earlier context summarized"),
           "battery 3: the summary notice folds with the closed group");
 
@@ -1966,7 +1965,7 @@ void checkBattery() {
     if (h.text())
         check(h.last.hasText("Send"), "battery 5: Send is back once the run ends");
 
-    // 6. Interrupted-turn replay (§7/§8): the snapshot's recorded in-flight call
+    // 6. Interrupted-turn replay: the snapshot's recorded in-flight call
     // replays as Cancelled - honestly, never renormalized into an Ok.
     phase("battery: interrupted-turn replay");
     toolBlock(h, crossLive, "call-9", TuiBlockStatus_Cancelled, "write_file",
@@ -1978,9 +1977,9 @@ void checkBattery() {
               replayed->status == TuiBlockStatus_Cancelled,
           "battery 6: the interrupted call replays as Cancelled");
     // The turn is Interrupted, so its group is closed at rest and the
-    // replayed card folds behind it (§7.5 childVisible) - the honest
+    // replayed card folds behind it (childVisible) - the honest
     // Cancelled status lives in the store (the checks around here), and
-    // the row renders once the user pins its owner open (DD-6).
+    // the row renders once the user pins its owner open.
     check(!h.last.hasText("write_file"),
           "battery 6: the replayed call folds with the closed group");
     bool replayOk = false;
@@ -2045,9 +2044,9 @@ void checkBattery() {
     h.core->ui.prefs.threadMinimal = false;
     h.idle(2);
     // Both calls responded, so the live turn's newest batch is settled: its
-    // owner folds mid-turn (matrix rows 420/422 - the default open is live
-    // tail && unsettled) and the cards hide behind it. The merged pair set
-    // still renders once the rows are pinned open (DD-6): the pin is
+    // owner folds mid-turn (the default open is live tail && unsettled) and
+    // the cards hide behind it. The merged pair set
+    // still renders once the rows are pinned open: the pin is
     // absolute and survives the liveness default.
     check(!h.last.hasText("RESULT path = t.log"),
           "battery 8: the settled owner folds its cards even mid-turn");
@@ -2193,13 +2192,12 @@ PerfRun measureWorkbench(int frames) {
 /// cost still to come.
 constexpr double kBaselineFrameMs = 16.70;
 constexpr double kBaselineOpenMs = 37.0;
-/// The last measurement of this fixture on this harness (task 5): the workbench's
-/// own p50 frame time and session open, re-recorded after the typed-store cutover
-/// (the v4 message path and its per-message summaries are gone, so the pre-cutover
-/// task-40 numbers no longer describe this fixture's work).
+/// The last measurement of this fixture on this harness: the workbench's
+/// own p50 frame time and session open, recorded with the typed store
+/// in place.
 constexpr double kRecordedFrameMs = 0.886;
 constexpr double kRecordedOpenMs = 12.694;
-/// The design's allowance: "within 10 % of plan/baseline.md".
+/// The design's allowance: "within 10 % of the recorded baseline".
 constexpr double kPerfAllowance = 1.10;
 
 void checkPerf() {

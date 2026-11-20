@@ -18,7 +18,7 @@
 //   * `PgUp` and `Ctrl+U` reveal one page of older groups (D-BOUNDS), and the window
 //     the page is measured against is the layout's, not a constant,
 //   * a batch folding in place - by hand or by the live batch settling - never
-//     moves the group's header row (task 16): the fold changes how many rows
+//     moves the group's header row: the fold changes how many rows
 //     follow the header, never where the header starts.
 //
 // Needs a display; runs headless under xvfb:
@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
         frame();
     };
 
-    // The typed store's seeding (the v4 message path is gone): a `User` message
+    // The typed store's seeding: a `User` message
     // opens a turn with its query block, an assistant step hangs a content block
     // off the newest turn, and a transcript reset restarts the walk's ids at 1.
     typed_seed::Seeder seed{&state, 1};
@@ -454,8 +454,8 @@ int main(int argc, char** argv) {
     frames(2);
     thread = findThreadWindow();
     const size_t workId = state.ui.thread.firstGroupId;
-    // The typed store seeds work groups folded; the v4 default this phase pins
-    // (only the newest unfolds) is applied here, as D's replay does.
+    // The typed store seeds work groups folded (only the newest unfolds); the
+    // fixture expands this one, as D's replay does.
     state.threadAdapter.setExpanded(workId, true);
     check(workId != 0 && state.threadAdapter.expanded(workId),
           "the fixture is one open work group");
@@ -600,7 +600,7 @@ int main(int argc, char** argv) {
               std::to_string(parkedStreamY) + ")");
 
     // --- A batch folding in place never moves the group's header row -----------
-    // Task 16: the group's header row is the anchor, and a fold - by hand or by
+    // The group's header row is the anchor, and a fold - by hand or by
     // the live batch settling - changes how many rows follow the header, never
     // where the header starts. Both cases run in the maximal mode (`threadMinimal`
     // off), where the fold is visible: the owner row draws open with its children
@@ -683,7 +683,7 @@ int main(int argc, char** argv) {
           "the anchor applied its correction and cleared");
 
     // The settled batch: a fresh fixture - the fold above pinned its owner
-    // closed, and a pin outranks the default it must not mask (DD-6). The batch
+    // closed, and a pin outranks the default it must not mask. The batch
     // settles the way a response does: the call answers, the content gains its
     // duration, and the owner's live default folds it - a store change the view
     // did not perform, so no anchor may arm, and the rows that hide sit below

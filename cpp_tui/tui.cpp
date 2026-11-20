@@ -218,7 +218,7 @@ void dispatchKeys(TuiState& state, Log& log) {
         model::toggleFocusMode(state.ui);
         break;
     case model::Action::CollapseAll:
-        // The fold's escape hatch (task 24, DD-6): the pins are absolute, so a
+        // The fold's escape hatch: the pins are absolute, so a
         // user who pinned twenty rows needs one press that forgets them all. The
         // adapter owns the maps, so this is the same call the palette's row makes
         // - and the next frame draws every group on its mode default.

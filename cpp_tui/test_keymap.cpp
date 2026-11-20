@@ -39,7 +39,7 @@
 #include "imgui/imgui_internal.h"
 
 #include "model/keymap.h"
-#include "test/typed_seed.h" // typed turn/block seeding (the v4 message path is gone)
+#include "test/typed_seed.h" // typed turn/block seeding
 #include "tui.h"
 #include "views/palette.h"
 #include "views/rawlog.h"
@@ -165,7 +165,7 @@ void checkRegistry() {
                 reachable[static_cast<int>(action)] = true;
         }
     }
-    // The palette is the third entry point (task 24, D-PALETTE): an action with
+    // The palette is the third entry point: an action with
     // no chord and no escape step - `Collapse all` - is reachable through its
     // row alone, so the table walk above would report the contract violated.
     std::deque<std::string> paletteIds;

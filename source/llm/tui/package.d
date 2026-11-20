@@ -33,7 +33,7 @@ string toString(String s) {
     return r;
 }
 
-// ---- v5 typed thread turn/block conversions --------------------------------
+// Typed thread turn/block conversions
 //
 // The channel crossing carries D-owned strings (UiTurnData/UiBlockData): a
 // TuiBlock's `String` fields borrow caller memory, so they cannot survive the
@@ -1088,11 +1088,6 @@ class TextUserInterfaceActor : TUICommands {
         ui.pipelineToolResult(m);
     }
 
-    // v5 typed thread turns/blocks: convert the
-    // D-owned payloads to the wire structs at
-    // C-call time (the C side copies inbound
-    // strings; a `String` cannot outlive the
-    // payload it borrows).
     void uiMsg(UiSetTurns m) {
         ui.setTurns(toTuiTurns(m.turns), toTuiBlocks(m.blocks));
     }
@@ -1213,8 +1208,6 @@ struct UiPipelineStreamChatMessage {
     string currentTool;
     long contextUsed;
     long contextMax;
-    /// 0-based per-response batch index within the lane's run (task 27): one
-    /// number per LLM response, shared by the batch's ticks and its tool traffic.
     long batch;
 }
 
@@ -1224,7 +1217,7 @@ struct UiPipelineStreamDone {
 
 struct UiPipelineAgentStart {
     string agentId;
-    /// The task the node was invoked with: the drill-down's query row.
+    /// The task the node was invoked with
     string task;
 }
 
@@ -1233,7 +1226,6 @@ struct UiPipelineToolCall {
     string name;
     string arguments;
     string id;
-    /// The batch index of the response that made the call (task 27).
     long batch;
 }
 
@@ -1242,7 +1234,6 @@ struct UiPipelineToolResult {
     string name;
     int ok;
     string text;
-    /// The batch index of the response that made the call (task 27).
     long batch;
 }
 

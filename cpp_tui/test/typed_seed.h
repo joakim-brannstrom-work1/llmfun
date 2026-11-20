@@ -1,4 +1,4 @@
-/// Typed-store seeding for the tests (the v4 message path is gone): the
+/// Typed-store seeding for the tests: the
 /// plumbing every seeding call site shares, plus the message shapes the D
 /// emitters send. The C upserts copy every string during the call, so these
 /// `String`s are non-owning and never freed.

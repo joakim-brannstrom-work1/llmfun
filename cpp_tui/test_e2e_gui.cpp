@@ -656,7 +656,7 @@ int main(int argc, char** argv) {
     frames(2); // back to the shell: the surface window the harness drew is gone
 
     // 6. The cap holds when the events keep coming: the store keeps its newest
-    // turns and evicts the oldest whole ones (W2) - a done turn per call/result
+    // turns and evicts the oldest whole ones - a done turn per call/result
     // pair here, until the typed cap is passed.
     for (int k = 0; k < 1005; ++k) {
         agentToolCall("coder", "probe", "note", "probe-call");

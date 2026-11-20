@@ -110,7 +110,7 @@ constexpr const char* kIdCopyAnswer = "actions.copyLastAnswer";
 constexpr const char* kIdStopRun = "actions.stopRun";
 constexpr const char* kIdQuit = "actions.quit";
 constexpr const char* kIdLoadEarlier = "actions.loadEarlier";
-/// The fold's escape hatch (task 24, DD-6). The pins are absolute, so one row is
+/// The fold's escape hatch. The pins are absolute, so one row is
 /// what forgets them all - and the row is the action's only keyboard path: no
 /// chord, because a new one would collide with the terminal's own bytes
 /// (`doc/ui_keys.md`).
@@ -173,8 +173,8 @@ bool blockIsAnswerRole(const model::BlockDesc& block) {
     // The batch's owner row is a `BlockKind::Assistant` row but it is not an
     // answer: it is the response batch's header, and its text is the batch's
     // content, which the walk reaches through the batch's content child (the
-    // child carries the body; FR-16's `blockText()` floors the owner's copy to
-    // the same text). The rejection is C9b's ask; today the walk's acceptance
+    // child carries the body; `blockText()` floors the owner's copy to
+    // the same text). The rejection is the semantic ask; today the walk's acceptance
     // already skips the body-less owner, so this is the semantic floor that
     // holds if the acceptance ever loosens.
     if (block.ownsBatch)
@@ -219,10 +219,10 @@ bool lastAnswerBlock(const TuiState& state, std::size_t& group, std::size_t& blo
         const std::size_t blocks = state.threadAdapter.blockCount(k - 1);
         for (std::size_t b = blocks; b > 0; --b) {
             const model::BlockDesc desc = state.threadAdapter.blockAt(k - 1, b - 1);
-            // The batch's content is the copy target with no ANSWER row (FR-22):
+            // The batch's content is the copy target with no ANSWER row:
             // the walk finds the batch's surviving content child - the owner
             // carries no body of its own (the acceptance skips it), and its
-            // copy floors to the same text through `blockText()` (FR-16). A
+            // copy floors to the same text through `blockText()`. A
             // calls-only batch leaves no acceptable row, so the row stays
             // disabled - the owner cannot be talked into being the answer.
             if (!blockIsAnswerRole(desc))
@@ -578,7 +578,7 @@ bool performRow(const PaletteItem& item, PaletteState& p, TuiState& state) {
         requestEarlierPage(state.ui);
         return true;
     case model::Action::CollapseAll:
-        // The fold's escape hatch (task 24, DD-6): the pins are absolute, so one action
+        // The fold's escape hatch: the pins are absolute, so one action
         // forgets them all - the same call the keymap's dispatch makes, through the adapter
         // that owns the maps. The palette row is the action's only keyboard path (a new
         // chord would collide with the terminal's own bytes), and clearing is right in every
@@ -838,7 +838,7 @@ std::vector<PaletteItem> paletteActions(const TuiState& state, const std::string
     items.push_back({kIdLoadEarlier, kGroupActions, "Load earlier",
                      "Show the groups older than the window (PgUp)", threadHiddenGroups(state) != 0,
                      model::Action::LoadEarlier});
-    // The fold's escape hatch (task 24, DD-6): the pins are absolute, so a user
+    // The fold's escape hatch: the pins are absolute, so a user
     // who pinned twenty rows needs one action that forgets them all. Always
     // enabled: clearing an empty set of pins is the same no-op the fold asks for,
     // and there is no state where forgetting pins is wrong. The palette is the

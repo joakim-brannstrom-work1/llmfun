@@ -1,6 +1,6 @@
 // test_typed_thread_store.cpp
 //
-// The v5 typed thread store (store/typed_thread_store.h) and the typed-backed
+// The typed thread store (store/typed_thread_store.h) and the typed-backed
 // projection it feeds (store/thread_store.h's `TypedTurns` source): the upsert
 // merge semantics, the step-count weights, the eviction, and the adapter's
 // group/block view of a store the wire upserts.
@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    // --- The upsert merge: a first upsert creates the slot, later ones merge ---
+    // The upsert merge: a first upsert creates the slot, later ones merge
     {
         TypedThreadStore store;
         store.turnUpsert(turn(7, 1, 2));
@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
               "the store accepts Ok -> Pending (D7 is the emitter's)");
     }
 
-    // --- Batch grouping: insertion order per turn, tool-less batches included ---
+    // Batch grouping: insertion order per turn, tool-less batches included
     {
         TypedThreadStore store;
         store.turnUpsert(turn(11));
@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
               "the batchId rides the block");
     }
 
-    // --- Displayability (D3) and the step-count weights (D4) --------------------
+    // Displayability (D3) and the step-count weights (D4)
     {
         TypedBlock prose = block(1, "p", 0, 0);
         check(tui::store::blockDisplayable(prose), "non-Tool blocks are always displayable (D3)");
@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
               "a turn the store does not hold has no steps");
     }
 
-    // --- The mutation counter: the adapter's O(1) rebuild guard -----------------
+    // The mutation counter: the adapter's O(1) rebuild guard
     {
         TypedThreadStore store;
         store.turnUpsert(turn(1));
@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
         check(store.turnCount() == 0 && store.blockCount(1) == 0, "threadClear empties the store");
     }
 
-    // --- Eviction: whole turns, oldest first, never the live one ----------------
+    // Eviction: whole turns, oldest first, never the live one
     {
         TypedThreadStore store;
         const std::int64_t live = static_cast<std::int64_t>(TypedThreadStore::kMaxTurns) + 10;
@@ -243,12 +243,12 @@ int main(int argc, char** argv) {
         check(store.turnCount() == TypedThreadStore::kMaxTurns,
               "the cap holds after evictForCapacity");
         check(store.turnById(1) == nullptr, "the oldest turn was evicted");
-        check(store.blockCount(1) == 0, "the eviction cascaded to its blocks (W6)");
+        check(store.blockCount(1) == 0, "the eviction cascaded to its blocks");
         check(store.turnById(live) != nullptr && store.blockCount(live) == 1,
-              "the live turn is never evicted (W2), blocks and all");
+              "the live turn is never evicted, blocks and all");
     }
 
-    // --- Removal: idempotent, and it cascades -----------------------------------
+    // Removal: idempotent, and it cascades
     {
         TypedThreadStore store;
         store.turnUpsert(turn(11));
@@ -260,10 +260,10 @@ int main(int argc, char** argv) {
         check(store.turnCount() == 0, "removing a turn that is gone clears nothing (idempotent)");
     }
 
-    // --- The unknown-callId record: an implicit turn slot, then the real turn ---
+    // The unknown-callId record: an implicit turn slot, then the real turn
     {
         TypedThreadStore store;
-        // A result can beat its turn's snapshot onto the wire (§7): the block
+        // A result can beat its turn's snapshot onto the wire: the block
         // lands under an implicit empty turn slot, never dropped.
         store.blockUpsert(block(55, "result-x", 2, 3, "grep", "..."));
         check(store.turnCount() == 1 && store.turnAt(0).id == 55,
@@ -275,7 +275,7 @@ int main(int argc, char** argv) {
               "the real turn's upsert merges into the implicit slot");
     }
 
-    // --- A snapshot is a wholesale replay ---------------------------------------
+    // A snapshot is a wholesale replay
     {
         TypedThreadStore store;
         store.turnUpsert(turn(1));
@@ -294,7 +294,7 @@ int main(int argc, char** argv) {
               "a block naming an unknown turn gets its implicit slot in a snapshot too");
     }
 
-    // --- The typed-backed projection through the adapter ------------------------
+    // The typed-backed projection through the adapter
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
@@ -308,8 +308,7 @@ int main(int argc, char** argv) {
         state.chat.typedTurns.blockUpsert(hid);
 
         check(thread.groupCount() == 1, "typed: one stored turn is one group");
-        check(thread.groupAt(0).id == 42,
-              "typed: the group id IS the persisted turnId (design §4)");
+        check(thread.groupAt(0).id == 42, "typed: the group id IS the persisted turnId");
         check(thread.groupAt(0).kind == tui::store::GroupKind::AssistantWork,
               "typed: the group is a work group");
         check(thread.groupAt(0).oneLineSummary.find("WORK") == 0 &&
@@ -319,7 +318,7 @@ int main(int argc, char** argv) {
 
         check(thread.blockCount(0) == 3,
               "typed: the query projects outside the group, the hidden tool block is "
-              "stored but not a row, and the batch's owner row is a row (D3, DD-13)");
+              "stored but not a row, and the batch's owner row is a row");
         const tui::model::BlockDesc header = thread.blockAt(0, 0);
         check(header.label == "WORK" && !header.hasBody && header.steps == 2,
               "typed: the header row announces the steps and has no body of its own");
@@ -330,9 +329,8 @@ int main(int argc, char** argv) {
               "typed: the query previews its body, no number prefix");
         const tui::model::BlockDesc owner = thread.blockAt(0, 1);
         check(owner.label == "AGENT" && owner.kind == tui::model::BlockKind::Assistant,
-              "typed: the response's owner row is the synthetic AGENT (DD-13)");
-        check(owner.timingS == 0.0,
-              "typed: a batch without a content block carries no duration (DD-8)");
+              "typed: the response's owner row is the synthetic AGENT");
+        check(owner.timingS == 0.0, "typed: a batch without a content block carries no duration");
         const tui::model::BlockDesc tool = thread.blockAt(0, 2);
         check(tool.label == "TOOL" && tool.state == tui::model::BlockState::Ok,
               "typed: the merged tool card carries the wire status");
@@ -340,7 +338,7 @@ int main(int argc, char** argv) {
         check(tool.timingS == 1.5, "typed: the wire duration becomes seconds (1500 ms -> 1.5)");
 
         // A rebuild observes the change: the revision moves, so a height hint
-        // keyed on the old revision is stale (the v4 guard's job, typed).
+        // keyed on the old revision is stale (the guard's job, typed).
         const std::uint64_t rev0 = thread.groupAt(0).revision;
         state.chat.typedTurns.blockUpsert(
             block(42, "call-1", 2, 3, "grep", "call body v2", "42#0"));
@@ -356,7 +354,7 @@ int main(int argc, char** argv) {
               "typed: an unknown wire kind draws as a system notice");
 
         // Expansion: the header's fold and a row's disclosure are the
-        // adapter's derived predicate now (task 10, design §7.5) - both read
+        // adapter's derived predicate - both read
         // the user's absolute pins. Nothing is seeded - the groups are born
         // on the mode's liveness default, and a Done turn's default is folded.
         check(!thread.expanded(42),
@@ -371,7 +369,7 @@ int main(int argc, char** argv) {
         check(!thread.blockExpanded(0, 2), "typed: closing it stores closed");
 
         // A second adapter bound to the same state answers the same thing:
-        // every pin lives in the shared ChatTab maps (DD-6), keyed by the
+        // every pin lives in the shared ChatTab maps, keyed by the
         // persisted turn id - no per-adapter expansion state survives.
         tui::store::ThreadStoreAdapter other(state);
         other.bind(state);
@@ -384,8 +382,8 @@ int main(int argc, char** argv) {
         check(other.setBlockExpanded(0, 2, true) && thread.blockExpanded(0, 2),
               "typed: a row's pin is shared state, written through either adapter");
 
-        // Opening the group pins it open (DD-6): the header draws open - and a
-        // settled batch inside a re-opened group shows its owner folded (§7.5's
+        // Opening the group pins it open: the header draws open - and a
+        // settled batch inside a re-opened group shows its owner folded -
         // ownerOpen = pin ?? batchLive, a Done turn's batchLive is false).
         thread.setExpanded(42, true);
         check(thread.expanded(42) && other.expanded(42), "typed: setExpanded pins the header open");
@@ -393,8 +391,7 @@ int main(int argc, char** argv) {
               "typed: the group pin lives in the shared map, keyed by the turnId");
         check(thread.blockAt(0, 0).visible && thread.blockExpanded(0, 0),
               "typed: the pinned group's owner row draws, folded (a settled batch)");
-        check(!thread.blockAt(0, 2).visible,
-              "typed: the folded owner keeps its children hidden (I-5)");
+        check(!thread.blockAt(0, 2).visible, "typed: the folded owner keeps its children hidden");
 
         // The header row toggles through the SAME map `setExpanded()` uses, so
         // the two seams agree on the group header by construction: close it
@@ -408,7 +405,7 @@ int main(int argc, char** argv) {
               "typed: ...and both seams read the header open again");
     }
 
-    // --- The query row: meta decides, position falls back ------------------------
+    // The query row: meta decides, position falls back
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
@@ -427,7 +424,7 @@ int main(int argc, char** argv) {
         check(thread.blockAt(0, 2).label == "AGENT" &&
                   thread.blockAt(0, 2).kind == tui::model::BlockKind::Assistant,
               "typed pipeline: the streamed assistant prose is an AGENT row, never YOU "
-              "(it sits behind its batch's owner row, DD-13)");
+              "(it sits behind its batch's owner row)");
 
         // The main tab's shape: the query prose carries the meta. It is the
         // query row wherever it sits in the turn.
@@ -453,7 +450,7 @@ int main(int argc, char** argv) {
               "typed legacy: a meta-less first prose is still the query row");
     }
 
-    // --- Task 10: the mode matrix and the absolute pins (design §7.5) ----------
+    // The mode matrix and the absolute pins
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
@@ -466,7 +463,7 @@ int main(int argc, char** argv) {
         state.chat.typedTurns.blockUpsert(
             block(42, "call-1", 2, 2, "grep", "call body", "b0", 1500)); // in flight
         // The layout: the header, the batch's owner row, then the children in
-        // DD-5's order (reasoning, content, calls), then the plain notice. The
+        // The batch's order (reasoning, content, calls), then the plain notice. The
         // answer projects as the turn-level row outside the group.
         state.chat.typedTurns.blockUpsert(block(42, "ans", 3, 1, "", "done"));
         state.chat.typedTurns.blockUpsert(block(42, "note", 4, 1, "", "heads up"));
@@ -477,58 +474,57 @@ int main(int argc, char** argv) {
                   thread.blockAt(0, 5).label == "SYSTEM" &&
                   thread.blockAt(0, tui::store::kQueryRow).label == "YOU" &&
                   thread.blockAt(0, tui::store::kAnswerRow).label == "ANSWER",
-              "task 10: the fixture projects as header, owner, children, notice, query, answer");
+              "the fixture projects as header, owner, children, notice, query, answer");
 
         // MINIMAL, settled (the factory cell): born folded, minimal-style; the
         // query and the answer draw beside the folded header, nothing else does.
         check(state.chat.threadMinimalMode && !thread.groupOpen(42) &&
                   thread.groupStyleIsMinimal(42),
-              "task 10: minimal + settled folds the group, minimal-style");
+              "minimal + settled folds the group, minimal-style");
         check(thread.blockAt(0, 0).visible && !thread.blockAt(0, 0).expanded,
-              "task 10: ...the header draws folded");
+              "...the header draws folded");
         check(!thread.blockAt(0, 1).visible && !thread.blockAt(0, 2).visible &&
                   !thread.blockAt(0, 3).visible && !thread.blockAt(0, 4).visible &&
                   !thread.blockAt(0, 5).visible,
-              "task 10: ...the owner, the children and the notice draw nothing (I-5)");
+              "...the owner, the children and the notice draw nothing");
         check(thread.blockAt(0, tui::store::kQueryRow).visible &&
                   thread.blockAt(0, tui::store::kAnswerRow).visible,
-              "task 10: ...the query and the answer draw in both modes (§4.6)");
+              "...the query and the answer draw in both modes");
         check(thread.blockAt(0, tui::store::kQueryRow).expanded &&
                   thread.blockAt(0, tui::store::kAnswerRow).expanded,
-              "task 10: ...and the turn-level rows are never folded state");
+              "...and the turn-level rows are never folded state");
 
         // MAXIMAL, settled: still folded (a settled group folds in both modes)
-        // but the SHAPE is maximal - never the minimal chips (DD-14).
+        // but the SHAPE is maximal - never the minimal chips.
         state.chat.threadMinimalMode = false;
         check(!thread.groupOpen(42) && !thread.groupStyleIsMinimal(42),
-              "task 10: maximal + settled folds the group, maximal-style");
-        check(!thread.blockAt(0, 1).visible, "task 10: ...the owner still draws nothing");
+              "maximal + settled folds the group, maximal-style");
+        check(!thread.blockAt(0, 1).visible, "...the owner still draws nothing");
 
         // MAXIMAL, live: the one cell whose DEFAULT is open - the liveness
-        // default (I-12), not a pin: the map stays empty.
+        // default, not a pin: the map stays empty.
         state.chat.typedTurns.turnUpsert(turn(42, 0, 3)); // Running
         check(thread.groupOpen(42) && !thread.groupStyleIsMinimal(42) &&
                   state.chat.groupPins.empty(),
-              "task 10: maximal + live opens the group on its own, no pin stored");
+              "maximal + live opens the group on its own, no pin stored");
         check(thread.blockAt(0, 1).visible && thread.blockAt(0, 1).expanded,
-              "task 10: ...the live batch's owner draws open");
+              "...the live batch's owner draws open");
         check(thread.blockAt(0, 2).visible && thread.blockAt(0, 2).expanded &&
                   thread.blockAt(0, 3).visible && thread.blockAt(0, 3).expanded &&
                   thread.blockAt(0, 4).visible && thread.blockAt(0, 4).expanded,
-              "task 10: ...the in-flight children draw open with it");
+              "...the in-flight children draw open with it");
         check(thread.blockAt(0, 5).visible,
-              "task 10: ...and the notice draws with the open group (plainVisible = groupOpen)");
+              "...and the notice draws with the open group (plainVisible = groupOpen)");
 
         // MINIMAL, live: folded and minimal-style, but the streamed content
-        // segment draws on its own (I-11, B1) - never the owner or the cards.
+        // segment draws on its own - never the owner or the cards.
         state.chat.threadMinimalMode = true;
         check(!thread.groupOpen(42) && thread.groupStyleIsMinimal(42),
-              "task 10: minimal + live keeps the group folded, minimal-style");
+              "minimal + live keeps the group folded, minimal-style");
         check(!thread.blockAt(0, 1).visible && !thread.blockAt(0, 2).visible &&
                   !thread.blockAt(0, 4).visible,
-              "task 10: ...the owner, the reasoning and the call draw nothing");
-        check(thread.blockAt(0, 3).visible,
-              "task 10: ...the live content segment draws with no owner row (I-11)");
+              "...the owner, the reasoning and the call draw nothing");
+        check(thread.blockAt(0, 3).visible, "...the live content segment draws with no owner row");
 
         // The leaked Running call: a Done turn holds nothing open even with a
         // call still in flight - turnLive gates every liveness default.
@@ -536,17 +532,17 @@ int main(int argc, char** argv) {
         state.chat.threadMinimalMode = false;
         check(!thread.groupOpen(42) && !thread.blockAt(0, 1).expanded &&
                   !thread.blockAt(0, 4).expanded,
-              "task 10: a leaked Running call in a Done turn holds nothing open");
+              "a leaked Running call in a Done turn holds nothing open");
 
-        // I-13, the row pin: a click stored closed stays closed across the
+        // The row pin: a click stored closed stays closed across the
         // mode flip AND the liveness change, then a click stored open stays
         // open where the liveness default is fold. Absolute, always stored.
         state.chat.typedTurns.turnUpsert(turn(42, 0, 3)); // live again
         check(!thread.setBlockExpanded(0, 4, false),
-              "task 10: closing the in-flight card in the live maximal group reports closed");
-        check(!thread.blockAt(0, 4).expanded, "task 10: the card's pin took");
+              "closing the in-flight card in the live maximal group reports closed");
+        check(!thread.blockAt(0, 4).expanded, "the card's pin took");
         check(state.chat.rowPins.count(42) == 1 && state.chat.rowPins.at(42).at("call-1") == false,
-              "task 10: the row pin lives in the shared map, keyed by the wire block id");
+              "the row pin lives in the shared map, keyed by the wire block id");
 
         // B2, in a group the user re-opened: pin the folded minimal group
         // open, then pin its settled owner open - the owner draws open, the
@@ -555,73 +551,68 @@ int main(int argc, char** argv) {
         state.chat.typedTurns.turnUpsert(turn(42, 1, 3)); // settled
         thread.setExpanded(42, true);                     // the group pin: open in minimal
         check(thread.groupOpen(42) && !thread.groupStyleIsMinimal(42),
-              "task 10: the group pinned open in minimal draws maximal-style (DD-14)");
+              "the group pinned open in minimal draws maximal-style");
         check(thread.blockAt(0, 1).visible && !thread.blockAt(0, 1).expanded,
-              "task 10: the group draws its owner, folded (the settled batch)");
-        check(thread.setBlockExpanded(0, 1, true), "task 10: pinning the owner open reports open");
+              "the group draws its owner, folded (the settled batch)");
+        check(thread.setBlockExpanded(0, 1, true), "pinning the owner open reports open");
         check(thread.blockAt(0, 1).visible && thread.blockAt(0, 1).expanded,
-              "task 10: the owner's pin draws it open in the pinned-open group");
+              "the owner's pin draws it open in the pinned-open group");
         check(thread.blockAt(0, 3).visible && !thread.blockAt(0, 3).expanded,
-              "task 10: ...the settled content draws under it, folded (B2)");
+              "...the settled content draws under it, folded");
         check(thread.blockAt(0, 2).visible && !thread.blockAt(0, 2).expanded &&
                   thread.blockAt(0, 4).visible && !thread.blockAt(0, 4).expanded,
-              "task 10: ...the reasoning and the card draw closed under the open owner (I-5)");
+              "...the reasoning and the card draw closed under the open owner");
         state.chat.threadMinimalMode = false;
         check(thread.blockAt(0, 1).visible && thread.blockAt(0, 1).expanded &&
                   thread.blockAt(0, 4).visible && !thread.blockAt(0, 4).expanded,
-              "task 10: the pins survive the flip to maximal - open owner, closed card (I-13)");
+              "the pins survive the flip to maximal - open owner, closed card");
         check(thread.setBlockExpanded(0, 4, true) && thread.blockAt(0, 4).expanded,
-              "task 10: reopening the card stores open over the closed pin");
+              "reopening the card stores open over the closed pin");
 
         // segmentVisible: a live batch whose owner the user closed hides its
         // content segment too - the minimal-only clause does not rescue a
         // maximal group's closed owner.
         state.chat.typedTurns.turnUpsert(turn(42, 0, 3)); // live
         state.chat.threadMinimalMode = false;
-        check(!thread.setBlockExpanded(0, 1, false),
-              "task 10: closing the live owner reports closed");
+        check(!thread.setBlockExpanded(0, 1, false), "closing the live owner reports closed");
         check(!thread.blockAt(0, 1).expanded && !thread.blockAt(0, 3).visible,
-              "task 10: the closed owner hides its live segment as well (segmentVisible)");
+              "the closed owner hides its live segment as well (segmentVisible)");
         check(!thread.blockAt(0, 2).visible && !thread.blockAt(0, 4).visible,
-              "task 10: ...and its reasoning and card (childVisible = ownerVisible && ownerOpen)");
+              "...and its reasoning and card (childVisible = ownerVisible && ownerOpen)");
 
-        // DD-14: the STYLE is the fold, not the mode. A minimal group pinned
+        // The STYLE is the fold, not the mode. A minimal group pinned
         // open draws maximal-style; a folded maximal group never reports the
         // minimal style.
-        check(!thread.groupStyleIsMinimal(42),
-              "task 10: the maximal group pinned open is maximal-style");
+        check(!thread.groupStyleIsMinimal(42), "the maximal group pinned open is maximal-style");
         state.chat.threadMinimalMode = true;
         state.chat.typedTurns.turnUpsert(turn(42, 1, 3)); // settled: the default folds
         state.chat.groupPins.erase(42);                   // drop the group pin: the default answers
-        check(thread.groupStyleIsMinimal(42),
-              "task 10: the settled minimal group is minimal-style");
+        check(thread.groupStyleIsMinimal(42), "the settled minimal group is minimal-style");
         thread.setExpanded(42, true);
-        check(!thread.groupStyleIsMinimal(42),
-              "task 10: the minimal group pinned open draws maximal-style (DD-14)");
-        check(thread.blockAt(0, 1).visible,
-              "task 10: ...the pinned-open minimal group draws its owner");
+        check(!thread.groupStyleIsMinimal(42), "the minimal group pinned open draws maximal-style");
+        check(thread.blockAt(0, 1).visible, "...the pinned-open minimal group draws its owner");
         thread.setExpanded(42, false);
         check(thread.groupStyleIsMinimal(42) && !thread.blockAt(0, 1).visible,
-              "task 10: ...and pinning it closed restores the minimal fold");
+              "...and pinning it closed restores the minimal fold");
 
         // The folded group of either mode keeps the query and the ANSWER but
         // not the notice (the turn-level rows vs the group-level plain row).
         check(thread.blockAt(0, tui::store::kQueryRow).visible &&
                   thread.blockAt(0, tui::store::kAnswerRow).visible &&
                   !thread.blockAt(0, 5).visible,
-              "task 10: the folded group keeps the query and the answer, drops the notice");
+              "the folded group keeps the query and the answer, drops the notice");
         state.chat.threadMinimalMode = false;
         check(thread.blockAt(0, tui::store::kQueryRow).visible &&
                   thread.blockAt(0, tui::store::kAnswerRow).visible &&
                   !thread.blockAt(0, 5).visible,
-              "task 10: the same in maximal - the fold, not the mode, decides");
+              "the same in maximal - the fold, not the mode, decides");
     }
 
-    // --- Task 10: the entry points reset the pins (§7) ---------------------------
+    // The entry points reset the pins
     {
         TuiState* state = tuiCreateState();
         check(state != nullptr && state->inner != nullptr,
-              "task 10: tuiCreateState succeeds for the pin cases");
+              "tuiCreateState succeeds for the pin cases");
         auto wstr = [](const char* s) { return String{s, std::strlen(s)}; };
         TuiTurn wt{};
         wt.id = 77;
@@ -635,31 +626,30 @@ int main(int argc, char** argv) {
         tuiSetTurns(state, &wt, 1, &wb, 1);
         auto& groupPins = state->inner->chat.groupPins;
         auto& rowPins = state->inner->chat.rowPins;
-        // The clear must run on maps that hold something (review F4): on a
+        // The clear must run on maps that hold something: on a
         // fresh state the empty maps would make the asserts vacuous.
         groupPins[77] = false;
         rowPins[77]["q"] = true;
         tuiSetTurns(state, &wt, 1, &wb, 1);
-        check(groupPins.empty() && rowPins.empty(),
-              "task 10: a session switch leaves no pin behind");
+        check(groupPins.empty() && rowPins.empty(), "a session switch leaves no pin behind");
         groupPins[77] = false;
         rowPins[77]["q"] = true;
         // A compression re-emit (turnRemove + re-upsert) drops the turn's pins.
         tuiTurnRemove(state, 77);
         check(groupPins.count(77) == 0 && rowPins.count(77) == 0,
-              "task 10: the turn's pins die with the turn");
+              "the turn's pins die with the turn");
         groupPins[77] = true;
         rowPins[77]["q"] = true;
         tuiThreadClear(state);
-        check(groupPins.empty() && rowPins.empty(), "task 10: a clear empties both maps");
+        check(groupPins.empty() && rowPins.empty(), "a clear empties both maps");
         tuiSetTurns(state, &wt, 1, &wb, 1);
         tuiDestroyState(state);
     }
-    // --- Task 24: the upsert prunes dead pins, and `collapseAll` forgets them all ---
+    // The upsert prunes dead pins, and `collapseAll` forgets them all
     {
         TuiState* state = tuiCreateState();
         check(state != nullptr && state->inner != nullptr,
-              "task 24: tuiCreateState succeeds for the prune cases");
+              "tuiCreateState succeeds for the prune cases");
         auto& groupPins = state->inner->chat.groupPins;
         auto& rowPins = state->inner->chat.rowPins;
         TuiTurn wt{};
@@ -677,16 +667,16 @@ int main(int argc, char** argv) {
             tuiTurnUpsert(state, &wt);
         }
         check(state->inner->chat.typedTurns.turnCount() == TypedThreadStore::kMaxTurns,
-              "task 24: the upserts filled the window to the cap");
+              "the upserts filled the window to the cap");
         check(groupPins.count(1) == 0 && rowPins.count(1) == 0,
-              "task 24: the evicted turn's pins are pruned by the upsert");
+              "the evicted turn's pins are pruned by the upsert");
         // The pins of a turn the store still holds survive the same upserts.
         groupPins[TypedThreadStore::kMaxTurns] = true;
         rowPins[TypedThreadStore::kMaxTurns]["q"] = true;
         wt.id = static_cast<std::int64_t>(TypedThreadStore::kMaxTurns);
         tuiTurnUpsert(state, &wt);
         check(groupPins.count(wt.id) == 1 && rowPins.count(wt.id) == 1,
-              "task 24: a live turn's pins survive its own upsert");
+              "a live turn's pins survive its own upsert");
         tuiDestroyState(state);
     }
     {
@@ -697,20 +687,19 @@ int main(int argc, char** argv) {
         state.chat.threadMinimalMode = true; // the default folds: what a cleared pin falls back to
         thread.setExpanded(42, true);
         state.chat.rowPins[42]["q"] = true;
-        check(thread.expanded(42), "task 24: the pinned group draws open");
+        check(thread.expanded(42), "the pinned group draws open");
         thread.collapseAll();
         check(state.chat.groupPins.empty() && state.chat.rowPins.empty(),
-              "task 24: collapseAll forgets every pin");
-        check(!thread.expanded(42),
-              "task 24: ...so the next frame draws on the mode default, folded");
+              "collapseAll forgets every pin");
+        check(!thread.expanded(42), "...so the next frame draws on the mode default, folded");
         check(state.chat.groupPins.empty() && state.chat.rowPins.empty(),
-              "task 24: collapseAll clears rather than writes - no pin against the default");
+              "collapseAll clears rather than writes - no pin against the default");
         tui::store::ThreadStoreAdapter unbound;
         unbound.collapseAll(); // a no-op, never a crash
-        check(!unbound.bound(), "task 24: collapseAll on an unbound adapter is a no-op");
+        check(!unbound.bound(), "collapseAll on an unbound adapter is a no-op");
     }
 
-    // --- A gone turn takes its caches with it -----------------------------------
+    // A gone turn takes its caches with it
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
@@ -722,8 +711,8 @@ int main(int argc, char** argv) {
         check(thread.groupCount() == 0, "typed: the removed turn's group is gone");
     }
 
-    // --- The five v5 entry points: the C API surface over the same store --------
-    // Full behavioral observation waits for the read-side snapshot API (task 5);
+    // The five entry points: the C API surface over the same store
+    // Full behavioral observation waits for the read-side snapshot API;
     // here the surface is exercised and odr-used - a missing definition is a
     // link error in this binary too - and the inert-argument contract is pinned.
     {
@@ -755,7 +744,7 @@ int main(int argc, char** argv) {
         tuiThreadClear(state);
         check(true, "api: the five entry points accept a valid state (and link)");
 
-        // The inert-argument contract, same as the v4 entry points: a null
+        // The inert-argument contract, same as the other entry points: a null
         // state or a null element is a no-op, never a crash.
         tuiSetTurns(nullptr, &wt, 1, &wb, 1);
         tuiSetTurns(state, nullptr, 1, nullptr, 0);
@@ -769,7 +758,7 @@ int main(int argc, char** argv) {
         tuiDestroyState(state);
     }
 
-    // --- The upsert storm + the result-for-unknown-callId merge (task 9, P2-8) ---
+    // The upsert storm + the result-for-unknown-callId merge
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter view(state);
@@ -808,7 +797,7 @@ int main(int argc, char** argv) {
               "storm: the group header announces the settled step count");
 
         // B. A result for an unknown callId (live): the result lands under the
-        // call's id - an implicit slot, never dropped (§7) - then the call's
+        // call's id - an implicit slot, never dropped - then the call's
         // upsert merges in and ONE settled step renders (Ok status, weight 2).
         store.blockUpsert(block(77, "call-2", 2, 3, "grep", "the result text"));
         check(store.turnCount() == 2 && store.blockCount(77) == 1,
@@ -825,7 +814,7 @@ int main(int argc, char** argv) {
               "storm: the merged step weighs 2 (call + result), never a dropped half");
     }
 
-    // --- The v13 result pair transport: the store's merge-by-presence ---
+    // The v13 result pair transport: the store's merge-by-presence
     {
         TypedThreadStore store;
         store.turnUpsert(turn(50, 1, 1));
@@ -950,13 +939,13 @@ int main(int argc, char** argv) {
               "typed order: GroupView.hasAnswer tracks the Answer sentinel");
     }
 
-    // --- Task 7: the projection buckets the response batches (DD-4, DD-13) -----
+    // The projection buckets the response batches
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
         thread.bind(state);
         state.chat.typedTurns.turnUpsert(turn(42, 1, 5));
-        // The query rides the query batch; a notice rides along with it (DD-4 -
+        // The query rides the query batch; a notice rides along with it -
         // the batch of the query row is not a response batch, ids are opaque).
         auto query = block(42, "q", 0, 0, "", "what is v5?", "42#q");
         query.meta = "user";
@@ -975,38 +964,38 @@ int main(int argc, char** argv) {
             block(42, "call#2", 2, 3, "read_file", "call body", "42#2"));
 
         check(thread.batchCount(0) == 3,
-              "task 7: three response batches, the query's batch is never counted (DD-4)");
+              "three response batches, the query's batch is never counted");
         // Wire order kept; one owner row inserted before each batch's first row:
         // [header, notice, owner0, think, content0, call0, owner1, content1, call1,
         //  owner2, call2]
         check(thread.blockCount(0) == 11,
-              "task 7: one owner row per response batch, emitted at the batch's first row (DD-13)");
+              "one owner row per response batch, emitted at the batch's first row");
         check(thread.blockAt(0, 1).label == "SYSTEM",
-              "task 7: the query batch's notice stays plain, before the owner rows (DD-4)");
+              "the query batch's notice stays plain, before the owner rows");
         const tui::model::BlockDesc owner0 = thread.blockAt(0, 2);
         check(owner0.label == "AGENT" && owner0.kind == tui::model::BlockKind::Assistant &&
                   owner0.state == tui::model::BlockState::None && owner0.expandable,
-              "task 7: the owner row is the synthetic AGENT, no wire status written (I-8, DD-13)");
+              "the owner row is the synthetic AGENT, no wire status written");
         check(owner0.key == std::hash<std::string>{}("batch#42#0"),
-              "task 7: the owner row's key is the namespaced batch id's hash (DD-13)");
+              "the owner row's key is the namespaced batch id's hash");
         check(owner0.timingS == 1.2,
-              "task 7: the owner carries the batch's content duration (DD-8: 1200 ms -> 1.2)");
+              "the owner carries the batch's content duration (1200 ms -> 1.2)");
         check(thread.blockAt(0, 3).kind == tui::model::BlockKind::Thinking &&
                   thread.blockAt(0, 4).kind == tui::model::BlockKind::Assistant &&
                   thread.blockAt(0, 5).kind == tui::model::BlockKind::ToolStep,
-              "task 7: the batch's own rows keep their wire order behind the owner");
+              "the batch's own rows keep their wire order behind the owner");
         check(thread.blockAt(0, 6).label == "AGENT" && thread.blockAt(0, 6).timingS == 0.9 &&
                   thread.blockAt(0, 7).kind == tui::model::BlockKind::Assistant &&
                   thread.blockAt(0, 8).kind == tui::model::BlockKind::ToolStep,
-              "task 7: the second batch's owner carries its own content duration (900 ms -> 0.9)");
+              "the second batch's owner carries its own content duration (900 ms -> 0.9)");
         check(thread.blockAt(0, 9).label == "AGENT" && thread.blockAt(0, 9).timingS == 0.0 &&
                   thread.blockAt(0, 10).kind == tui::model::BlockKind::ToolStep,
-              "task 7: a batch without a content block carries no duration (DD-8)");
+              "a batch without a content block carries no duration");
         check(thread.blockAt(0, tui::store::kQueryRow).label == "YOU",
-              "task 7: the query row is still the turn-level YOU, untouched by the buckets");
+              "the query row is still the turn-level YOU, untouched by the buckets");
     }
 
-    // --- Task 9: the owner's facts and the batch's body segment (DD-7, DD-13, FR-16, FR-9) ---
+    // The owner's facts and the batch's body segment
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
@@ -1017,8 +1006,8 @@ int main(int argc, char** argv) {
         query.meta = "user";
         state.chat.typedTurns.blockUpsert(query);
         // 42#0: reasoning + content + a settled call. 42#1: content + a failed
-        // call (the FAIL count reads the batch, FR-9). 42#2: a call alone - its
-        // owner copies nothing (FR-16).
+        // call (the FAIL count reads the batch). A call alone - its
+        // owner copies nothing.
         state.chat.typedTurns.blockUpsert(block(42, "think#0", 1, 3, "", "reasoning", "42#0"));
         state.chat.typedTurns.blockUpsert(
             block(42, "content#0", 0, 3, "", "working", "42#0", 1200));
@@ -1031,43 +1020,39 @@ int main(int argc, char** argv) {
 
         // Row list: [header, owner0, think, content0, call0, owner1, content1,
         // callfail, owner2, call2].
-        check(thread.blockCount(0) == 10,
-              "task 9: the fixture's row list is the one the checks index");
+        check(thread.blockCount(0) == 10, "the fixture's row list is the one the checks index");
 
         const tui::model::BlockDesc owner0 = thread.blockAt(0, 1);
         check(owner0.ownsBatch && !owner0.hasBody && owner0.expandable && owner0.summary.empty() &&
                   owner0.chips == "[bash]" && owner0.failedCalls == 0 && owner0.copyable,
-              "task 9: the owner draws from the batch's facts - chips, FAIL count, copy offer "
-              "(DD-13, FR-9)");
+              "the owner draws from the batch's facts - chips, FAIL count, copy offer");
         check(thread.blockText(0, 1) == "working",
-              "task 9: the owner's copy target is its batch's content body (FR-16)");
+              "the owner's copy target is its batch's content body");
 
         const tui::model::BlockDesc segment = thread.blockAt(0, 3);
         check(segment.bodySegment && segment.batchOwned && !segment.ownsBatch &&
                   !segment.expandable && segment.kind == tui::model::BlockKind::Assistant &&
                   segment.hasBody,
-              "task 9: the batch's content child is a body segment - no disclosure of its own "
-              "(DD-7)");
+              "the batch's content child is a body segment - no disclosure of its own");
         check(!thread.setBlockExpanded(0, 3, true) && !thread.blockAt(0, 3).expanded &&
                   state.chat.rowPins.empty(),
-              "task 9: a body segment cannot be opened - the guard answers false, pins nothing, "
-              "and the open state stays the derived one (I-11, §7.5 childOpen)");
-        check(thread.blockText(0, 3) == "working",
-              "task 9: the segment's own text is still its body");
+              "a body segment cannot be opened - the guard answers false, pins nothing, "
+              "and the open state stays the derived one");
+        check(thread.blockText(0, 3) == "working", "the segment's own text is still its body");
 
         const tui::model::BlockDesc owner1 = thread.blockAt(0, 5);
         check(owner1.ownsBatch && owner1.failedCalls == 1 && owner1.copyable &&
                   thread.blockText(0, 5) == "more work",
-              "task 9: the failed call counts on its own batch's owner (FR-9, FR-16)");
+              "the failed call counts on its own batch's owner");
 
         const tui::model::BlockDesc owner2 = thread.blockAt(0, 8);
         check(owner2.ownsBatch && !owner2.copyable && thread.blockText(0, 8).empty(),
-              "task 9: a calls-only batch's owner copies nothing (FR-16)");
+              "a calls-only batch's owner copies nothing");
         check(thread.setBlockExpanded(0, 8, true),
-              "task 9: the owner itself still opens - it is the batch's disclosure (D15)");
+              "the owner itself still opens - it is the batch's disclosure");
     }
 
-    // Task 9: the stream predicates read the batch's content, not the owner's
+    // The stream predicates read the batch's content, not the owner's
     // (always empty) body - an Assistant row with no text is not streamed text.
     {
         tui::TuiState state;
@@ -1077,24 +1062,22 @@ int main(int argc, char** argv) {
         state.chat.typedTurns.blockUpsert(block(9, "think#0", 1, 0, "", "reasoning", "9#0"));
         state.chat.typedTurns.blockUpsert(block(9, "call#0", 2, 0, "bash", "call body", "9#0"));
         check(!thread.streamHasText() && thread.streamHasThinking(),
-              "task 9: a thinking-plus-call stream has no streamed text - the owner is not an "
-              "answer (C9b)");
+              "a thinking-plus-call stream has no streamed text - the owner is not an "
+              "answer");
     }
 
-    // Task 7 / DD-4: a turn whose query row is missing gives every batch an owner.
+    // A turn whose query row is missing gives every batch an owner.
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
         thread.bind(state);
         state.chat.typedTurns.turnUpsert(turn(7, 0, 2)); // a live turn, no prose at all
         state.chat.typedTurns.blockUpsert(block(7, "call-1", 2, 2, "bash", "call body", "", 100));
-        check(thread.batchCount(0) == 1,
-              "task 7 / DD-4: a turn with no query row owns every batch");
-        check(thread.blockAt(0, 1).label == "AGENT",
-              "task 7 / DD-4: the owner row draws for the orphan batch");
+        check(thread.batchCount(0) == 1, "a turn with no query row owns every batch");
+        check(thread.blockAt(0, 1).label == "AGENT", "the owner row draws for the orphan batch");
     }
 
-    // Task 7 / DD-4: a query batch alone buckets nothing - no owner row at all.
+    // A query batch alone buckets nothing - no owner row at all.
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
@@ -1105,12 +1088,11 @@ int main(int argc, char** argv) {
         state.chat.typedTurns.blockUpsert(query);
         state.chat.typedTurns.blockUpsert(block(5, "notice", 4, 0, "", "a notice", "5#q"));
         check(thread.batchCount(0) == 0 && thread.blockCount(0) == 2,
-              "task 7 / DD-4: the query's batch is not a response batch - no owner row");
-        check(thread.blockAt(0, 1).label == "SYSTEM",
-              "task 7 / DD-4: the notice rides the query batch, plain");
+              "the query's batch is not a response batch - no owner row");
+        check(thread.blockAt(0, 1).label == "SYSTEM", "the notice rides the query batch, plain");
     }
 
-    // Task 7: malformed batch ids bucket like any other - nothing parses them.
+    // Malformed batch ids bucket like any other - nothing parses them.
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
@@ -1120,16 +1102,16 @@ int main(int argc, char** argv) {
         state.chat.typedTurns.blockUpsert(block(9, "b", 2, 3, "grep", "call", "abc"));
         state.chat.typedTurns.blockUpsert(block(9, "c", 2, 3, "edit_file", "call", "1#q#2"));
         check(thread.batchCount(0) == 3,
-              "task 7: malformed batch ids bucket like any other (ids are opaque)");
+              "malformed batch ids bucket like any other (ids are opaque)");
         // Each owner is followed by its own row, so the owners sit at 1, 3, 5.
         check(thread.blockAt(0, 1).key == std::hash<std::string>{}("batch##") &&
                   thread.blockAt(0, 3).key == std::hash<std::string>{}("batch#abc") &&
                   thread.blockAt(0, 5).key == std::hash<std::string>{}("batch#1#q#2"),
-              "task 7: each owner's key is its own namespaced batch id, malformed included");
+              "each owner's key is its own namespaced batch id, malformed included");
     }
 
-    // Task 8 / DD-15: a batch whose only child is a body-less content row emits
-    // no owner and no row (D6: no bare AGENT header above nothing). The bucket
+    // A batch whose only child is a body-less content row emits
+    // no owner and no row (no bare AGENT header above nothing). The bucket
     // stays a bucket - the drop is the rows', not the batching's.
     {
         tui::TuiState state;
@@ -1140,14 +1122,13 @@ int main(int argc, char** argv) {
         content.meta = "assistant"; // a streamed content block is not the query
         state.chat.typedTurns.blockUpsert(content);
         check(thread.batchCount(0) == 1,
-              "task 8: a body-less content batch is still a bucket (the drop is the rows', DD-15)");
-        check(thread.blockCount(0) == 1,
-              "task 8: the body-less batch emits no owner and no row (D6, DD-15, I-2)");
+              "a body-less content batch is still a bucket (the drop is the rows')");
+        check(thread.blockCount(0) == 1, "the body-less batch emits no owner and no row");
         check(thread.blockAt(0, 0).label == "WORK",
-              "task 8: the group header is the only row the empty batch leaves");
+              "the group header is the only row the empty batch leaves");
     }
 
-    // Task 8 / DD-8: the duration survives the drop - a body-less content row
+    // The duration survives the drop - a body-less content row
     // vanishes, but its batch's owner still carries the content's duration when
     // a sibling call keeps the owner alive.
     {
@@ -1160,14 +1141,14 @@ int main(int argc, char** argv) {
         state.chat.typedTurns.blockUpsert(content);
         state.chat.typedTurns.blockUpsert(block(10, "call#0", 2, 3, "bash", "ls -R", "10#0"));
         check(thread.blockCount(0) == 3,
-              "task 8: the dropped content leaves header, owner and the call card");
+              "the dropped content leaves header, owner and the call card");
         check(thread.blockAt(0, 1).label == "AGENT" && thread.blockAt(0, 1).timingS == 0.9,
-              "task 8: the owner still carries the dropped content's duration (DD-8)");
+              "the owner still carries the dropped content's duration");
         check(thread.blockAt(0, 2).kind == tui::model::BlockKind::ToolStep,
-              "task 8: the content row is gone, the call card is the block's last child");
+              "the content row is gone, the call card is the block's last child");
     }
 
-    // Task 8 / C5.5: the drop is kind-blind - a body-less `Thinking` row
+    // The drop is kind-blind - a body-less `Thinking` row
     // vanishes exactly like a body-less content row: no owner (the batch's
     // only kept child is gone), no row, just the header.
     {
@@ -1176,14 +1157,13 @@ int main(int argc, char** argv) {
         thread.bind(state);
         state.chat.typedTurns.turnUpsert(turn(11, 0, 1));
         state.chat.typedTurns.blockUpsert(block(11, "think#0", 1, 3, "", "", "11#0"));
-        check(
-            thread.batchCount(0) == 1,
-            "task 8: a body-less reasoning batch is still a bucket (the drop is kind-blind, C5.5)");
+        check(thread.batchCount(0) == 1,
+              "a body-less reasoning batch is still a bucket (the drop is kind-blind)");
         check(thread.blockCount(0) == 1 && thread.blockAt(0, 0).label == "WORK",
-              "task 8: a body-less Thinking row drops too - no owner, no row (C5.5, D6)");
+              "a body-less Thinking row drops too - no owner, no row");
     }
 
-    // --- Task 8: the block is canonical - order, contiguity, placement (DD-5, I-3, I-4, H8) ---
+    // The block is canonical - order, contiguity, placement
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
@@ -1194,36 +1174,35 @@ int main(int argc, char** argv) {
         state.chat.typedTurns.blockUpsert(query);
         // The LIVE wire order of one response batch: content first, then the
         // call, the reasoning last (replay's order is the reverse). The
-        // projection re-orders whatever the wire sent (DD-5).
+        // projection re-orders whatever the wire sent.
         state.chat.typedTurns.blockUpsert(
             block(21, "content#0", 0, 3, "", "listing the tree", "21#0", 1200));
         state.chat.typedTurns.blockUpsert(block(21, "call#0", 2, 3, "bash", "ls -R", "21#0"));
         state.chat.typedTurns.blockUpsert(block(21, "think#0", 1, 3, "", "reasoning", "21#0"));
         // A notice riding the QUERY batch, parked between the batch's rows: it
-        // is a plain row, and the block's emission must jump over it (I-3) and
+        // is a plain row, and the block's emission must jump over it and
         // emit it after the block (H8) - never between two children.
         state.chat.typedTurns.blockUpsert(
             block(21, "notice#1", 4, 0, "", "context compacted", "21#q"));
         check(thread.blockCount(0) == 6,
-              "task 8: header, owner, three children, then the notice - one block, no interleave");
+              "header, owner, three children, then the notice - one block, no interleave");
         check(thread.blockAt(0, 1).kind == tui::model::BlockKind::Assistant &&
                   thread.blockAt(0, 1).expandable && !thread.blockAt(0, 1).hasBody,
-              "task 8: the owner row opens the block at the batch's first row (DD-13, H8)");
+              "the owner row opens the block at the batch's first row");
         check(thread.blockAt(0, 2).kind == tui::model::BlockKind::Thinking &&
                   thread.blockAt(0, 3).kind == tui::model::BlockKind::Assistant &&
                   thread.blockAt(0, 4).kind == tui::model::BlockKind::ToolStep,
-              "task 8: the children draw reasoning, content, card - the wire sent content, card, "
-              "reasoning (DD-5, I-4)");
-        check(
-            thread.blockAt(0, 5).kind == tui::model::BlockKind::System,
-            "task 8: the interleaved plain row is emitted after the block's last child (H8, I-3)");
+              "the children draw reasoning, content, card - the wire sent content, card, "
+              "reasoning");
+        check(thread.blockAt(0, 5).kind == tui::model::BlockKind::System,
+              "the interleaved plain row is emitted after the block's last child");
         check(thread.blockAt(0, tui::store::kQueryRow).label == "YOU",
-              "task 8: the query row stays turn-level, untouched by the block's emission");
+              "the query row stays turn-level, untouched by the block's emission");
     }
 
-    // Task 8 / DD-12: stepCount walks the WIRE store, one layer below the
+    // StepCount walks the WIRE store, one layer below the
     // projection - the drops and the order cannot move it, only the hidden
-    // flag can (design §0.3, sign-off R-4). Two config pins:
+    // flag can. Two config pins:
     {
         TypedThreadStore store;
         // The default config's verdict: taskDone and pipeline_output are hidden,
@@ -1240,17 +1219,17 @@ int main(int argc, char** argv) {
         done.flags |= tui::store::kBlockFlagHidden;
         store.blockUpsert(done);
         check(tui::store::stepCount(store, 31) == 1,
-              "task 8 / DD-12: the default config's hidden task_done card weighs 0 - the turn "
+              "the default config's hidden task_done card weighs 0 - the turn "
               "counts content 1");
         // hiddenTools = [] - the same turn with nothing hidden: the settled
         // card weighs 2 again, the count is today's expectation, unchanged.
         store.blockUpsert(block(31, "done#0", 2, 3, "task_done", "the answer", "31#0"));
         check(tui::store::stepCount(store, 31) == 3,
-              "task 8 / DD-12: with hiddenTools = [] the same turn counts 3 - query 0, content 1, "
+              "with hiddenTools = [] the same turn counts 3 - query 0, content 1, "
               "the settled card 2");
     }
 
-    // Task 18 / DD-9, I-10: the Answer's own batch suppresses its content
+    // The Answer's own batch suppresses its content
     // child - the answer text draws once, on the turn-level ANSWER row.
     {
         tui::TuiState state;
@@ -1269,21 +1248,19 @@ int main(int argc, char** argv) {
             block(42, "content#1", 0, 3, "", "an interim note", "42#1", 900));
         state.chat.typedTurns.blockUpsert(block(42, "call#1", 2, 3, "bash", "ls -R", "42#1"));
         // Batch 42#2, the ANSWER's batch: a content child whose preamble DIFFERS
-        // from the answer (R-3) and a settled call. The Answer block names 42#2.
+        // from the answer and a settled call. The Answer block names 42#2.
         state.chat.typedTurns.blockUpsert(
             block(42, "content#2", 0, 3, "", "a differing preamble", "42#2", 300));
         state.chat.typedTurns.blockUpsert(block(42, "call#2", 2, 3, "grep", "grep -r x", "42#2"));
         state.chat.typedTurns.blockUpsert(block(42, "ans", 3, 0, "", "the answer body", "42#2"));
 
         // Row list: [header, owner1, think, content1, call1, owner2, call2] -
-        // 42#2's content child is gone (I-10), the owner survived on its call.
-        check(thread.blockCount(0) == 7,
-              "task 18: the ANSWER's batch contributes no content child (DD-9, I-10)");
-        check(
-            thread.blockAt(0, 3).kind == tui::model::BlockKind::Assistant &&
-                thread.blockText(0, 3) == "an interim note",
-            "task 18: another batch's content child still draws - the drop is the answer batch's");
-        // The differing preamble is lost (R-3's recorded trade-off): no group row
+        // 42#2's content child is gone, the owner survived on its call.
+        check(thread.blockCount(0) == 7, "the ANSWER's batch contributes no content child");
+        check(thread.blockAt(0, 3).kind == tui::model::BlockKind::Assistant &&
+                  thread.blockText(0, 3) == "an interim note",
+              "another batch's content child still draws - the drop is the answer batch's");
+        // The differing preamble is lost: no group row
         // carries it, and the answer text exists exactly once - on the ANSWER row.
         int preambleRows = 0;
         int answerTextRows = 0;
@@ -1292,22 +1269,21 @@ int main(int argc, char** argv) {
             preambleRows += text == "a differing preamble" ? 1 : 0;
             answerTextRows += text == "the answer body" ? 1 : 0;
         }
-        check(preambleRows == 0,
-              "task 18: the answer batch's differing preamble is lost (R-3, accepted)");
-        check(answerTextRows == 0, "task 18: the answer text draws on no group row");
+        check(preambleRows == 0, "the answer batch's differing preamble is lost");
+        check(answerTextRows == 0, "the answer text draws on no group row");
         check(thread.blockText(0, tui::store::kAnswerRow) == "the answer body" &&
                   thread.blockAt(0, tui::store::kAnswerRow).label == "ANSWER",
-              "task 18: the answer text draws once, on the turn-level ANSWER row");
+              "the answer text draws once, on the turn-level ANSWER row");
         // The dropped child's facts survived it: the owner's duration was read
-        // in the bucket pass (DD-8), and the owner copies nothing - the text
+        // in the bucket pass, and the owner copies nothing - the text
         // lives on the ANSWER row, so a second copy offer would duplicate it.
         check(thread.blockAt(0, 5).label == "AGENT" && thread.blockAt(0, 5).timingS == 0.3,
-              "task 18: the owner still carries the dropped content's duration (DD-8)");
+              "the owner still carries the dropped content's duration");
         check(!thread.blockAt(0, 5).copyable,
-              "task 18: the answer batch's owner copies nothing - the ANSWER row is the copy");
+              "the answer batch's owner copies nothing - the ANSWER row is the copy");
     }
 
-    // Task 18: no Answer row, no drop - every batch keeps its content child.
+    // No Answer row, no drop - every batch keeps its content child.
     {
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
@@ -1321,14 +1297,14 @@ int main(int argc, char** argv) {
             block(43, "content#0", 0, 2, "", "still working", "43#0", 300));
         state.chat.typedTurns.blockUpsert(block(43, "call#0", 2, 2, "bash", "ls -R", "43#0"));
         check(thread.blockCount(0) == 4,
-              "task 18: with no Answer row nothing is dropped - header, owner, content, call");
+              "with no Answer row nothing is dropped - header, owner, content, call");
         check(thread.blockText(0, 2) == "still working",
-              "task 18: the content child draws when the turn has no ANSWER");
+              "the content child draws when the turn has no ANSWER");
     }
 
-    // Task 18 / DD-15: a batch whose ONLY child was the suppressed content row
+    // A batch whose ONLY child was the suppressed content row
     // loses its owner too - and the header's step count stays what the wire
-    // says (stepCount reads the store, above the projection; §0.3's accepted
+    // says (stepCount reads the store, above the projection - an accepted
     // hole).
     {
         tui::TuiState state;
@@ -1342,32 +1318,32 @@ int main(int argc, char** argv) {
             block(44, "content#0", 0, 3, "", "the answer, streamed", "44#0", 700));
         state.chat.typedTurns.blockUpsert(
             block(44, "ans", 3, 0, "", "the answer, streamed", "44#0"));
-        check(thread.batchCount(0) == 1, "task 18 / DD-15: the emptied batch is still a bucket - "
+        check(thread.batchCount(0) == 1, "the emptied batch is still a bucket - "
                                          "the drop is the rows', not the batching's");
         check(thread.blockCount(0) == 1 && thread.blockAt(0, 0).label == "WORK",
-              "task 18 / DD-15: no content child, no owner - the header is the batch's only row");
+              "no content child, no owner - the header is the batch's only row");
         check(thread.blockAt(0, 0).steps == 1,
-              "task 18 / DD-15: the step count stays what the wire says (1) - the accepted hole");
+              "the step count stays what the wire says (1) - the accepted hole");
         check(thread.blockText(0, tui::store::kAnswerRow) == "the answer, streamed",
-              "task 18 / DD-15: the answer text still draws once");
+              "the answer text still draws once");
     }
-    // Task 7 / FR-23: the one chips composer.
+    // The one chips composer.
     {
         using tui::store::chipsText;
-        check(chipsText({}).empty(), "task 7 / FR-23: no calls, no chips");
-        check(chipsText({"bash"}) == "[bash]", "task 7 / FR-23: one call, one chip");
+        check(chipsText({}).empty(), "no calls, no chips");
+        check(chipsText({"bash"}) == "[bash]", "one call, one chip");
         check(chipsText({"bash", "grep", "read_file"}) == "[bash] [grep] [read_file]",
-              "task 7 / FR-23: three calls, three chips");
+              "three calls, three chips");
         check(chipsText({"bash", "grep", "read_file", "edit_file"}) ==
                   "[bash] [grep] [read_file] +1",
-              "task 7 / FR-23: the +N tail past three");
+              "the +N tail past three");
         check(chipsText({"bash", "bash", "grep"}) == "[bash] [grep]",
-              "task 7 / FR-23: a repeated name chips once (first occurrence wins)");
-        check(chipsText({"", "bash"}) == "[bash]", "task 7 / FR-23: an empty name never chips");
+              "a repeated name chips once (first occurrence wins)");
+        check(chipsText({"", "bash"}) == "[bash]", "an empty name never chips");
     }
-    // Task 19's scene review, as the §10.3 checks that need no screen: the
+    // The no-screen scene review: the
     // store answers alone.
-    { // C12: the query batch never grows an owner (DD-4, restated).
+    { // the query batch never grows an owner (restated).
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
         thread.bind(state);
@@ -1384,7 +1360,7 @@ int main(int argc, char** argv) {
             owners += thread.blockAt(0, b).ownsBatch ? 1 : 0;
         check(owners == 1 && thread.blockCount(0) == 4, "the query batch never grows an owner");
     }
-    { // C13: the hidden verdict's weight (DD-12): with hiddenTools = [] the
+    { // the hidden verdict's weight: with hiddenTools = [] the
       // step count is unchanged; with the default each hidden call weighs 2.
         TypedThreadStore store;
         store.turnUpsert(turn(46, 1, 4));
@@ -1408,7 +1384,7 @@ int main(int argc, char** argv) {
               "stepCount with hiddenTools = [] is unchanged; with the default it is "
               "-2 per hidden call");
     }
-    { // D14: no row id repeats within a turn (I-6) - the owner's namespace cannot
+    { // no row id repeats within a turn - the owner's namespace cannot
       // collide with the plain rows'.
         tui::TuiState state;
         tui::store::ThreadStoreAdapter thread(state);
@@ -1436,11 +1412,11 @@ int main(int argc, char** argv) {
                 repeat = true;
         // The count is the projection's too: header, batch 47#1's owner and
         // three children, batch 47#2's owner and its kept call (the answer
-        // batch's content child is dropped, DD-9) - an unexpected row drop or
+        // batch's content child is dropped) - an unexpected row drop or
         // insert fails this check with the id set's repeat answer spare.
         check(rows == 7 && !repeat, "no row id repeats within a turn");
     }
-    { // D15: a pin survives the default flipping (I-13, DD-16) - the owner's
+    { // a pin survives the default flipping - the owner's
       // default flips open and closed around a call's lifecycle and the pin
       // answers the same way the whole time.
         tui::TuiState state;

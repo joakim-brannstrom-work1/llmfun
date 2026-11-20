@@ -1,8 +1,8 @@
 /// The typed thread adapter (thread_store.h owns the contract).
 ///
-/// This file is the projecting half that task 18 moved out of `tui_chat.cpp`: the
+/// This file is the projecting half of the thread adapter: the
 /// group build and the block model. It draws no thread of its
-/// own - task 41 removed the renderer that did. A view asks `beginGroup()`/
+/// own - the views do the drawing. A view asks `beginGroup()`/
 /// `blockAt()` for a row, draws its chrome with `views::renderBlock()` and its body
 /// with `renderBlockBody()`, which is what keeps "the content is the store's, the
 /// chrome is the view's" a property of the construction rather than of a screenshot
@@ -166,7 +166,7 @@ static std::uint64_t typedTurnFingerprint(const store::TypedThreadStore& typed,
     return h.value();
 }
 
-// The one chips composer (DD-18, FR-23): distinct names in first-occurrence
+// The one chips composer: distinct names in first-occurrence
 // order, empty names never chip, the first three drawn then `+N` for the rest.
 std::string chipsText(const std::vector<std::string>& toolNames) {
     std::vector<std::string> names;
@@ -194,7 +194,7 @@ std::string chipsText(const std::vector<std::string>& toolNames) {
     return out;
 }
 
-// The child order inside one batch block (DD-5, I-4): reasoning, then content,
+// The child order inside one batch block: reasoning, then content,
 // then the call cards in call order - whatever order the wire sent. Live sends
 // content first, replay sends reasoning first; the projection is the one that
 // decides. Anything else a response batch carries (a notice riding it, an
@@ -205,7 +205,7 @@ ChildRank childRank(model::BlockKind kind) {
     switch (kind) {
     case model::BlockKind::Thinking:
         return ChildRank::Reasoning;
-    case model::BlockKind::Assistant: // the batch's prose (a Code prose too, D-RAW)
+    case model::BlockKind::Assistant: // the batch's prose (a Code prose too)
     case model::BlockKind::Code:
         return ChildRank::Content;
     case model::BlockKind::ToolStep:
@@ -215,13 +215,11 @@ ChildRank childRank(model::BlockKind kind) {
     }
 }
 
-// The typed-backed rebuild (v5, task 2): one group per stored turn, one row per
-// displayed block, through the same Entry/BlockEntry machinery the v4 body
-// fills - the GroupView/BlockDesc consumers cannot tell the paths apart. The
-// group id IS the persisted turnId (design §4: overrides, expansion flags and
-// hints survive upserts, re-emission and rebuilds because nothing is
-// renumbered), and the rebuild guard is the store's mutation counter, so an
-// unchanged store rebuilds nothing (§4.4).
+// The typed-backed rebuild: one group per stored turn, one row per
+// displayed block. The group id IS the persisted turnId, and the rebuild
+// guard is the store's mutation counter: an unchanged store rebuilds nothing.
+// Overrides, expansion flags and hints survive upserts, re-emission and
+// rebuilds because nothing is renumbered.
 void ThreadStoreAdapter::syncTyped() const {
     if (!bound()) {
         groups_.clear();
@@ -246,7 +244,7 @@ void ThreadStoreAdapter::syncTyped() const {
         const std::uint64_t fingerprint = typedTurnFingerprint(typed, turn.id);
         const auto known = typedFingerprints_.find(turn.id);
         if (known == typedFingerprints_.end())
-            typedRevision_.emplace(turn.id, 0); // born at 0, like every non-stream v4 group
+            typedRevision_.emplace(turn.id, 0); // born at 0, like every non-stream group
         else if (known->second != fingerprint)
             typedRevision_[turn.id] += 1;
         typedFingerprints_[turn.id] = fingerprint;
@@ -257,7 +255,7 @@ void ThreadStoreAdapter::syncTyped() const {
         entry.view.revision = typedRevision_[turn.id];
         entry.view.typedTurn = true;
         // The turn's live state off the wire: Running from the upsert that
-        // opens the turn until the done/stop upsert closes it (§4.3).
+        // opens the turn until the done/stop upsert closes it.
         entry.turnLive = turn.state == store::kTurnStateRunning;
         const int steps = stepCount(typed, turn.id);
         entry.view.oneLineSummary = "WORK";
@@ -285,7 +283,7 @@ void ThreadStoreAdapter::syncTyped() const {
         // agent role as meta instead, so it renders as assistant work inside
         // the group, never as the turn's query.
         std::string queryId;
-        std::string queryBatchId; // the query row's batch - not a response batch (DD-4)
+        std::string queryBatchId; // the query row's batch - not a response batch
         std::string firstProseId;
         std::string firstProseBatchId;
         bool sawProseMeta = false;
@@ -321,7 +319,7 @@ void ThreadStoreAdapter::syncTyped() const {
             BlockEntry row;
             row.timingS =
                 block.durationMs != 0 ? static_cast<double>(block.durationMs) / 1000.0 : 0.0;
-            // Pre-cutover keying: the row's `key` is the
+            // Keying: the row's `key` is the
             // block id's hash - stable per block id, but not injective.
             row.key = std::hash<std::string>{}(block.id);
             row.typedTurnId = turn.id;
@@ -358,17 +356,17 @@ void ThreadStoreAdapter::syncTyped() const {
                 row.kind = model::BlockKind::System; // an unknown wire kind: a notice
                 break;
             }
-            // A row's disclosure is a property of the row itself (DD-13): only
-            // a row that HAS a body to fold offers one. The owner row is
-            // constructed expandable at its emission (its initialiser, below);
-            // every other row's offer comes from its kind. A body segment and
-            // a query/answer sentinel keep false, so setBlockExpanded's guard
-            // answers false instead of pinning a row nothing can open (I-11).
+            // A row's disclosure is a property of the row itself: only a
+            // row that HAS a body to fold offers one. The owner row is
+            // constructed expandable at its emission (its initialiser,
+            // below); every other row's offer comes from its kind. A body
+            // segment or a query/answer sentinel keeps false, so the
+            // setBlockExpanded guard answers false for them.
             row.expandable = row.kind == model::BlockKind::WorkGroup ||
                              row.kind == model::BlockKind::Thinking ||
                              row.kind == model::BlockKind::ToolStep;
-            // The row's state comes straight off the wire status (D7 is the
-            // emitter's: the store merges, it never enforces a transition).
+            // The row's state comes straight off the wire status; the emitter
+            // owns transitions - the store merges, it never enforces one.
             switch (block.status) {
             case store::kBlockStatusPending:
                 row.state = model::BlockState::Pending;
@@ -404,13 +402,11 @@ void ThreadStoreAdapter::syncTyped() const {
                 rows.push_back(std::move(row));
             }
         }
-        // The bucketing (task 7): the rows group by batch id - every batch but
-        // the query's is a response batch (DD-4; ids are opaque, nothing parses
-        // them). The rows keep their wire order; each records the bucket it
-        // joined, and the batch accumulates the facts its owner row (DD-13)
-        // and the tests read - all of them, before any drop: the emission
-        // below drops rows, never facts (DD-8's duration survives a
-        // body-less content row).
+        // The bucketing: the rows group by batch id - every batch but the
+        // query's is a response batch (ids are opaque, nothing parses them).
+        // The rows keep their wire order; each records the bucket it joined,
+        // and the batch accumulates the facts its owner row and the tests
+        // read - all of them, before any drop: the emission drops rows, never facts.
         std::unordered_map<std::string, std::size_t> bucketOf;
         std::vector<std::vector<std::string>> batchCalls; // per batch: call names, in call order
         for (std::size_t i = 0; i < rows.size(); ++i) {
@@ -446,42 +442,37 @@ void ThreadStoreAdapter::syncTyped() const {
                     row.state != model::BlockState::Cancelled)
                     batch.allSettled = false;
             }
-            // The batch's duration is the content block's (DD-8), read before
+            // The batch's duration is the content block's, read before
             // any drop - a live content block says 0s until it ticks.
             if (row.kind == model::BlockKind::Assistant && row.timingS > 0.0 &&
                 batch.durationS == 0.0)
                 batch.durationS = row.timingS;
         }
-        // I-12: the turn's last bucket is the newest.
+        // The turn's last bucket is the newest.
         if (!entry.batches.empty())
             entry.batches.back().isNewest = true;
-        // I-7: buckets are created at their first row's visit, so the vector's
+        // Buckets are created at their first row's visit, so the vector's
         // order IS the first-row order - a bucket born later always sits later.
         for (std::size_t i = 1; i < entry.batches.size(); ++i)
             assert(entry.batches[i - 1].firstRow < entry.batches[i].firstRow);
-        // The batch's chips line (FR-23), composed by the one chips composer.
+        // The batch's chips line, composed by the one chips composer.
         for (std::size_t i = 0; i < entry.batches.size(); ++i)
             entry.batches[i].chips = chipsText(batchCalls[i]);
 
-        // DD-9, I-10: the Answer's own batch suppresses its content child, so
-        // the answer text draws once, on the turn-level ANSWER row. D names the
-        // batch on the Answer block itself (the row's typedBatchId), so the
-        // projection reads it and needs no heuristic (NFR-3: no id parsing).
-        // The batch's facts were all read in the bucket pass above - its
-        // duration, its chips, its step weight - so the drop moves no count
-        // (§0.3); a batch whose only child was this content row loses its
-        // owner with it (DD-15), and its step count stays what the wire says.
-        // R-3's accepted trade-off: a final response whose preamble differs
-        // from its answer loses that preamble.
+        // The Answer's own batch suppresses its content child, so the answer
+        // text draws once, on the turn-level ANSWER row. The Answer block names
+        // its batch (the row's typedBatchId), so the projection reads it with
+        // no id parsing; the batch's facts were all read in the bucket pass, so
+        // the drop moves no count. A final response whose preamble differs from its answer loses
+        // that preamble.
         const std::string answerBatch =
             entry.hasAnswer ? entry.answerRow.typedBatchId : std::string();
 
-        // The emission (task 8): the wire order decides only WHERE each batch's
-        // block starts - at its first row's index (H8). The block itself is
-        // canonical: one owner row (DD-13) when a child survived the drops
-        // (I-2, DD-15), then the children in DD-5's order, contiguous (I-3); a
-        // plain row that lay between the batch's rows is emitted after the
-        // block, at the first wire position the walk reaches after it.
+        // The emission: the wire order decides only WHERE each batch's block
+        // starts - at its first row's index. The block itself is canonical: one
+        // owner row when a child survived the drops, then the children in rank
+        // order, contiguous; a plain row that lay between the batch's rows is
+        // emitted after the block, at the first wire position the walk reaches after it.
         std::vector<char> batchDrawn(entry.batches.size(), 0);
         for (std::size_t i = 0; i < rows.size(); ++i) {
             if (rows[i].batch != kNoBatch && batchDrawn[rows[i].batch])
@@ -495,10 +486,9 @@ void ThreadStoreAdapter::syncTyped() const {
             }
             batchDrawn[row.batch] = 1;
             const std::size_t slot = row.batch;
-            // The batch's children in wire order first, then the drops (design
-            // §C5.5): a content/reasoning row whose body never arrived would
-            // draw a bare AGENT header above nothing (D6), so it goes - the
-            // batch's duration was already read in the bucket pass (DD-8).
+            // A content/reasoning row whose body never arrived would draw
+            // a bare AGENT header above nothing, so it goes - the batch's
+            // duration was already read in the bucket pass.
             std::vector<BlockEntry> children;
             children.push_back(std::move(row));
             for (std::size_t j = i + 1; j < rows.size(); ++j)
@@ -510,9 +500,9 @@ void ThreadStoreAdapter::syncTyped() const {
                 const bool bodyLess =
                     child.typedBody.empty() && (child.kind == model::BlockKind::Assistant ||
                                                 child.kind == model::BlockKind::Thinking);
-                // DD-9's drop, kind-scoped: the answer batch's CONTENT child
-                // never draws - the ANSWER row carries the text (I-10). The
-                // batch's reasoning and calls are not the answer; they stay.
+                // The answer batch's CONTENT child never draws - the ANSWER
+                // row carries the text. The batch's reasoning and calls are
+                // not the answer; they stay.
                 // Guarded on hasAnswer: without an Answer row no batch is
                 // suppressed, answerBatch being empty must not mean "batch
                 // empty-string".
@@ -521,29 +511,29 @@ void ThreadStoreAdapter::syncTyped() const {
                 if (!bodyLess && !answerOwned)
                     kept.push_back(std::move(child));
             }
-            // DD-5's order, stable: each rank keeps its own wire order, so the
+            // Rank order, stable: each rank keeps its own wire order, so the
             // calls stay in call order and a rank's ties never reorder.
             std::stable_sort(kept.begin(), kept.end(),
                              [](const BlockEntry& a, const BlockEntry& b) {
                                  return childRank(a.kind) < childRank(b.kind);
                              });
-            // The batch's surviving content body (FR-16): the first kept
+            // The batch's surviving content body: the first kept
             // Assistant child's typed body, the owner row's copy source. A
             // calls-only batch keeps it empty - its owner copies nothing.
             BatchEntry& batch = entry.batches[slot];
             for (const BlockEntry& child : kept)
                 if (child.kind == model::BlockKind::Assistant && batch.contentBody.empty()) {
                     batch.contentBody = child.typedBody;
-                    // The copy's fence question rides with the body (S-13): the
+                    // The copy's fence question rides with the body: the
                     // owner's copy answers it from the child the body came from.
                     batch.contentIsCode = child.code;
                 }
-            if (!kept.empty()) { // I-2: the owner exists iff a child survived
+            if (!kept.empty()) { // the owner exists iff a child survived
                 BlockEntry owner;
                 owner.kind = model::BlockKind::Assistant; // the AGENT row (blockAt labels it)
                 owner.timingS = batch.durationS;
                 owner.expandable = true;
-                // Pre-cutover keying, same as the wire rows: the owner's
+                // Keying, same as the wire rows: the owner's
                 // namespaced id's hash - stable, but not injective.
                 owner.key = std::hash<std::string>{}("batch#" + batch.batchId);
                 owner.typedTurnId = turn.id;
@@ -552,7 +542,7 @@ void ThreadStoreAdapter::syncTyped() const {
                 owner.batch = slot;
                 owner.batchOwned = true;
                 owner.ownsBatch = true;
-                // The state stays None (I-8): no wire status is written by the
+                // The state stays None: no wire status is written by the
                 // C++ side - the FAIL word and the chips are the batch's own
                 // facts, and the tasks that draw them read `Entry::batches`.
                 entry.blocks.push_back(std::move(owner));
@@ -560,25 +550,22 @@ void ThreadStoreAdapter::syncTyped() const {
             for (BlockEntry& child : kept)
                 entry.blocks.push_back(std::move(child));
         }
-        // I-6: a turn's row ids never repeat - the owner namespace (`batch#...`)
+        // A turn's row ids never repeat - the owner namespace (`batch#...`)
         // colliding with a wire block id would silently merge two rows.
 #ifndef NDEBUG
         {
             std::set<std::string> ids;
             for (const BlockEntry& row : entry.blocks) {
                 const auto inserted = ids.insert(row.typedBlockId);
-                assert(inserted.second && "I-6: a turn's row ids never repeat");
+                assert(inserted.second && "a turn's row ids never repeat");
             }
         }
 #endif
-        // A rough estimate only (FR-19, task 11): the rows a *folded* turn
-        // draws - the header, the plain rows and the owner rows. A batch child
-        // (thinking, content, a card) draws behind its owner's fold, so it
-        // weighs nothing here. Mode- and pin-independent on purpose: the hint
-        // is computed in syncTyped(), while visibility resolves per frame, and
-        // test_streaming.cpp pins that the hint does not move with the fold.
-        // It is replaced by the drawn height after the first draw, exactly
-        // like v4's.
+        // A rough estimate only: the rows a *folded* turn draws - the
+        // header, the plain rows and the owner rows. A batch child (thinking,
+        // content, a card) draws behind its owner's fold, so it weighs nothing.
+        // Mode- and pin-independent on purpose: the hint is computed here while
+        // visibility resolves per frame; the drawn height replaces it after the first draw.
         int plainRows = 0;
         int ownerRows = 0;
         for (const BlockEntry& row : entry.blocks) {
@@ -606,21 +593,21 @@ void ThreadStoreAdapter::syncTyped() const {
     }
 
     groups_ = std::move(groups);
-    // group id -> its index: the lookup `entryFor()` needs, a probe instead of a
-    // walk of the thread (design §4.4).
+    // group id -> its index: the lookup `entryFor()` needs, a probe instead of
+    // a walk of the thread.
     indexById_.clear();
     for (std::size_t i = 0; i < groups_.size(); ++i)
         indexById_.emplace(groups_[i].view.id, i);
     ++groupBuilds_;
 
-    // The hint prune the v4 sync does: a hint for a turn that is gone is memory
-    // kept for a group that no longer exists, and ids are never reused so
-    // dropping it cannot lose a live hint.
+    // The hint prune: a hint for a turn that is gone is memory kept for a
+    // group that no longer exists, and ids are never reused so dropping it
+    // cannot lose a live hint.
     auto& hints = thread_->hints;
     for (auto it = hints.begin(); it != hints.end();)
         it = indexById_.count(it->first) != 0 ? std::next(it) : hints.erase(it);
     // window counts the stored groups and the view appends the live one after
-    // (D-BOUNDS, the same shape the v4 projection gave the stream group) - and
+    // them - and
     // the frame layer's clock reads `hasStream()` off this mark, so a turn that
     // has closed stops the clock by the same flag.
     if (!groups_.empty() && typed.turnAt(typed.turnCount() - 1).state == store::kTurnStateRunning)
@@ -707,9 +694,9 @@ bool ThreadStoreAdapter::minimalMode() const { return !bound() || chat_->threadM
 bool ThreadStoreAdapter::groupOpen(size_t groupId) const {
     if (!bound())
         return false;
-    // The absolute pin first (DD-6): a click stored open/closed and that is
-    // the answer, whatever the mode and the turn's liveness say. Then the
-    // liveness default (design §7.5): a group draws open only while its turn
+    // The absolute pin first: a click stored open/closed and that is the
+    // answer, whatever the mode and the turn's liveness say. Then the
+    // liveness default: a group draws open only while its turn
     // is live in maximal mode - maximal at rest folds like minimal.
     const auto pinned = chat_->groupPins.find(static_cast<std::int64_t>(groupId));
     if (pinned != chat_->groupPins.end())
@@ -721,7 +708,7 @@ bool ThreadStoreAdapter::groupOpen(size_t groupId) const {
 bool ThreadStoreAdapter::groupStyleIsMinimal(size_t groupId) const {
     if (!bound())
         return true;
-    // The SHAPE, not the fold (DD-14): the mode is minimal AND the group is
+    // The SHAPE, not the fold: the mode is minimal AND the group is
     // not drawn open. A pinned-open minimal group and a live maximal group
     // both draw maximal-style; a folded maximal group never draws the chips.
     return chat_->threadMinimalMode && !groupOpen(groupId);
@@ -736,14 +723,13 @@ void ThreadStoreAdapter::setExpanded(size_t id, bool open) {
     const auto found = indexById_.find(id);
     if (found == indexById_.end())
         return;
-    // The writer is absolute (DD-6, I-13): no "drop the entry when it equals
-    // the default" - that is the relative encoding rev 1 got wrong. The pin
-    // survives a mode flip and a liveness change and answers what was stored.
+    // The writer is absolute: no "drop the entry when it equals the default" -
+    // the pin survives a mode flip and a liveness change and answers what was stored.
     chat_->groupPins[static_cast<std::int64_t>(id)] = open;
 }
 
 void ThreadStoreAdapter::collapseAll() {
-    // The escape hatch (task 24, DD-6): the pins are absolute, so the user needs
+    // The escape hatch: the pins are absolute, so the user needs
     // one action that forgets them all. It writes no status and stores no
     // default - it only clears. `expandedGroup_` is the last-toggle latch, and
     // a fold that just emptied has no anchor to offer the next frame.
@@ -833,20 +819,19 @@ model::BlockDesc ThreadStoreAdapter::blockAt(size_t k, std::size_t b) const {
     out.timingS = block->timingS;
     out.steps = block->steps;
     out.expandable = block->expandable;
-    // The derived predicate (design §7.5, task 10): visibility is computed
-    // HERE, before the view sees the row (B1) - the view never re-derives it.
-    out.visible = b == kQueryRow || b == kAnswerRow
-                      ? true // the turn-level rows draw in both modes (§4.6)
-                      : resolveVisible(entry, *block);
+    // The derived predicate: visibility is computed HERE, before the view
+    // sees the row - the view never re-derives it.
+    out.visible = b == kQueryRow || b == kAnswerRow ? true // the turn-level rows draw in both modes
+                                                    : resolveVisible(entry, *block);
     out.expanded = b == kQueryRow || b == kAnswerRow ? true : resolveOpen(entry, *block);
     out.batchOwned = block->batchOwned;
-    // The batch's content child is a body segment (DD-7): the view draws its
-    // body, never a header of its own (task 12). Detected on the entry's kind,
+    // The batch's content child is a body segment: the view draws its
+    // body, never a header of its own. Detected on the entry's kind,
     // before the fenced-code rewrite below renames a segment's body to `Code`.
     out.bodySegment =
         block->batchOwned && !block->ownsBatch && block->kind == model::BlockKind::Assistant;
     if (block->ownsBatch) {
-        // The owner row is drawn from the batch's facts (DD-13), not from its
+        // The owner row is drawn from the batch's facts, not from its
         // (always empty) own body: the chips, the FAIL count and the copy
         // offer all read the batch.
         assert(block->batch != store::kNoBatch && "an owner row always carries its batch slot");
@@ -884,13 +869,13 @@ model::BlockDesc ThreadStoreAdapter::blockAt(size_t k, std::size_t b) const {
         break;
     }
     if (block->code)
-        out.kind = model::BlockKind::Code; // classified at build, like v4
+        out.kind = model::BlockKind::Code; // classified at build
     // Every row previews something: a tool card its tool name (set in the
     // switch), every other row its body's first line. Thinking has no preview:
-    // its label is the count only and its open body is the full text (D3).
-    // The owner's preview is the batch's own face (§7.3.7): the chips when the
-    // batch has calls, the content's first line when it has none - an owner has
-    // no body of its own to preview (DD-13), and a batch with calls keeps the
+    // its label is the count only and its open body is the full text.
+    // The owner's preview is the batch's own face: the chips when the
+    // batch has calls, the content's first line when it has none - an owner
+    // has no body of its own to preview, and a batch with calls keeps the
     // summary empty, the chips carrying its face.
     if (block->kind != model::BlockKind::ToolStep && block->kind != model::BlockKind::Thinking) {
         out.summary = block->ownsBatch && !entry.batches[block->batch].hasAnyCall
@@ -910,8 +895,8 @@ bool ThreadStoreAdapter::blockExpanded(size_t k, std::size_t b) const {
     const BlockEntry* block = blockEntryAt(k, b);
     if (block == nullptr || !bound())
         return false;
-    // The turn-level sentinel rows are never expandable state (§7.5:
-    // queryOpen/answerOpen = true), the same answer blockAt() hard-codes into
+    // The turn-level sentinel rows are never expandable state
+    // (queryOpen/answerOpen = true), the same answer blockAt() hard-codes into
     // desc.expanded - the two seams must agree.
     if (b == kQueryRow || b == kAnswerRow)
         return true;
@@ -919,15 +904,12 @@ bool ThreadStoreAdapter::blockExpanded(size_t k, std::size_t b) const {
 }
 
 bool ThreadStoreAdapter::batchLiveFor(const Entry& entry, const BlockEntry& block) const {
-    // I-12: the turn is live and the batch is the turn's newest. "Settled"
-    // means the batch HELD a call and every call responded: a call-less batch
-    // (the streaming prose tail) is never settled - allSettled defaults true
-    // and only ToolStep rows touch it, so the literal predicate would fold a
-    // maximal live tail mid-stream, contradicting §4.5's own maximal cell
-    // ("content while the batch is the live tail: drawn inside the open
-    // owner"). A batch whose calls all responded folds with its owner (row
-    // 422): the content's lifetime in minimal is the segment clause's job,
-    // not the owner's open default. A plain row holds nothing open.
+    // The turn is live and the batch is the turn's newest. "Settled" means
+    // the batch HELD a call and every call responded: a call-less batch (the
+    // streaming prose tail) is never settled - allSettled defaults true and
+    // only ToolStep rows touch it, so the literal predicate would fold a maximal
+    // live tail mid-stream. A batch whose calls all responded folds with its owner; a plain row
+    // holds nothing open.
     if (block.batch == kNoBatch)
         return false;
     const BatchEntry& batch = entry.batches[block.batch];
@@ -935,9 +917,9 @@ bool ThreadStoreAdapter::batchLiveFor(const Entry& entry, const BlockEntry& bloc
 }
 
 bool ThreadStoreAdapter::childLiveFor(const Entry& entry, const BlockEntry& block) const {
-    // A child's live default counts only the calls (I-12): a batch that holds
+    // A child's live default counts only the calls: a batch that holds
     // no call in flight folds its children behind their own pins - the
-    // reasoning text waits for a row pin or a call in flight (§7.5, DD-6).
+    // reasoning text waits for a row pin or a call in flight.
     if (block.batch == kNoBatch)
         return false;
     const BatchEntry& batch = entry.batches[block.batch];
@@ -953,8 +935,8 @@ bool ThreadStoreAdapter::resolveOpen(const Entry& entry, const BlockEntry& block
     // state: it draws open when the group it rides in draws open.
     if (!block.batchOwned)
         return groupOpen(entry.view.id);
-    // The absolute row pin first (DD-6): what a click stored is the answer,
-    // whatever the batch's liveness would default to (I-13).
+    // The absolute row pin first: what a click stored is the answer,
+    // whatever the batch's liveness would default to.
     const auto turn = chat_->rowPins.find(static_cast<std::int64_t>(entry.view.id));
     if (turn != chat_->rowPins.end()) {
         const auto pinned = turn->second.find(block.typedBlockId);
@@ -964,7 +946,7 @@ bool ThreadStoreAdapter::resolveOpen(const Entry& entry, const BlockEntry& block
     // The live default: an owner row of the live tail draws open while the
     // batch is unsettled or still holds the turn's content (batchLiveFor); a
     // child row draws open only while the batch has a call in flight
-    // (childLiveFor) and folds when the batch settles (design §7.5, I-12).
+    // (childLiveFor) and folds when the batch settles.
     const bool live = block.ownsBatch ? batchLiveFor(entry, block) : childLiveFor(entry, block);
     return live;
 }
@@ -975,25 +957,25 @@ bool ThreadStoreAdapter::resolveVisible(const Entry& entry, const BlockEntry& bl
     // not a predicate; `blockAt()` never asks).
     if (block.group)
         return true;
-    // ownerVisible = groupOpen (§7.5): an owner row never draws under a fold,
+    // ownerVisible = groupOpen: an owner row never draws under a fold,
     // minimal-style or maximal.
     if (block.ownsBatch)
         return open;
-    // plainVisible = groupOpen (§7.5): a group-level plain row (a notice, a
+    // plainVisible = groupOpen: a group-level plain row (a notice, a
     // vision block, a query batch's rider) draws with the group it rides in.
     if (!block.batchOwned)
         return open;
     const bool styleMinimal = groupStyleIsMinimal(entry.view.id);
     const BatchEntry& batch = entry.batches[block.batch];
     // The batch's content segment is the one child the minimal fold keeps
-    // visible on its own (I-11, B1/FR-5): the newest batch of a live turn
-    // draws its prose even though the owner above it never drew. Evaluated
-    // first (B1): "the owner is not drawn" and "the segment draws" are
+    // visible on its own: the newest batch of a live turn draws its prose
+    // even though the owner above it never drew. Evaluated first: "the owner
+    // is not drawn" and "the segment draws" are
     // compatible by construction.
     if (styleMinimal && entry.turnLive && batch.isNewest &&
         block.kind == model::BlockKind::Assistant)
         return true;
-    // Every other child draws only under an open owner (I-5): the owner's
+    // Every other child draws only under an open owner: the owner's
     // own open state is the pin-or-liveness answer `resolveOpen()` gives
     // the owner row's descriptor.
     const auto turn = chat_->rowPins.find(static_cast<std::int64_t>(entry.view.id));
@@ -1012,14 +994,13 @@ bool ThreadStoreAdapter::setBlockExpanded(size_t k, std::size_t b, bool open) {
         return false;
     const Entry& entry = groups_[k];
     if (block->group) {
-        // The group's pin: absolute, always stored (DD-6, I-13) - no
-        // "drop the entry when it equals the default", that is the relative
-        // encoding rev 1 got wrong. The pin survives a mode flip and the
+        // The group's pin: absolute, always stored - no
+        // "drop the entry when it equals the default". The pin survives a mode flip and the
         // turn's liveness change and answers what was stored.
         chat_->groupPins[static_cast<std::int64_t>(entry.view.id)] = open;
     } else {
         // The row's pin: absolute, always stored, keyed by the wire block id
-        // under the turn it belongs to (DD-6, I-13). The owner rows are
+        // under the turn it belongs to. The owner rows are
         // pinned under their `batch#<batchId>` key, the same id the
         // visibility predicate reads for the owner's open state.
         chat_->rowPins[static_cast<std::int64_t>(entry.view.id)][block->typedBlockId] = open;
@@ -1032,7 +1013,7 @@ std::string ThreadStoreAdapter::blockText(size_t k, std::size_t b) const {
     const BlockEntry* block = blockEntryAt(k, b);
     if (block == nullptr || !bound() || block->kind == model::BlockKind::WorkGroup)
         return {};
-    // The owner's copy target is its batch's content (FR-16): the copy belongs
+    // The owner's copy target is its batch's content: the copy belongs
     // to the response, not to the paragraph it happens to live in. A
     // calls-only batch has no content, so its owner copies nothing.
     if (block->ownsBatch) {
@@ -1046,7 +1027,7 @@ bool ThreadStoreAdapter::blockCopyIsCode(size_t k, std::size_t b) const {
     const BlockEntry* block = blockEntryAt(k, b);
     if (block == nullptr || !bound())
         return false;
-    // The owner copies its batch's content (FR-16): the fence answer is the
+    // The owner copies its batch's content: the fence answer is the
     // content child's own `code` fact, captured beside the body it came from.
     if (block->ownsBatch) {
         assert(block->batch != store::kNoBatch && "an owner row always carries its batch slot");
@@ -1067,7 +1048,7 @@ void ThreadStoreAdapter::renderBlockBody(size_t k, std::size_t b, const ui::Rect
     // A tool row is a transcript, not prose: it is drawn verbatim. Everything else goes
     // through the markdown wrapper.
     const bool markdown = block->kind != model::BlockKind::ToolStep;
-    // A card's Result can exist without arguments (F5): an empty body does not
+    // A card's Result can exist without arguments: an empty body does not
     // end the draw - only a body-less, result-less row paints nothing. A
     // Cancelled card carries neither (no pairs, no raw), so it draws
     // header-only.
@@ -1259,21 +1240,19 @@ void ThreadStoreAdapter::reset() {
     groupExpandedBefore_ = false;
     groupOpenBefore_ = 0;
     groupTop_ = 0.0f;
-    // The pins are keyed by the persisted turn id (DD-6), and a reset comes
-    // from a clear or a session switch: the thread's turns are gone, so a pin
-    // left behind would be applied to the *next* session's turn with the same
-    // id (ids restart at 1). The row pins and the group pins go with the
-    // thread. The thinking disclosure no longer exists here (task 10): the
-    // thinking row's pin is an ordinary row pin and died with the map above.
+    // The pins are keyed by the persisted turn id, and a reset comes from
+    // a clear or a session switch: the thread's turns are gone, so a pin
+    // left behind would be applied to the *next* session's turn with the
+    // same id (ids restart at 1). The row pins and the group pins go with the thread.
     if (bound()) {
         chat_->rowPins.clear();
         chat_->groupPins.clear();
     }
-    // The table source flags (task 37) are the same kind of state - the next
-    // session's block can be the one the flag would name - so they go with them.
+    // The table source flags are the same kind of state - the next session's
+    // block can be the one the flag would name - so they go with them.
     if (bound()) {
         thread_->tableSource.clear();
-        // The block menu's owner too (task 44): the ids restart below, so a latch that
+        // The block menu's owner too: the ids restart below, so a latch that
         // survived would name a block of the *next* thread.
         thread_->menuBlockId = {};
     }

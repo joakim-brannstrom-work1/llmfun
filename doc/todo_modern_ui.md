@@ -1910,9 +1910,8 @@ pole; it must not block the rescue.
 6. **Parity tests, dogfood.** Ship only when every current feature has a checked
    equivalent.
 
- **Delivered:** the typed store is the only renderer; the
-v4 adapter is gone (the thread v5 design). This was the deliberate trade-off for
-speed: less elegance now, no rewrite later.
+ **Delivered:** the typed store is the only renderer. The deliberate
+trade-off was speed: less elegance, no rewrite later.
 
 **Post-MVP track:**
 
@@ -2188,7 +2187,7 @@ plus one week of dogfood ≈ **5.5 weeks to release** (range 5–6.5).
 neutral surfaces, top bar, rail, now bar, Activity/Raw Log, custom TUI table renderer,
 minimal Settings, minimal palette, 1280×820 GUI.
 
-**Deferred to post-MVP:**  (delivered by the thread v5 design), Context Lens, full inspector tabs,
+**Deferred to post-MVP:** Context Lens, full inspector tabs,
 universal search, canvas, minimap, semantic zoom, ask/approval, Parchment/Native
 themes, density, full settings, virtualization (pixel-perfect), keymap overhaul.
 
@@ -2272,11 +2271,10 @@ canvas (keep tool detail inline), Parchment. What never to cut from the MVP: any
 These are the decisions the implementation plan follows.
 
 1. **Pinning sessions:** persisted in `state.json` (`pinnedChatSessions`) and the row menu / `p` rail key toggle it.
-2. **Message ordinals:** dropped. The v6 cutover removed the 1-based display
-   ordinal — the number had to be recomputed at send time, at replay time and
-   on every instance that loaded the file, and the typed turn already carries
-   the stable persisted `turnId`. The header and the turn meta carry no
-   number.
+2. **Message ordinals:** dropped: no 1-based display ordinal. The number
+   would have to be recomputed at send time, at replay time and on every
+   instance that loads the file, and the typed turn already carries the
+   stable persisted `turnId`. The header and the turn meta carry no number.
 3. **Ctrl+C:** change to copy/cancel and move quit to `Ctrl+Q`, with a one-time hint.
    This is post-MVP; the TUI form needs raw mode (§8.12). The MVP keeps Ctrl+C quit.
 4. **Session titles:** derive from the first user message, as today. An agent-proposed

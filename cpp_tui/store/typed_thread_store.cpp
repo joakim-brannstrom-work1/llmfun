@@ -2,7 +2,7 @@
 //
 // The typed thread store's mutation and projection surface (see
 // typed_thread_store.h for the contract). Everything here is O(1) per upsert:
-// an index lookup plus a field-by-field overwrite, never a scan (design §7).
+// an index lookup plus a field-by-field overwrite, never a scan.
 
 #include "typed_thread_store.h"
 
@@ -144,7 +144,7 @@ const TypedTurn* TypedThreadStore::turnById(std::int64_t id) const {
 }
 
 void TypedThreadStore::evictForCapacity(std::int64_t liveTurnId) {
-    // Whole turns only, oldest first, never the live turn (W2): the emitter's
+    // Whole turns only, oldest first, never the live turn: the emitter's
     // upserts for the live turn cannot fight an eviction of the turn it is
     // writing. The cap exceeded means at least two turns are held, so skipping
     // the live one always leaves an older turn to evict - the loop terminates.

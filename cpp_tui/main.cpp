@@ -218,7 +218,7 @@ int main(int argc, char** argv) {
 
     // Seeded demo thread: --seed-messages N (default 300) controls how many
     // messages the fixture adds; the render path reads nothing else from here.
-    // Typed seeding (v5): one Done turn per message - the query cadence a user
+    // Typed seeding: one Done turn per message - the query cadence a user
     // Prose block in the turn's query batch, the final-answer cadence an Answer
     // block, everything else an assistant content block in the turn's batch.
     const auto addTypedTurn = [&state](std::int64_t turnId, int kind, const std::string& body,

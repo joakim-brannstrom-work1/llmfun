@@ -286,7 +286,7 @@ int main(int argc, char** argv) {
               "adapter: q, work, q is 2 groups (" + std::to_string(thread.groupCount()) + ")");
         check(!thread.expanded(turn1), "adapter: a work turn is born folded");
 
-        // The user now opens the first turn: a later turn must not close it.
+        // The user opens the first turn: a later turn must not close it.
         thread.setExpanded(turn1, true);
         seed.add(typed_seed::Seeder::Msg::User, "q3"); // turn 3
         check(thread.expanded(turn1), "adapter: a user-opened turn survives the next turn");

@@ -129,7 +129,7 @@ bool blockIsCompactRow(BlockKind kind);
 /// True for the rows whose header is a *disclosure* (a mark that toggles) rather
 /// than a role rule: the work group, the thinking body, and a batch's owner row
 /// - the disclosure is a property of the row, not of its kind, so the owner
-/// (a `BlockKind::Assistant` row) folds too (D15, C9a).
+/// (a `BlockKind::Assistant` row) folds too.
 bool blockHasDisclosure(const BlockView& block);
 
 /// A duration as the header writes it: nothing at zero, `320 ms` under a second,
@@ -139,7 +139,7 @@ std::string blockTimingLabel(double seconds);
 
 /// The row's header text, fitted to `availUnits` in the profile's own unit
 /// (`ui::textUnits`). Order: label -> duration -> chips. A folded batch owner drops the
-/// role word (FR-8). Chips drop one token at a time from the right before the duration
+/// role word. Chips drop one token at a time from the right before the duration
 /// does; the label never drops.
 std::string blockHeaderText(const BlockView& block, const BlockDraw& draw, const ui::Metrics& m,
                             float availUnits);

@@ -1153,7 +1153,7 @@ void casePipelineLaneFields() {
                lane().currentTool == "write_file",
            "tuiPipelineAgentDone keeps the lane's last numbers");
 
-    // The run's close: the typed turn closes Done (no longer live), so the
+    // The run's close: the typed turn closes Done, so the
     // next step's first upsert opens a fresh turn.
     expect(state->inner->left.agents[0].chat.typedTurns.turnCount() == 1,
            "Done keeps the run's single turn in the agent's typed store");
@@ -1164,14 +1164,13 @@ void casePipelineLaneFields() {
     tuiDestroyState(state);
 }
 
-// The v5 thread turn/block wire types (task 1, additive): the layout the D side
-// asserts from the other direction (source/llm/tui/package.d). Declare-only in
-// this generation - the store is task 2 - so this case pins the ABI and calls
-// nothing. The entry-pointer pins below odr-use the five entry points, so a
-// missing definition still fails the link: the tripwire that keeps the header
-// and the task-2 definitions in step.
+// The thread turn/block wire types: the layout the D side
+// asserts from the other direction (source/llm/tui/package.d). Declare-only
+// here - this case pins the ABI and calls nothing. The entry-pointer pins below
+// odr-use the five entry points, so a missing definition still fails the link:
+// the tripwire that keeps the header and the store definitions in step.
 void caseThreadTurnBlockFields() {
-    g_where = "case: v5 turn/block layout";
+    g_where = "case: turn/block layout";
 
     static_assert(TUI_API_VERSION == 16,
                   "this case pins the current generation (v16); bump one version per ABI event");
@@ -1210,7 +1209,7 @@ void caseThreadTurnBlockFields() {
     static_assert(offsetof(TuiBlock, resultMore) == 164, "resultMore sits at offset 164");
     static_assert(offsetof(TuiBlock, resultReserved) == 168, "resultReserved sits at offset 168");
 
-    // The v5 vocabulary: values are the wire contract (the D emitter and the
+    // The typed vocabulary: values are the wire contract (the D emitter and the
     // typed store both switch on them), so a renumbering is an ABI event.
     static_assert(TuiTurnState_Running == 0 && TuiTurnState_Done == 1 &&
                       TuiTurnState_Interrupted == 2,
@@ -1227,7 +1226,7 @@ void caseThreadTurnBlockFields() {
                       TuiBlockFlag_Selectable == 4,
                   "TuiBlockFlags are bit flags");
 
-    // Odr-uses the five v5 entry points without calling them: a missing
+    // Odr-uses the five typed entry points without calling them: a missing
     // definition is a link error, the tripwire the case comment promises.
     using VoidFn = void (*)();
     [[maybe_unused]] static const VoidFn v5EntryPins[] = {
@@ -1235,10 +1234,10 @@ void caseThreadTurnBlockFields() {
         reinterpret_cast<VoidFn>(&tuiBlockUpsert), reinterpret_cast<VoidFn>(&tuiTurnRemove),
         reinterpret_cast<VoidFn>(&tuiThreadClear)};
 
-    expect(true, "v5 turn/block layout pinned (the static asserts are the case)");
+    expect(true, "turn/block layout pinned (the static asserts are the case)");
 }
 
-// The structured log records (task 32, v5): the fields D sends arrive unchanged, a record
+// The structured log records: the fields D sends arrive unchanged, a record
 // with no clock is stamped at arrival, the two-string compatibility wrapper maps onto the
 // same store, and the ring is the single bounded store with a dropped counter.
 void caseLogRecords() {

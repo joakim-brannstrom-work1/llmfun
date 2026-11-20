@@ -850,9 +850,9 @@ target_link_libraries(test_thread_window PRIVATE
     ${CMAKE_DL_LIBS}
 )
 
-# The v5 typed thread store (tasks 1-2, design P0-2): the wire's upsert merge
-# semantics, the step-count weights and the typed-backed projection the adapter
-# serves test-driven until the cutover. Like `test_thread_window` this needs no
+# the wire's upsert merge semantics, the step-count
+# weights and the typed-backed projection the adapter serves test-driven. Like
+# `test_thread_window` this needs no
 # ImGui context, no renderer and no terminal - the store answers from its
 # vectors and the typed projection never draws. `tui.h` (the ChatTab the typed
 # store rides in) needs the cpp_tui root on the path. Invoke from the build

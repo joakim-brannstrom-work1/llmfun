@@ -224,7 +224,7 @@ std::vector<SettingsRow> allRows(const SettingsState& state, const model::ShellP
         rows.push_back(std::move(row));
     }
     {
-        // The thread's render mode (task 8): the same words `uiConfText()`
+        // The thread's render mode: the same words `uiConfText()`
         // writes, so the sheet's value and the file's line cannot disagree.
         SettingsRow row;
         row.id = kIdThreadMode;

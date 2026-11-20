@@ -149,7 +149,7 @@ private TypedTurns buildTypedTurns(Chat.MessageT[] history, ToolFlags flags) {
                 const name = fn !is null ? jsonStringAt(*fn, "name") : null;
                 idx++;
                 if (callId.empty || name.empty)
-                    continue; // same skip rule as the v4 call emitter's entries
+                    continue; // same skip rule as the call emitter's entries
                 string meta;
                 int status = TuiBlockStatus_Cancelled;
                 long callDur;
@@ -380,11 +380,6 @@ struct AgentApp {
         return slashCommands_.helpText();
     }
 
-    /// Public plugin seam: send a chat message to the UI. After the typed
-    /// cutover (task 5) every such message is a Notice block (task 3) - the
-    /// v4 per-message chat row is gone. The body travels verbatim; a Notice
-    /// attaches to the store's newest turn, which is where a notice emitted
-    /// between runs belongs.
     public void sendChatMessage(Args...)(string msg, Args args) {
         static if (args.length > 0) {
             msg = format(msg, args);
@@ -1216,12 +1211,7 @@ struct AgentApp {
         uiMsg.turnUpsert(UiTurnData(ctx.turnId, TuiTurnState_Interrupted, ctx.messageCount));
     }
 
-    /// /plan and /code: open a display-only turn in the main store (DD-22).
-    /// A fresh turn id is allocated but no message is added to the history,
-    /// so nothing persists under it: a reload (or any replay rebuild) drops
-    /// the turn - it exists on the wire only. The opened context displaces
-    /// any live one (/c may hold an interrupted agent turn across a
-    /// pipeline run); closePipelineTurnTyped restores it.
+    /// /plan and /code: open a display-only turn in the main store.
     package void openPipelineTurnTyped(string query) {
         if (agent_ is null)
             return; // one-shot CLI has no chat to allocate the turn from
@@ -1537,10 +1527,6 @@ class AppAgentActor : DropOwner {
         app.uiMsg = new UiMessenger(new TuiChannelSink(tui_));
         monitor(self_.address(), tui_);
         app.uiMsg.initHistory(app.agent_.getUserQueries.map!(a => a.content).array);
-        // One typed replay snapshot at startup (task 5); the per-message walk
-        // is gone (see activateSession). It must run before the stream callback
-        // exists: makeTypedStreamCallback seeds the live-turn context from the
-        // loaded chat's last turn, which the replay would then filter out.
         app.emitReplayTyped();
         app.agent_.setStreamUpdate(app.makeTypedStreamCallback);
 

@@ -94,7 +94,7 @@
 
 #include "tui.h" // llmfun::tui: TuiState, tuiRender, markdown text-mode lifecycle
 
-#include "test/typed_seed.h" // typed turn/block seeding (the v4 message path is gone)
+#include "test/typed_seed.h" // typed turn/block seeding
 
 #include "ui/markdown.h" // the rich_md seam this file also pins (cases D-G)
 #include "ui/tokens.h"   // the inks and gaps the markdown theme is bridged from

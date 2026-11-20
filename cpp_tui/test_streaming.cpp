@@ -1,6 +1,6 @@
 // test_streaming.cpp
 //
-// Streaming: the live answer made legible and cheap, on the typed (v5) store.
+// Streaming: the live answer made legible and cheap, on the typed store.
 //
 // What this binary proves, in order:
 //
@@ -357,10 +357,10 @@ struct Fixture {
 
     /// The stream group's content row: the `Assistant`-kind block D's stream updater
     /// merges the answer into (`content#0`; the query block is a `User` row, the
-    /// reasoning a `Thinking` one). The batch's synthetic owner row (DD-13) is
+    /// reasoning a `Thinking` one). The batch's synthetic owner row is
     /// an `Assistant` row too, so the owner's namespaced key is skipped - the
     /// helper names the streamed body's row, never the owner's. A body-less
-    /// answer is dropped by the projection (C5.5/D6), so the row need not exist
+    /// answer is dropped by the projection, so the row need not exist
     /// yet; the helper reports `npos` rather than pointing at a stand-in.
     static constexpr size_t npos = static_cast<size_t>(-1);
 
@@ -377,8 +377,8 @@ struct Fixture {
     }
 
     /// The stream group's reasoning row, found by kind - the batch projection
-    /// emits the owner first and sorts the children stably (I-4), so a
-    /// literal index would not hold across the task-8 emission order.
+    /// emits the owner first and sorts the children stably, so a
+    /// literal index would not hold across the batch emission order.
     size_t streamReasoningRow() const {
         const size_t blocks = state.threadAdapter.blockCount(streamGroupIndex());
         for (size_t b = 1; b < blocks; ++b)
@@ -465,14 +465,14 @@ void checkSource() {
               "the frame layer derives the live answer's clock once per frame");
 }
 
-// The gate (task 22): a retired fold symbol or a wire literal never returns to
+// The gate: a retired fold symbol or a wire literal never returns to
 // the production tree. Production sources only: a fixture may name a hidden
 // tool (that is what a fixture is for), a shipped source may not - so the scan
 // is this closed file list, never a recursive walk. A new file needs a new row
 // here: the list is the set of files where these tokens last lived - the
 // paired headers and the rest of the production tree are a follow-up wave's
 // extension, not this gate's closure. `groupMinimal` is on the list because
-// the split into `groupOpen`/`groupStyleIsMinimal` is the point (DD-14) - a
+// the split into `groupOpen`/`groupStyleIsMinimal` is the point - a
 // returning `groupMinimal` would silently re-conflate style with openness.
 void checkRetiredNames() {
     const std::string dir = TEST_STREAMING_SOURCE_DIR;
@@ -571,7 +571,7 @@ void checkThrottle() {
     Fixture fast;
     fast.seed.runStart("stream this");
     fast.state.threadAdapter.storedGroupCount(); // prime: the store holds the run's start
-    // Minimal folds the live turn's work rows behind its header (§7.5): pin the
+    // Minimal folds the live turn's work rows behind its header: pin the
     // group open so the streamed body draws, and draw once so the pinned-open
     // group's own rebuild is spent before the storm the check below measures.
     fast.state.chat.groupPins[static_cast<std::int64_t>(fast.seed.liveTurnId)] = true;
@@ -654,7 +654,7 @@ void checkIdentityAndHeight() {
         identityStable = identityStable && view.id == groupId;
         // The content row keeps its identity: the block D's stream updater merges
         // the answer into (`content#0`), whatever the reasoning around it does.
-        // A body-less answer is dropped by the projection (C5.5/D6), so the
+        // A body-less answer is dropped by the projection, so the
         // reasoning-only updates have no content row at all; once the text has
         // arrived the row must be there, carry `content#0`'s id, and never
         // disappear again.
@@ -769,7 +769,7 @@ void checkHeader() {
           "the stored turn keeps its work header (got '" +
               fixture.state.threadAdapter.blockAt(group, 0).label + "')");
     // The reasoning row by kind, not position: the stored batch carries the
-    // owner first and the sorted children after it (I-4).
+    // owner first and the sorted children after it.
     size_t storedThinking = Fixture::npos;
     const size_t storedBlocks = fixture.state.threadAdapter.blockCount(group);
     for (size_t b = 1; b < storedBlocks; ++b)
@@ -798,7 +798,7 @@ void checkHeader() {
                                      ui::metricsFor(/*textGrid=*/true, 1.0f, 1.0f), 1000.0f) +
               "')");
 
-    // A stamped reasoning drops its duration anyway (DD-8): the row is the
+    // A stamped reasoning drops its duration anyway: the row is the
     // bare word, the owner carries the cost.
     stored.seed.upsertBlock(1, "reasoning#0", "1#0", TuiBlockKind_Reasoning, TuiBlockStatus_None,
                             nullptr, "the reasoning", nullptr, 2500);
@@ -807,7 +807,7 @@ void checkHeader() {
     check(views::blockHeaderText(reasoning, views::BlockDraw{true, false},
                                  ui::metricsFor(/*textGrid=*/true, 1.0f, 1.0f),
                                  1000.0f) == "Thinking",
-          "and a stamped reasoning row drops its duration too (DD-8, got '" +
+          "and a stamped reasoning row drops its duration too (got '" +
               views::blockHeaderText(reasoning, views::BlockDraw{true, false},
                                      ui::metricsFor(/*textGrid=*/true, 1.0f, 1.0f), 1000.0f) +
               "')");

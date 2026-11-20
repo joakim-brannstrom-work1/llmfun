@@ -1,14 +1,14 @@
 // typed_thread_store.h
 //
-// The v5 typed thread store (task 2, design P0-2): turns + blocks as the wire
+// The typed thread store: turns + blocks as the wire
 // carries them, projected by the adapter through the unchanged GroupView /
 // BlockDesc seam. The store is the mutation surface - upserts are the ONLY
 // mutating paths, a first upsert creates the slot and later upserts merge in
-// place - and it never re-parses or re-scans on an upsert (design §7): every
+// place - and it never re-parses or re-scans on an upsert: every
 // upsert is an index lookup plus a field-by-field overwrite.
 //
-// v5 is additive until the cutover (task 5): the v4 message-backed projection
-// stays the adapter's live source; the typed-backed path is test-driven only.
+// The message-backed projection stays the adapter's live source; the
+// typed-backed path is test-driven only.
 
 #pragma once
 
@@ -82,7 +82,7 @@ inline constexpr int kTurnStateInterrupted = 2; // TuiTurnState_Interrupted
 //
 // Implementations of the prose rule and the gaps the table leaves open (both
 // documented in the .cpp, pinned in the unit test): the turn's FIRST Prose
-// block in insertion order is the turn-opening query (design §5 "the turn
+// block in insertion order is the turn-opening query ("the turn
 // upsert opens the turn"); a Tool block still at status None weights 1 (a
 // call the emitter has upserted is work the run started, like Pending); an
 // unknown kind or status weights 1 (defensive - a surprise counts as work,
@@ -96,18 +96,17 @@ public:
     void turnUpsert(TypedTurn turn);      // insert or merge in place (key = id)
     void blockUpsert(TypedBlock block);   // first upsert creates the (turnId,id)
                                           // slot, later upserts merge in place
-    void turnRemove(std::int64_t turnId); // cascades to the turn's blocks (W6)
+    void turnRemove(std::int64_t turnId); // cascades to the turn's blocks
     void threadClear();
     std::size_t turnCount() const;
     const TypedTurn& turnAt(std::size_t k) const; // snapshot/insertion order
     std::size_t blockCount(std::int64_t turnId) const;
     const TypedBlock& blockAt(std::int64_t turnId, std::size_t k) const;
     const TypedTurn* turnById(std::int64_t id) const;
-    // Whole-turn FIFO eviction (design §4): oldest first, never the live turn
+    // Whole-turn FIFO eviction: oldest first, never the live turn
     // (the caller passes the live turn id; live = the newest upserted turn).
     void evictForCapacity(std::int64_t liveTurnId);
-    static constexpr std::size_t kMaxTurns = 1000; // the per-tab cap the v4
-                                                   // path carried
+    static constexpr std::size_t kMaxTurns = 1000; // the per-tab cap
     // The mutation counter: bumped by every mutating path (setTurns, turnUpsert,
     // blockUpsert, turnRemove, threadClear, evictForCapacity). The adapter's
     // rebuild guard compares it O(1) per accessor call, so an unchanged store rebuilds nothing.

@@ -135,13 +135,12 @@ The thread's rows draw a header of `LABEL · <timing>`: the row's label
 (`YOU`, `AGENT`, `TOOL`, the batch group's word) plus a timing suffix when
 a processing time was measured.
 
-- **No ordinal.** The v4 draft decorated persistent messages with a
-  1-based `[NR]` derived at send and replay time on the AppAgent actor
-  thread. The v6 cutover dropped it: the number had to be recomputed on
-  every send, every replay and on every instance that loaded the file,
-  and the typed turn already carries a stable id — the persisted
-  `turnId` (`0` = unstamped), with `messageCount` informational. Nothing
-  on the wire or in the render recomputes a display number any more.
+- **No ordinal.** Persistent messages carry no `[NR]`: a display number would have to be
+  recomputed on every send, every replay and on every instance that
+  loads the file, and the typed turn already carries a stable id - the
+  persisted `turnId` (`0` = unstamped), with `messageCount`
+  informational. Nothing on the wire or in the render recomputes a
+  display number.
 - **TIME** is measured only where the work happened: the LLM-call
   `Duration` for assistant/tool-call lines, the per-call tool
   execution `Duration` for tool results. In memory it is
@@ -653,16 +652,16 @@ above 10000 are clamped to 10000 (mirrors `validateConfig`), and positive
 sub-40 caps are raised to 40 by the C API. (The cap is text-backend only:
 GUI runs ignore it.)
 
-### Typed Thread Store (the v6 cutover)
+### Typed Thread Store
 
-The typed turn/block model the thread draws from since the v6 cutover
-(`TUI_API_VERSION` 13 → 14):
+The typed turn/block model the thread draws from
+(`TUI_API_VERSION` 14):
 
 - `TuiTurn` is `{int64_t id, int32_t state, int32_t messageCount,
   int32_t reserved}`: the id is the persisted `turnId` (`0` = unstamped),
   `state` is `Running|Done|Interrupted`, `messageCount` is informational
-  (the LLM messages the turn covers). No display ordinal: the v5 draft's
-  1-based `ordinal` was dropped with the cutover.
+  (the LLM messages the turn covers). No display ordinal (see the
+  no-ordinal note above).
 - `TuiBlock` is keyed by `(turnId, id)`; the id is the tool callId,
   `answer`, or a batch-scoped id (`content#<n>`); the `batchId` is
   `<turnId>#<batchIndex>` for per-response groups (`<turnId>#q` for
@@ -688,8 +687,8 @@ The typed turn/block model the thread draws from since the v6 cutover
   (`uiAgentBusy`) and sets it back when the run ends (`uiAgentReady`).
   Every entry point brackets its run — the main query, a compression,
   `/plan`, `/code`, the one-shot runs — and a nesting counter keeps the
-  flag across nested brackets, so the at-most-one-run assumption the
-  v5 plan made is enforced, not assumed. The composer's `Send`/`Stop`
+  flag across nested brackets, so the at-most-one-run assumption is
+  enforced, not assumed. The composer's `Send`/`Stop`
   flip is driven by that crossing.
 - Pinned by `test_typed_thread_store` and the parity core loop's
   batteries (upsert storm, unknown-callId result, busy-edge matrix).

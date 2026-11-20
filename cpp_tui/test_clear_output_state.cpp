@@ -1,6 +1,6 @@
 // test_clear_output_state.cpp
 //
-// Headless regression test for the full clear contract (v5): tuiClearOutput /
+// Headless regression test for the full clear contract: tuiClearOutput /
 // the C-API tuiThreadClear must reset ALL derived thread state, not just the
 // typed store:
 //

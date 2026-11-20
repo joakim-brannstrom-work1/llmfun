@@ -107,7 +107,7 @@ void mirrorLaneUpdate(::llmfun::tui::TuiState& state, const std::string& id,
 inline constexpr int kToolBlockFlags =
     TuiBlockFlag_Collapsible | TuiBlockFlag_DefaultOpen | TuiBlockFlag_Selectable;
 
-/// Open the agent's live typed turn if none is open (design §4): the turn id
+/// Open the agent's live typed turn if none is open: the turn id
 /// folds the agent id with the per-agent run counter. Answers the turn id.
 std::int64_t openTypedTurn(::llmfun::tui::AgentStream& agent) {
     if (agent.typedTurnActive)
@@ -691,7 +691,7 @@ void tuiPipelineAgentStart(TuiState* state, String agentId, String task) {
     // ("<turnId>#q", role "user"), so the drill-down's turn anatomy matches the
     // main thread's - query -> work batches -> answer. Opening here owns the
     // run's turn: `openTypedTurn` opens only when none is active, so every tick
-    // this run sends joins the already-open turn (one turn per run, DD-19) and
+    // this run sends joins the already-open turn (one turn per run) and
     // the query rides its own batch, a turn-level row the fold never owns.
     const std::int64_t turnId = openTypedTurn(agent);
     upsertTypedBlock(agent, turnId, "query", std::to_string(turnId) + "#q", TuiBlockKind_Prose,
@@ -793,7 +793,7 @@ void tuiPipelineAgentToolResult(TuiState* state, String agentId, TuiToolResultPa
         return;
     }
     // No in-flight call to merge into: a result-only block under its own id,
-    // recorded never dropped (design §7).
+    // recorded never dropped.
     agent.typedResultSeq++;
     upsertTypedBlock(agent, turnId, "result#" + std::to_string(agent.typedResultSeq), batchId,
                      TuiBlockKind_Tool, status, kToolBlockFlags, name, text, "");
@@ -848,12 +848,12 @@ void tuiPipelineClear(TuiState* state) {
     ::llmfun::tui::model::clearAgentLanes(state->inner->ui);
 }
 
-/* --- v5 thread turns/blocks (task 1's ABI, task 2's store) ------------------
+/* --- Thread turns/blocks (the C ABI over the typed store) ------------------
  * The typed store's C entry points. Every one lands on the main tab's typed
  * store (`chat.typedTurns`): the store merges in place, and the adapter's
  * rebuild guard picks the change up on the next draw of the typed path. Null
  * state / null inner / null payload pointers are the silent no-op every entry
- * point here is (the v4 ones above set the same precedent).
+ * point here is (the legacy ones above set the same precedent).
  */
 
 void tuiSetTurns(TuiState* state, const TuiTurn* turns, size_t turnCount, const TuiBlock* blocks,
@@ -894,7 +894,7 @@ void tuiSetTurns(TuiState* state, const TuiTurn* turns, size_t turnCount, const 
         typedBlocks.push_back(std::move(nb));
     }
     state->inner->chat.typedTurns.setTurns(std::move(typedTurns), std::move(typedBlocks));
-    // A session switch re-emits the whole snapshot (DD-6): no pin survives it -
+    // A session switch re-emits the whole snapshot: no pin survives it -
     // the new session's turns start unpinned, their groups on the mode.
     state->inner->chat.rowPins.clear();
     state->inner->chat.groupPins.clear();
@@ -910,7 +910,7 @@ void tuiTurnUpsert(TuiState* state, const TuiTurn* turn) {
     state->inner->chat.typedTurns.turnUpsert(t);
     state->inner->chat.typedTurns.evictForCapacity(turn->id);
     // The eviction took whole turns out of the store; their pins would be memory
-    // kept for nothing (DD-6, M3) - a pin for a turn nobody can draw. Prune by
+    // kept for nothing - a pin for a turn nobody can draw. Prune by
     // turn id, never by row index: the row list churns while a response streams.
     auto& rowPins = state->inner->chat.rowPins;
     for (auto it = rowPins.begin(); it != rowPins.end();) {
@@ -956,7 +956,7 @@ void tuiTurnRemove(TuiState* state, int64_t turnId) {
     if (!state || !state->inner)
         return;
     state->inner->chat.typedTurns.turnRemove(turnId);
-    // The turn's pins die with the turn (DD-6, §7): a compression re-emit
+    // The turn's pins die with the turn: a compression re-emit
     // (turnRemove + re-upsert) leaves no stale pin behind.
     state->inner->chat.rowPins.erase(turnId);
     state->inner->chat.groupPins.erase(turnId);
@@ -966,7 +966,7 @@ void tuiThreadClear(TuiState* state) {
     if (!state || !state->inner)
         return;
     state->inner->chat.typedTurns.threadClear();
-    // A clear is a reset (DD-6): the pins are session-local state and
+    // A clear is a reset: the pins are session-local state and
     // the session's thread is gone.
     state->inner->chat.rowPins.clear();
     state->inner->chat.groupPins.clear();

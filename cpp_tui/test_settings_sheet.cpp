@@ -642,7 +642,7 @@ void checkRows() {
     check(rawLog != nullptr && rawLog->value == "error", "an out-of-range UiLog reads as `error`");
     prefs.rawLog = model::kRawLogInfo;
 
-    // The thread mode is a two-word choice (task 8): the row prints the same
+    // The thread mode is a two-word choice: the row prints the same
     // words `uiConfText()` writes, and a press flips between them.
     rows = views::settingsRows(sheet, prefs, m);
     const views::SettingsRow* threadMode = findRow(rows, views::kSettingsRowThreadMode);

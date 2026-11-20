@@ -205,8 +205,6 @@ class TuiBlockedSink : TuiSink {
 
     private ConsoleFormatter formatter = new ConsoleFormatter;
 
-    /// The blocked console is now the typed formatter's lines (task 5): each
-    /// typed event writes exactly the lines the parity golden pins.
     override void setTurns(UiTurnData[] turns, UiBlockData[] blocks) {
         foreach (line; formatter.onSetTurns(turns, blocks))
             writeln(line);
@@ -605,10 +603,9 @@ class PipelineStreamMessageUpdater : IStreamCallback, IStepEventEmitter,
         string agentId;
 
         /// 0-based index of the batch whose stream is live: one LLM response of
-        /// the lane's run, counted on stream-done (DD-19) and reset by run-done -
+        /// the lane's run, counted on stream-done and reset by run-done -
         /// the run is the boundary on both ends, so every run counts from 0 again
-        /// (re-runs of the same node: its retry loop, loop edges). The payloads
-        /// carry it so the C++ derives no step numbering of its own (DD-20).
+        /// . The payloads carry it so the C++ derives no step numbering of its own.
         long batchIndex;
 
         this(UiMessenger messenger, long contextSize, string modelName)
@@ -628,27 +625,15 @@ class PipelineStreamMessageUpdater : IStreamCallback, IStepEventEmitter,
         }
 
         override void streamMessageDone() {
-            // The tool loop fires one per batch: count the batch that just ended. A
-            // batch end is not the run boundary (one drill-down group per run, not
-            // per batch), so this closes nothing - the close rides runDone below.
-            // A batch that streamed nothing is counted too (the scope(exit) fires on
-            // every exit): the number is an identity, not a dense sequence.
             ++batchIndex;
         }
 
         override void runDone() {
             uiMsg.pipelineStreamDone(agentId);
-            // The run is the boundary (DD-19) on both ends: the next run of this
-            // node - its retry loop, a loop edge - counts from 0 again, so the
-            // numbers stay "within the run" as the wire doc promises. The ids stay
-            // unique across runs because a new run opens a new turn (new turnId).
             batchIndex = 0;
         }
 
         override void runStart(string task) {
-            // Fired once per run, before the agent's first batch (the pipeline's
-            // submit site): the drill-down's query row - the task the node was
-            // invoked with. The turn it opens is the run's (closed by runDone).
             uiMsg.pipelineAgentStart(agentId, task);
         }
 
@@ -847,9 +832,6 @@ package final class TypedStreamMessageUpdater : IStreamCallback {
                 contextUsed: stat.context, contextMax: contextSize, compactAt: (contextSize * 9) / 10,
                 tokensPerSecond: stat.predictedPerSecond, model: modelName));
 
-        // One order on the wire too (design §7.6, DD-5): reasoning, then
-        // content, then the calls - the replay walk's order. Ids, batches
-        // and statuses are unchanged; the store merges in place either way.
         if (!msg.reasoning.empty)
             uiMsg.blockUpsert(makeBlockData(ctx.turnId, reasoningBlockId(ctx.batchIndex), ctx.batchId,
                     TuiBlockKind_Reasoning, TuiBlockStatus_None,
@@ -886,24 +868,9 @@ package final class TypedStreamMessageUpdater : IStreamCallback {
     }
 }
 
-/// The one-shot console rebuilt over typed events (task 4): a small accumulator
+/// The one-shot console rebuilt over typed events: a small accumulator
 /// with one method per typed event, each returning the lines that event
-/// produces. Pure - no stdout, no clock - so tests can compare its output to a
-/// golden. The parity test drives it directly; the TuiBlockedSink's typed
-/// overrides stay no-ops until task 5 wires them.
-///
-/// Rendering rules (byte-parity with today's v4 console output, task 4):
-/// query block -> raw body on a live turn (the v4 echo has no prefix),
-/// "user: " + body on replay; reasoning -> held ("Thinking: " + body) until
-/// the batch's content line or the batch end; content -> "role: body";
-/// tool blocks -> buffered per batch, flushed as one "tool call: " line
-/// (visible calls joined by "\n") plus one "tool result <mark>: <name> <meta>"
-/// line per Ok/Failed call; answer -> flush the batch's thinking/call lines,
-/// then the body, then the result lines (today's console prints the answer
-/// inside the tool-call message, before the results walk); notice -> the
-/// body verbatim; hidden blocks (blockDisplayable) produce no lines. A new
-/// batch flushes the previous one; a turn end (Done/Interrupted upsert)
-/// flushes whatever is pending.
+/// produces.
 package final class ConsoleFormatter {
     private string pendingThinking;
     private string pendingContent;
@@ -963,11 +930,6 @@ package final class ConsoleFormatter {
             return lines;
         }
         if (b.kind == TuiBlockKind_Answer) {
-            // Today's console prints, in order: the batch's thinking, the
-            // tool-call line, the final answer, then the result lines (the
-            // v4 walk sends the answer inside the tool-call message, before
-            // the results walk). The answer block therefore flushes in two
-            // halves around itself.
             lines ~= flushHead();
             lines ~= b.body;
             lines ~= flushResults();

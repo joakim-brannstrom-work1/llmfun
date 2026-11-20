@@ -639,12 +639,11 @@ void tuiPipelineAgentDone(TuiState* state, String agentId);
  */
 void tuiPipelineClear(TuiState* state);
 
-/* --- v5 thread turns/blocks (task 1, design §4) ---------------------------
- * The typed turn/block model the thread draws from after the cutover. v5 is
- * additive: nothing emits these yet, both sides build.
+/* --- Typed thread turns/blocks --------------------------------------------
+ * The typed turn/block model the thread draws from.
  */
 
-/* Verbatim contract — v5 thread types (design §4) */
+/* Verbatim contract: typed thread types */
 typedef enum TuiTurnState {
     TuiTurnState_Running = 0,
     TuiTurnState_Done = 1,

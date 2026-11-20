@@ -39,7 +39,7 @@
 
 #include "tui.h" // llmfun::tui: TuiState, tuiRender, the markdown text-mode lifecycle
 
-#include "test/typed_seed.h" // typed turn/block seeding (the v4 message path is gone)
+#include "test/typed_seed.h" // typed turn/block seeding
 
 #include "model/block.h"
 #include "model/ui_state.h"
@@ -586,9 +586,9 @@ void checkSourceToggleDeclines() {
         state.iniFilename = "";
         setup(state, kTableBody, true);
         // Minimal mode folds a work group's rows behind its header, and a
-        // settled batch's owner defaults folded (matrix row 420), so the
+        // settled batch's owner defaults folded, so the
         // transcript only draws once the group, the owner row and the card
-        // are pinned open (DD-6: each click pins one row, absolute). The
+        // are pinned open (each click pins one row, absolute). The
         // block layout under the typed store: block 0 is the group's header,
         // block 1 is the batch's owner row (Assistant), block 2 the seeded
         // tool card (the batch's only call).

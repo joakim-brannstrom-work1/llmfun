@@ -1,6 +1,6 @@
 // test_blocks.cpp
 //
-// The block renderer (views/blocks.h, design §4.5 / task 26): one typed-store
+// The block renderer (views/blocks.h): one typed-store
 // block drawn as a block, in both profiles' vocabulary.
 //
 // What this binary proves, in order:
@@ -443,7 +443,7 @@ struct ThreadFixture {
     /// The task-10 pins the fold yields to: a group pinned open draws every
     /// row it owns again, and a row pinned open keeps its children drawn -
     /// maximal-style only while its turn is live, everything else explicit
-    /// (design §7.5). The scene callers want the full row anatomy, so the
+    /// The scene callers want the full row anatomy, so the
     /// batch owners are pinned open along with the group.
     void openGroup(std::int64_t id) {
         if (id == 0)
@@ -549,13 +549,13 @@ void checkVocabulary() {
               std::string(row.label) + (row.disclosure ? " is a disclosure" : " is a role rule"));
     }
 
-    // The disclosure is a property of the row, not of its kind (D15, C9a): a
+    // The disclosure is a property of the row, not of its kind: a
     // batch's owner row is a plain AGENT row that still folds.
     {
         model::BlockDesc owner;
         owner.kind = model::BlockKind::Assistant;
         owner.ownsBatch = true;
-        check(views::blockHasDisclosure(owner), "the batch's owner is a disclosure (D15, C9a)");
+        check(views::blockHasDisclosure(owner), "the batch's owner is a disclosure");
     }
 
     const ui::Metrics m = ui::metricsFor(true, 1.0f, 1.0f);
@@ -651,10 +651,10 @@ void checkHeaderText() {
     thinking.timingS = 3.2;
     thinking.expanded = false;
     check(headerText(thinking, true) == "Thinking",
-          "the thinking disclosure is the bare word: its duration is the owner's (DD-8, got '" +
+          "the thinking disclosure is the bare word: its duration is the owner's (got '" +
               headerText(thinking, true) + "')");
 
-    // The composer (FR-8, FR-13): an owner's header is the label, the duration,
+    // The composer: an owner's header is the label, the duration,
     // and the batch's chips - and a folded owner drops the role word.
     model::BlockDesc owner = blockOf(model::BlockKind::Assistant, "AGENT", "");
     owner.ownsBatch = true;
@@ -666,7 +666,7 @@ void checkHeaderText() {
               "')");
     owner.expanded = false;
     check(headerText(owner, true) == "3.2 s - [bash] [grep]",
-          "a folded owner drops the role word (FR-8, got '" + headerText(owner, true) + "')");
+          "a folded owner drops the role word (got '" + headerText(owner, true) + "')");
 
     // The fitting: chips drop one token at a time from the right before the
     // duration does, and the label never drops.
@@ -1074,8 +1074,8 @@ void checkStreaming() {
     grid = reasoning.draw();
     check(grid.contains("Thinking"), "the opened group draws the thinking row");
     // The batch holds no call in flight, so the row's own open state is the
-    // pins-or-liveness answer `false` (§7.5): the text waits behind its fold
-    // until a row pin opens it. The group pin alone is not a row pin (DD-6).
+    // pins-or-liveness answer `false`: the text waits behind its fold
+    // until a row pin opens it. The group pin alone is not a row pin.
     check(!grid.contains("REASONING-TEXT-VISIBLE"),
           "the reasoning text waits behind its fold (the batch holds no call in flight)");
 
@@ -1109,14 +1109,14 @@ void checkStreaming() {
     grid = both.draw();
     check(!grid.contains("STREAM-THINKING"), "minimal folds the streamed reasoning");
     // The content segment is the one child the fold keeps visible on its own
-    // (I-11, B1/FR-5): the newest batch of a live turn draws its prose even
+    // (the content segment's own clause): the newest batch of a live turn draws its prose even
     // though the owner above it never drew.
     check(grid.contains("STREAM-PROSE"),
           "the streamed prose draws under the fold (the content segment's own clause)");
-    // The case the design exists for (FR-5, FR-21, C7), pinned on the adapter's
+    // The case the design exists for, pinned on the adapter's
     // descriptors, not on a screen substring: in the one frame the owner row is
     // invisible and the segment is visible - both facts are the adapter's (the
-    // derived predicate, DD-16); the view only obeys `visible`. The rows are
+    // derived predicate); the view only obeys `visible`. The rows are
     // selected by kind, never by number (the projection's indices move).
     {
         const auto& a = both.state.threadAdapter;
@@ -1139,16 +1139,16 @@ void checkStreaming() {
     grid = both.draw();
     // The reasoning row draws (the pinned-open owner), but its text waits
     // behind its own fold - the batch holds no call in flight, so the
-    // pins-or-liveness answer is `false` (§7.5, DD-6).
+    // pins-or-liveness answer is `false`.
     check(grid.contains("Thinking"), "the opened group draws the reasoning row (closed)");
     check(!grid.contains("STREAM-THINKING"),
           "the reasoning text waits for a row pin (the batch holds no call in flight)");
     check(grid.contains("STREAM-PROSE"), "and the prose");
     check(grid.rowText(0).find("STREAM-PROSE") == std::string::npos,
           "the prose is not on the reasoning row");
-    // The opened group's segment pin (R-9's minimal side): the owner and the
-    // segment are both visible now - the segment draws inside the open owner,
-    // once, never a second copy (I-5's owner side reaches the segment as soon
+    // The opened group's segment pin (the minimal side): the owner and the
+    // segment are both visible - the segment draws inside the open owner,
+    // once, never a second copy (the owner side reaches the segment as soon
     // as the owner draws).
     {
         const auto& a = both.state.threadAdapter;
@@ -1200,9 +1200,9 @@ void checkStreaming() {
     check(g_clipboard == "STREAM-THINKING",
           "`y` on the reasoning copies the reasoning (got '" + g_clipboard + "')");
 
-    // The body row is the batch's segment now (task 12, DD-7): no header, no
+    // The body row is the batch's segment now: no header, no
     // hit box of its own - the row above the body text is the batch's owner
-    // (DD-13), and the owner is the copy target (FR-16). Found in the captured
+    // and the owner is the copy target. Found in the captured
     // grid, never assumed.
     const int bodyText = rowOf(grid, "STREAM-PROSE");
     int agentRow = -1;
@@ -1216,14 +1216,14 @@ void checkStreaming() {
     clickRow(static_cast<float>(agentRow));
     check(both.state.ui.thread.focus ==
               model::BlockId{1, std::hash<std::string>{}("batch#1#0"), model::BlockKind::Assistant},
-          "the owner takes the focus; the body segment is body text, not a row hit box (DD-7)");
+          "the owner takes the focus; the body segment is body text, not a row hit box");
     g_clipboard.clear();
     g_clipboardSet = false;
     both.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });
     check(g_clipboard == "STREAM-PROSE",
           "`y` on the focused owner copies the batch content (got '" + g_clipboard + "')");
 
-    // The segment's lifetime (R-9): a newer batch folds the old segment with
+    // The segment's lifetime: a newer batch folds the old segment with
     // its batch (the newest-only clause lives in the newer response), and the
     // turn's close folds the last one too. One predicate line changes the
     // lifetime if the user prefers a single one - the choice is not made here.
@@ -1319,12 +1319,12 @@ void checkFocusAndCopy() {
     fresh.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });
     check(!g_clipboardSet, "with no focused block, `y` copies nothing");
 
-    // And a *code* block's `y` copies the code, not the fences (S-13: the TUI
+    // And a *code* block's `y` copies the code, not the fences (the TUI
     // path). Minimal folds the batch behind its header, so the fixture opens
-    // the group (the task-8 override) before the row is clicked. The copy
-    // target is the batch's OWNER now (task 12, FR-16): the body draws as the
+    // the group (the fixture override) before the row is clicked. The copy
+    // target is the batch's OWNER now: the body draws as the
     // batch's header-less segment, and the owner's copy strips the fences
-    // because the content it names is code - the adapter's fence answer (B1).
+    // because the content it names is code - the adapter's fence answer.
     ThreadFixture code;
     code.add(message(1, MsgKind::User, "[1] show [0.2s]", "show"));
     code.add(message(2, MsgKind::Assistant, "[2] here [1.0s]", "```\nint x = 1;\n```"));
@@ -1344,7 +1344,7 @@ void checkFocusAndCopy() {
     code.draw(true); // the click's answer is drawn on the next frame
     check(code.state.ui.thread.focus ==
               model::BlockId{1, std::hash<std::string>{}("batch#1#0"), model::BlockKind::Assistant},
-          "the owner row takes the focus; the code segment is body text, not a hit box (DD-7)");
+          "the owner row takes the focus; the code segment is body text, not a hit box");
     g_clipboard.clear();
     g_clipboardSet = false;
     code.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });
@@ -1386,7 +1386,7 @@ void checkStreamReasoningDefault() {
     fixture.addStream(MsgKind::Assistant, "prose", "reasoning");
     fixture.draw();
     const size_t bodyRow = 2; // header, the batch's owner row, then the batch's
-                              // children in DD-5 order: reasoning, content
+                              // children in order: reasoning, content
     check(!fixture.state.threadAdapter.blockExpanded(0, bodyRow),
           "a new stream's reasoning starts folded (its preview is the header's)");
 
@@ -1466,10 +1466,10 @@ void checkCrossGroupIdentity() {
     };
 
     // The stored Assistant body: the turn's second prose block ("content#1" -
-    // the first was message 2's). Post-fold (task 12) the body draws as the
-    // batch's header-less segment (DD-7): the row above it is the batch's
-    // owner, and the owner is the copy target (FR-16). The click focuses the
-    // owner - and toggles the batch (FR-1), which the re-open below undoes.
+    // the first was message 2's). After the fold the body draws as the
+    // batch's header-less segment: the row above it is the batch's
+    // owner, and the owner is the copy target. The click focuses the
+    // owner - and toggles the batch, which the re-open below undoes.
     const int storedBodyText = rowOf(grid, "stored-three");
     int storedOwner = -1;
     for (int y = storedBodyText; y >= 0; --y)
@@ -1481,15 +1481,15 @@ void checkCrossGroupIdentity() {
     Grid afterStoredBody = clickRow(storedOwner);
     check(fixture.state.ui.thread.focus ==
               model::BlockId{1, std::hash<std::string>{}("batch#1#1"), model::BlockKind::Assistant},
-          "the stored body's owner takes the focus (the segment has no hit box, DD-7)");
+          "the stored body's owner takes the focus (the segment has no hit box)");
     check(copyRows(afterStoredBody) == 0,
-          "the focused owner shows no Copy chip (the copy doors are the menu and `y`, FR-16)");
+          "the focused owner shows no Copy chip (the copy doors are the menu and `y`)");
     g_clipboard.clear();
     g_clipboardSet = false;
     fixture.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });
     check(g_clipboard == "stored-three",
           "`y` on the focused owner copies the batch content (got '" + g_clipboard + "')");
-    fixture.openGroup(1); // the click toggled the batch closed (FR-1); re-open it
+    fixture.openGroup(1); // the click toggled the batch closed; re-open it
     grid = fixture.draw();
 
     // The stored Thinking row: same group and key, a different kind - a separate
@@ -1512,7 +1512,7 @@ void checkCrossGroupIdentity() {
 
     // The stream's rows are the other half of each pair. The stream owner is
     // the last AGENT header (it has no timing); the click focuses the owner -
-    // the segment itself has no hit box (DD-7) - and toggles the batch, which
+    // the segment itself has no hit box - and toggles the batch, which
     // the re-open undoes before the Thinking row is addressed.
     const int streamOwner = rowOf(afterStoredThinking, "AGENT", /*fromBottom=*/true);
     check(streamOwner >= 0, "the streamed body's owner row is on screen");
@@ -1520,17 +1520,17 @@ void checkCrossGroupIdentity() {
     check(fixture.state.ui.thread.focus ==
               model::BlockId{2, std::hash<std::string>{}("batch#2#0"), model::BlockKind::Assistant},
           "the streamed body's owner is focusable (the live turn's copy target)");
-    check(copyRows(afterStreamBody) == 0, "the focused stream owner shows no Copy chip (FR-16)");
+    check(copyRows(afterStreamBody) == 0, "the focused stream owner shows no Copy chip");
     g_clipboard.clear();
     g_clipboardSet = false;
     fixture.draw(true, [](ImGuiIO& in) { in.AddInputCharacter('y'); });
     check(g_clipboard == "stream-prose",
           "`y` on the focused stream owner copies the stream (got '" + g_clipboard + "')");
-    fixture.openNewestGroup(); // the click toggled the batch closed (FR-1); re-open it
+    fixture.openNewestGroup(); // the click toggled the batch closed; re-open it
     grid = fixture.draw();
 
     // The stream's Thinking row: the focusable row directly above the prose
-    // segment (the segment draws the body with no header of its own, DD-7).
+    // segment (the segment draws the body with no header of its own).
     // The live edge's folded count-only shadow row sits at the group's bottom
     // and says the same bare word - so the list's row is addressed by walking
     // UP from the body text, never the word alone.
@@ -1662,7 +1662,7 @@ void checkCopyFromEveryBlock() {
         const char* label;  ///< the block's header word, the row to act on
         const char* want;   ///< the exact clipboard payload
         bool owner = false; ///< the label row is the batch's owner: body-less, the
-                            ///  copy target for its content (FR-16) - no Copy chip
+                            ///  copy target for its content - no Copy chip
     };
     const char* table = "| a | b |\n|---|---|\n| 1 | 2 |\n";
     const Case cases[] = {
@@ -1733,12 +1733,12 @@ void checkCopyFromEveryBlock() {
         clickCell(keyboard, 5, row, /*button=*/0);
         grid = keyboard.draw(true);
         check(keyboard.state.ui.thread.focus.valid(), what + ": a click focuses the block");
-        // An owner row is body-less (task 7): the copy affordance is the menu
-        // and `y` (FR-16), never a chip - the segment's chip check is the
+        // An owner row is body-less: the copy affordance is the menu
+        // and `y`, never a chip - the segment's chip check is the
         // body-less rule the row's shape keeps.
         if (c.owner)
             check(grid.rowText(row).find("Copy") == std::string::npos,
-                  what + ": the focused owner row carries no Copy chip (FR-16)");
+                  what + ": the focused owner row carries no Copy chip");
         else
             check(grid.rowText(row).find("Copy") != std::string::npos,
                   what + ": the focused block shows its Copy control");
@@ -2198,7 +2198,7 @@ void buildMaxNotice(ThreadFixture& f) {
 }
 
 // --- maxchips: a settled batch of four distinct tools -> "[a] [b] [c] +1", duration from the
-// response's content row (the owner carries it, DD-8).
+// response's content row (the owner carries it).
 void buildMaxChips(ThreadFixture& f) {
     f.state.chat.threadMinimalMode = false;
     f.seed.upsertTurn(1, TuiTurnState_Done, 9);
@@ -2284,7 +2284,7 @@ std::vector<Scene> scenes() {
                         f.seed.upsertBlock(2, "a2", "2#0", TuiBlockKind_Answer, TuiBlockStatus_None,
                                            nullptr, "yes - header only");
                     }});
-    // Maximal mode's batch anatomy (task 7, F5): the group draws open - the
+    // Maximal mode's batch anatomy: the group draws open - the
     // thinking disclosure collapsed behind its tool count, the content row's
     // body out, the two tool cards indented under the thinking with their
     // durations, arguments, embedded Results and the one non-zero token field.
@@ -2304,7 +2304,7 @@ std::vector<Scene> scenes() {
                                            "3 files", "grep -r needle", "grep", 3200, 0, 450,
                                            {{"files", "3"}, {"needle hits", "7"}}, "", 3);
                     }});
-    // The failed step draws red inside the open batch (F5) - and the step count
+    // The failed step draws red inside the open batch - and the step count
     // still weighs it like a landed one.
     list.push_back(
         {"maxfailed", [](ThreadFixture& f) {
@@ -2322,7 +2322,7 @@ std::vector<Scene> scenes() {
                                 "grep -r needle", "grep", 3200, 0, 0, {}, "exit 1", 0);
          }});
     // A live batch in maximal mode: the still-running card names its tool with
-    // no duration (W7), the landed one carries its own - and the zero token
+    // no duration, the landed one carries its own - and the zero token
     // fields of both render nothing.
     list.push_back({"maxlive", [](ThreadFixture& f) {
                         f.state.chat.threadMinimalMode = false;
@@ -2331,7 +2331,7 @@ std::vector<Scene> scenes() {
                         f.seed.tool("bash", "ls -R", TuiBlockStatus_Ok, "42 lines", 1100);
                     }});
     // The stop mid-batch: the interrupted card renders as its own honest state -
-    // neither Ok-green nor Failed-red (F5, §8).
+    // neither Ok-green nor Failed-red.
     list.push_back({"maxcancelled", [](ThreadFixture& f) {
                         f.state.chat.threadMinimalMode = false;
                         f.seed.runStart("sweep the tree");
@@ -2538,9 +2538,9 @@ int colOfSub(const Grid& g, const std::string& needle) {
     return col == std::string::npos ? -1 : static_cast<int>(col);
 }
 
-/// The response-owned fold's §10.3 review checks (task 19), as assertions over
-/// the four builders above: the projection (T7-T10), the view (T11-T13) and the
-/// live edge (T15) all landed, so every check here is green.
+/// The response-owned fold's review checks, as assertions over
+/// the four builders above: the projection, the view and the
+/// live edge, so every check here is green.
 void checkOwnerShape() {
     { // maxlong (T10, T13): a folded group draws its header, no owner, no card, then the answer
         ThreadFixture f;
@@ -2571,10 +2571,10 @@ void checkOwnerShape() {
         check(g.contains("Next I will move the loader out of core."),
               "maxlonglive: its content draws");
         check(g.contains("TOOL  execute_command"), "maxlonglive: its live card draws");
-        // The owners are flat siblings - the drawRow indent leak used to
-        // stair-step each folded batch's owner under the previous one - and
-        // the live batch's children share the one indent C7 gives them. The
-        // folded owner's line now leads with its duration (FR-8), so the
+        // The owners are flat siblings - the drawRow indent puts each folded
+        // batch's owner under the previous one - and the live batch's children
+        // share the one indent. The folded owner's line leads with its
+        // duration, so the
         // column is read off that text.
         const int ownerA = colOfSub(g, "1.1 s - [bash] [grep]");
         const int ownerB = colOfSub(g, "1.2 s - [bash] [grep]");
@@ -2651,9 +2651,9 @@ void checkOwnerShape() {
         check(g.contains("[bash] [grep] [read_file] +1"),
               "the live chips line folds past three the way the owner header spells");
     }
-    // Task 19's scene review, as the §10.3 checks: the four builders' facts,
+    // The scene review: the four builders' facts,
     // each stated once over the drawn grid.
-    { // A1: the owner header's three facts in one row (FR-8, FR-23).
+    { // the owner header's three facts in one row.
         ThreadFixture f;
         buildMaxChips(f);
         f.state.chat.groupPins[1] = true; // a folded group draws its header only
@@ -2675,7 +2675,7 @@ void checkOwnerShape() {
               "a live batch draws open with its thinking, content and cards");
     }
     { // A3: the last call settles the batch - the owner folds to duration and
-      // chips, with no role word and no content segment (§4.6's fold, DD-8).
+      // chips, with no role word and no content segment (the fold).
         ThreadFixture f;
         f.state.chat.threadMinimalMode = false;
         f.seed.runStart("sweep the tree");
@@ -2707,7 +2707,7 @@ void checkOwnerShape() {
               "a reasoning-less batch folds the same way");
     }
     { // A5: a content-only batch's folded owner previews the content's first
-      // line (§7.3.7) - no calls, no chips, the one line instead.
+      // line - no calls, no chips, the one line instead.
         ThreadFixture f;
         f.state.chat.threadMinimalMode = false;
         f.seed.upsertTurn(1, TuiTurnState_Done, 3);
@@ -2722,7 +2722,7 @@ void checkOwnerShape() {
         check(g.contains(shut + " 1.2 s  the tree has 3 files"),
               "a content-only batch previews its first line");
     }
-    { // A6: a failed call marks the folded header (FR-9, FR-13).
+    { // a failed call marks the folded header.
         ThreadFixture f;
         f.state.chat.threadMinimalMode = false;
         f.seed.upsertTurn(1, TuiTurnState_Done, 3);
@@ -2738,7 +2738,7 @@ void checkOwnerShape() {
             std::string(ui::icon(ui::Icon::DisclosureClosed, ui::GlyphSet::Glyphs));
         check(g.contains(shut + " 900 ms - [bash] FAIL"), "a failed call marks the folded header");
     }
-    { // A7: an owner with no surviving child is absent (DD-15).
+    { // an owner with no surviving child is absent.
         ThreadFixture f;
         f.state.chat.threadMinimalMode = false;
         f.seed.upsertTurn(1, TuiTurnState_Done, 2);
@@ -2751,7 +2751,7 @@ void checkOwnerShape() {
         check(!g.contains("AGENT") && !g.contains("WORK"),
               "an owner with no surviving child is absent");
     }
-    {                    // B8: minimal keeps the live content row and draws no owner row (FR-5).
+    {                    // minimal keeps the live content row and draws no owner row.
         ThreadFixture f; // minimal is the factory default
         f.seed.runStart("what is the answer");
         f.seed.content("The answer is still arriving. A second paragraph, so the body has more "
@@ -2760,7 +2760,7 @@ void checkOwnerShape() {
         check(g.contains("The answer is still arriving") && !g.contains("AGENT"),
               "minimal keeps the live content row and draws no owner row");
     }
-    { // B9: the live content row disappears when the turn closes (§4.5).
+    { // the live content row disappears when the turn closes.
         ThreadFixture f;
         f.seed.runStart("what is the answer");
         f.seed.content("The answer is still arriving.");
@@ -2776,7 +2776,7 @@ void checkOwnerShape() {
         check(rowsWith(g, "[execute_command]") == 1 && rowsWith(g, "Thinking") == 1,
               "neither the shadow line nor the chips line ever draws in maximal");
     }
-    { // C11: a hidden block weighs 0 and draws nothing (D3, DD-12's default).
+    { // a hidden block weighs 0 and draws nothing.
         ThreadFixture f;
         f.state.chat.threadMinimalMode = false;
         f.seed.runStart("sweep the tree");
@@ -2789,8 +2789,8 @@ void checkOwnerShape() {
                   !g.contains("[bash]"),
               "a hidden block weighs 0 and draws nothing");
     }
-    { // D16: a re-opened settled batch shows its content with its thinking and
-      // cards folded (§4.6's fourth art) - the folded children draw their bare
+    { // a re-opened settled batch shows its content with its thinking and
+      // cards folded (the fourth art) - the folded children draw their bare
       // headers, never their bodies.
         ThreadFixture f;
         f.state.chat.threadMinimalMode = false;

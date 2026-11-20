@@ -1267,7 +1267,7 @@ void checkDrilldownMount() {
         step.body = "src/app.d";
         stream.chat.typedTurns.blockUpsert(std::move(step));
         // The committed group is one the user pinned open: the work rows show.
-        // The task-10 pins are absolute (DD-6): the group pin and the batch
+        // The pins are absolute: the group pin and the batch
         // owner's row pin - the owner row never draws open from a group pin.
         stream.chat.groupPins[1] = true;
         stream.chat.rowPins[1]["batch#1#0"] = true;
@@ -1491,7 +1491,7 @@ void checkStructuredToolRows() {
     probe.bind(state.left.agents.front().chat, probeView);
     check(probe.groupCount() == 4, "premise: the note turns and the run's group make four groups");
     const std::size_t work = probe.groupCount() - 1;
-    // The group's rows: the WORK header, the batch's owner row (DD-13), then
+    // The group's rows: the WORK header, the batch's owner row, then
     // the batch's children in canonical order - the calls are blocks 2 and 3.
     const model::BlockDesc readDesc = probe.blockAt(work, 2);
     check(readDesc.label == std::string("TOOL"), "the structured call row keeps its role label");
@@ -1507,8 +1507,8 @@ void checkStructuredToolRows() {
 
     // On screen: the composed names draw in the thread's column, not in the inspector
     // beside it (whose lane mirror also carries the tool name - the column is the
-    // test). The run's turn is pinned open first (F7): minimal folds its rows,
-    // and the names ride the open cards' headers. The pins are absolute (DD-6):
+    // test). The run's turn is pinned open first: minimal folds its rows,
+    // and the names ride the open cards' headers. The pins are absolute:
     // the group pin and the batch owner's row pin together.
     state.left.agents.front().chat.groupPins[static_cast<std::int64_t>(run)] = true;
     for (std::size_t b = 0; b < probe.blockCount(work); ++b)
@@ -1550,12 +1550,12 @@ void checkStructuredToolRows() {
     check(!state.agentThreadAdapter.bound(), "a pipeline clear unbinds the drill-down's adapter");
 }
 
-/// The batched steps: the pipeline path consumes task 27's batch index, so a
+/// The batched steps: the pipeline path consumes the run's batch index, so a
 /// two-step run draws the main thread's shape - one reasoning/content pair per
 /// batch, the ids batch-scoped (`<turnId>#<n>` / `reasoning#<n>`), the next
 /// batch a fresh pair instead of a tick overwriting the previous one's blocks.
-/// One typed turn per run is unchanged (DD-19); only the batches inside
-/// multiply, and the run's start opens that turn with its query row (task 30):
+/// One typed turn per run is unchanged; only the batches inside
+/// multiply, and the run's start opens that turn with its query row:
 /// the steps below join the already-open turn, and the query is the turn-level
 /// row the fold never owns.
 void checkPipelineBatchSteps() {
@@ -1565,7 +1565,7 @@ void checkPipelineBatchSteps() {
     const auto wire = [](const char* s) { return String{s, std::strlen(s)}; };
     ::TuiState api{&state};
 
-    // The run's start fires first (task 29's emitter, drawn here): the run's
+    // The run's start fires first (drawn here): the run's
     // turn opens at the start with its query row, and the steps below join the
     // already-open turn - no second turn, and the query is the same block the
     // main thread's turn start emits (id "query", batch "<turnId>#q").
@@ -1604,8 +1604,7 @@ void checkPipelineBatchSteps() {
 
     check(state.left.agents.size() == 1, "premise: the run made the agent's store");
     const tui::ChatTab& store = state.left.agents.front().chat;
-    check(store.typedTurns.turnCount() == 1,
-          "premise: one typed turn per run (DD-19), not per batch");
+    check(store.typedTurns.turnCount() == 1, "premise: one typed turn per run, not per batch");
     const std::int64_t run = store.typedTurns.turnAt(0).id;
     const std::size_t blocks = store.typedTurns.blockCount(run);
     check(blocks == 6,
@@ -1613,9 +1612,9 @@ void checkPipelineBatchSteps() {
           "content, one call)");
 
     // The query row: the run's task on the query batch, the same block the
-    // main thread's turn start emits (DD-21) - turn-level, so it draws whatever
+    // main thread's turn start emits - turn-level, so it draws whatever
     // the fold does with the batches. It opened the turn, so it is block 0
-    // (bucket order is insertion order, I-7).
+    // (bucket order is insertion order).
     {
         const auto& query = store.typedTurns.blockAt(run, 0);
         check(query.id == "query" && query.batchId == std::to_string(run) + "#q" &&
@@ -1633,7 +1632,7 @@ void checkPipelineBatchSteps() {
         std::size_t seenCount = 0;
         for (std::size_t i = 0; i < blocks && i < 8; ++i) {
             const auto& b = store.typedTurns.blockAt(run, i);
-            // DD-4: the query row's batch is not a response batch - the scan
+            // The query row's batch is not a response batch - the scan
             // counts the steps' batches alone.
             if (b.batchId == std::to_string(run) + "#q")
                 continue;
@@ -1667,7 +1666,7 @@ void checkPipelineBatchSteps() {
     // On screen: the query row draws above the work. It is turn-level, so the
     // fold never hides it (the query is not a batch-owned row), and it renders
     // as the same YOU header over its body segment the main thread's turn start
-    // puts up. The group is pinned open (DD-6) so the work rows' shape does not
+    // puts up. The group is pinned open so the work rows' shape does not
     // ride the factory default.
     state.left.agents.front().chat.groupPins[run] = true;
     model::focusAgentLane(state.ui, "coder");
@@ -1693,12 +1692,12 @@ void checkPipelineBatchSteps() {
 }
 
 // ---------------------------------------------------------------------------
-// 9c. The second mount stays identical: the drill-down inherits the fold (R-7)
+// 9c. The second mount stays identical: the drill-down inherits the fold
 // ---------------------------------------------------------------------------
 
 /// One seeded turn, the same on both mounts: a settled exchange whose batch
 /// carries thinking, two calls (one failed) and the answer, with the group and
-/// its owner row pinned open. The pins are absolute (DD-6) and live on the
+/// its owner row pinned open. The pins are absolute and live on the
 /// chat they are set on alone - the caller hands over one `ChatTab` at a time,
 /// so each mount folds by its own store's pins and never by another's.
 void seedFoldTurn(tui::ChatTab& chat) {
@@ -1757,8 +1756,8 @@ void seedFoldTurn(tui::ChatTab& chat) {
     write.body = "out.txt";
     write.durationMs = 2'400;
     chat.typedTurns.blockUpsert(std::move(write));
-    // The answer rides its response's batch (DD-4): the batch's content child
-    // is the answer's to suppress (DD-9).
+    // The answer rides its response's batch: the batch's content child
+    // is the answer's to suppress.
     TypedBlock answer;
     answer.turnId = 1;
     answer.id = "answer";
@@ -1836,8 +1835,9 @@ void checkDrilldownShape() {
           "expanded, ownsBatch, bodySegment)");
 
     // A pin set on the main mount lives on the main mount's `ChatTab` alone: the
-    // drill-down holds a different store, so its rows cannot move. R-7's
-    // mitigation is exactly this check - a divergence fails here, not by eye.
+    // drill-down holds a different store, so its rows cannot move. That
+    // guarantee is exactly what this check pins - a divergence fails here,
+    // not by eye.
     state.chat.rowPins[1]["batch#1#0"] = false;
     state.ui.focusedAgent.clear();
     Grid repinned;

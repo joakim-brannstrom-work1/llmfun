@@ -1379,7 +1379,7 @@ unittest {
     assert(sink.countOf("sessionList") == 1, "delete-active must refresh the sidebar snapshot");
 
     // Confirmation notice on the fallback path (the exact string locks
-    // the user-facing wording; task 5: a chat message is a Notice block).
+    // the user-facing wording: a chat message is a Notice block).
     assert(sink.lastNoticeBody() == "Session deleted: a1b2. Switched to 'T'.",
             "delete-active must emit the switch confirmation, got: " ~ sink.lastNoticeBody());
 }
@@ -2012,8 +2012,8 @@ unittest {
 
     // The turn opens Running with the query prose block; the empty
     // (failed) batch emits nothing further and the run's exit path
-    // closes the turn Interrupted without fabricating a block status
-    // (FR-11): two turn upserts, same id.
+    // closes the turn Interrupted without fabricating a block status:
+    // two turn upserts, same id.
     assert(sink.turnUpserts.length == 2 && sink.turnUpserts[0].id == 1 && sink.turnUpserts[0].state == TuiTurnState_Running,
             "the failed turn opens Running with the typed walk's first id");
     assert(sink.turnUpserts[1].id == 1 && sink.turnUpserts[1].state == TuiTurnState_Interrupted,
@@ -3152,7 +3152,7 @@ unittest {
     // The tool loop fires streamMessageDone after every LLM request: a batch
     // end must close nothing, or one run becomes one drill-down group per
     // batch. The close rides runDone, which fires once per run. The batch
-    // counter still moves: the payloads carry the batch index (task 27).
+    // counter still moves: the payloads carry the batch index.
     updater.messageUpdate(StreamMessage(content: "one"), null, ServerStat());
     updater.streamMessageDone();
     updater.messageUpdate(StreamMessage(content: "two"), null, ServerStat());
@@ -3185,7 +3185,7 @@ unittest {
 
     // The pipeline's submit site fires runStart once per run, before the
     // agent's first batch: the drill-down's query row - the task the node
-    // was invoked with (task 29; the C++ draws it, task 30).
+    // was invoked with (the C++ draws its own query row).
     updater.runStart("get the parser building");
 
     assert(sink.agentStarts.length == 1, "one start row per run");
@@ -3208,7 +3208,7 @@ unittest {
     // The real per-batch order: the response streams (batch N), stream-done
     // counts it, then the step's tool calls/results emit - tagged with the
     // finished batch N, so they group under the batch whose stream the
-    // drill-down just saw (the C++ builds batch-scoped ids from it, task 28).
+    // drill-down just saw (the C++ builds batch-scoped ids from it).
     auto step = ProcessResult(chat: [
         Chat.MessageT(ToolMessage("t", parseJSON(`[]`))),
         Chat.MessageT(ToolResponse("r", "call-1", "grep_files", true))
@@ -3592,7 +3592,7 @@ unittest {
     assert(sink.countOf("sessionList") == 1, "clone-none must still refresh the sidebar list");
 }
 
-// ---- v5 typed thread turns/blocks (tasks 3-4) -------------------------------
+// typed thread turns/blocks
 
 // Shared content for the typed-thread tests: a two-call tool batch (grep_files
 // ok, write_file failed) whose message carries the final answer.
@@ -3801,7 +3801,7 @@ unittest {
     assert(sink.blockUpserts.length == 7);
     assert(sink.blockUpserts[1].id == "reasoning#0"
             && sink.blockUpserts[1].kind == TuiBlockKind_Reasoning && sink.blockUpserts[1].body == "T",
-            "the live tick emits reasoning before content (console parity, DD-5)");
+            "the live tick emits reasoning before content (console parity)");
     assert(sink.blockUpserts[3].id == "c1" && sink.blockUpserts[3].status == TuiBlockStatus_Pending);
     assert(sink.blockUpserts[4].id == "reasoning#0" && sink.blockUpserts[4].body == "T0");
     assert(sink.blockUpserts[5].id == "content#0" && sink.blockUpserts[5].body == "C0",
@@ -4033,7 +4033,7 @@ unittest {
             ~ sink.blockUpserts[2].body);
 }
 
-// DD-22: the /plan and /code turn is display-only - a fresh turn id opens on
+// The /plan and /code turn is display-only - a fresh turn id opens on
 // the wire (Running + the query prose row) but no message is added to the
 // history, so a replay rebuild drops the turn; the run's notices attach to it
 // (a notice targets the store's newest turn) and the explicit close lands the
@@ -4052,7 +4052,7 @@ unittest {
     TuiRecordingSink sink;
     auto app = typedTestApp(new SessionStore(buildPath(tmpDir, "chat").Path), tmpDir, sink);
 
-    // Open: a fresh turn on the wire, query row first (DD-5).
+    // Open: a fresh turn on the wire, query row first.
     app.openPipelineTurnTyped("plan the fold");
     assert(app.agent_.chat.currentTurnId() == 1, "the pipeline turn allocates a fresh id");
     assert(sink.turnUpserts.length == 1 && sink.turnUpserts[0].id == 1
@@ -4500,7 +4500,7 @@ unittest {
 }
 
 // NR derivation: the console formatter over the typed events reproduces
-// today's console output byte for byte (task 4's golden) - the query echo
+// today's console output byte for byte - the query echo
 // without a prefix, "Thinking: " lines, "assistant: " content, one tool-call
 // line per batch, result lines with the mark, the answer after the results
 // walk, and notices verbatim.
@@ -4547,7 +4547,7 @@ unittest {
     foreach (t; sink.turnUpserts[1 .. $])
         got ~= fmt.onTurnUpsert(t);
 
-    // Today's console lines for this content (task 4's golden, hand-pinned).
+    // Today's console lines for this content, hand-pinned.
     string[] expected = [
         "q", "Thinking: T0", "assistant: C0", "Thinking: T1",
         `tool call: grep_files(pattern="x")` ~ "\nwrite_file()",
@@ -4605,7 +4605,7 @@ unittest {
     ], "the same block without the flag prints today's lines: " ~ got.join(" | "));
 }
 
-// FR-11 run exits: a stop interrupts through emitStopTyped (honest Cancelled
+// Run exits: a stop interrupts through emitStopTyped (honest Cancelled
 // flips, no fabricated status), and the /c resume re-opens the SAME turn
 // Running before the next batch's blocks land.
 @("runAgent: stop interrupts and /c re-opens the same turn")
@@ -4735,7 +4735,7 @@ unittest {
             "the Running re-upsert crosses before the next batch's blocks");
 }
 
-// FR-11 run exits: the nudge ladder's exhaustion fails the turn
+// Run exits: the nudge ladder's exhaustion fails the turn
 // agentStuckInLoop, the harness still explains, and the run's exit closes the
 // turn Interrupted without touching any block status.
 @("runAgent: agentStuckInLoop explains and closes the turn Interrupted")
@@ -4782,7 +4782,7 @@ unittest {
             "no block status is written the transport did not report");
 }
 
-// FR-11 run exits, replay: emitReplayTyped() after a finished run emits a
+// Run exits, replay: emitReplayTyped() after a finished run emits a
 // snapshot whose rows equal the live run's final shape - same ids, same
 // batch ids, same order, durations included.
 @("runAgent: emitReplayTyped replays a finished run's live shape")

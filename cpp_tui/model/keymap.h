@@ -140,7 +140,7 @@ enum class Action {
     /// The palette's row is therefore the grid's way in, and `Esc` - see `ExitFocusMode` - is the
     /// way out of a mode whose chrome, the rail's and the inspector's included, is hidden.
     ToggleFocusMode,
-    /// Fold every group of the thread back onto its mode's default (task 24, DD-6).
+    /// Fold every group of the thread back onto its mode's default.
     /// No chord on purpose: a new chord would collide with the terminal's own
     /// bytes (`doc/ui_keys.md`), and the palette's row is the keyboard path that
     /// works in every profile - `Ctrl+K`, type, Enter. Pins are absolute, so the

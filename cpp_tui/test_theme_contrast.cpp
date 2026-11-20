@@ -375,7 +375,7 @@ void runProfile(const char* profile, bool grid) {
     pairs.push_back({"action label (active)", text, styleColor(ImGuiCol_ButtonActive)});
     // The framed disclosure headers: the label the disclosure actually draws on
     // the header fill is body text in all three paint states. A per-widget
-    // `Header` push used to leave Hovered/Active at the stock blue. The typed
+    // `Header` push leaves Hovered/Active at the stock blue. The typed
     // block's role label is drawn on the thread surface (no framed header), so
     // the roles' surface pairs above already cover it.
     pairs.push_back({"disclosure label (rest)", text, header});

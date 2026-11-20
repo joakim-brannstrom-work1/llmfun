@@ -122,7 +122,7 @@ int main() {
         CHECK(prefs.sendKey == SendKey::Tab);
         CHECK(prefs.railOpen == -1);
         CHECK(prefs.inspectorOpen == -1);
-        CHECK(prefs.threadMinimal); // task 8: the factory mode is minimal
+        CHECK(prefs.threadMinimal); // the factory mode is minimal
     }
 
     // uiConfPath: the file named "ui.conf" beside the ini file; no name, no path.
@@ -363,7 +363,7 @@ int main() {
         }
     }
 
-    // Task 8: a file WITHOUT the ThreadMode key (any old v2 file) loads
+    // A file WITHOUT the ThreadMode key loads
     // minimal; a maximal value round-trips; an unknown word keeps the
     // current value, like every other key.
     {

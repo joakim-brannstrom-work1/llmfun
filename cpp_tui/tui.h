@@ -173,15 +173,15 @@ struct ChatTabSessionPanel {
 
 struct ChatTab {
     /// The rows the user pinned open or closed, and the groups they pinned,
-    /// as ABSOLUTE session state (DD-6): the key is the persisted turnId, the
+    /// as ABSOLUTE session state: the key is the persisted turnId, the
     /// row key the wire block id (or `batch#<batchId>` for an owner row),
-    /// never a row index - so a click and a read cannot disagree (D-GROUPID),
+    /// never a row index - so a click and a read cannot disagree,
     /// and an evicted turn can never hand its pin to a neighbour.
     std::map<std::int64_t, std::map<std::string, bool>> rowPins; // turnId -> rowId -> open
     std::map<std::int64_t, bool> groupPins;                      // turnId -> open
     store::TypedThreadStore typedTurns;
 
-    /// Whether the thread draws in minimal mode (design §6): folded work groups
+    /// Whether the thread draws in minimal mode: folded work groups
     /// with header-only steps, streamed prose hidden behind the answer chip.
     /// The value is the preference's (`ShellPrefs::threadMinimal`, the
     /// `ThreadMode=` line in ui.conf): the frame layer mirrors it in here each
@@ -199,7 +199,7 @@ struct AgentStream {
 
     ChatTab chat;
 
-    // --- typed drill-down state (v5, design §4) ---------------------------
+    // --- typed drill-down state --------------------------------------------
     //
     // The pipeline entry points feed `chat.typedTurns`: one live turn per
     // run, opened by the first event that arrives and closed by

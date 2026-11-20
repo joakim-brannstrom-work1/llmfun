@@ -105,14 +105,14 @@ constexpr const char* kTranscriptBackLabel = "Back to main";
 constexpr const char* kLoadEarlierLabel = "Load earlier";
 
 /// Copy one block's text (task 26): the focused block's `Copy` control, the block menu's
-/// `Copy` item (task 44) and the `y` key all land here, so a block has exactly one copy
+/// `Copy` item and the `y` key all land here, so a block has exactly one copy
 /// path - and the item that asked never chooses the text.
 ///
 /// What reaches the clipboard is the wrapper's decision, not this file's: a `Code`
 /// block copies its *code* (`ui::copyText`), everything else its body verbatim - and
 /// the wrapper is the only place allowed to know what a fence is. A batch owner
-/// copies its batch's content (FR-16), and the fence answer is the content's own
-/// kind - the adapter's, never re-derived here (B1).
+/// copies its batch's content, and the fence answer is the content's own
+/// kind - the adapter's, never re-derived here.
 ///
 /// Answers whether the clipboard was written: a row with no body copies nothing, which is what
 /// keeps a body-less block (the `WORK` header, a stream row before its first token) from
@@ -470,7 +470,7 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
         // the query opens the turn above the WORK header and the answer
         // closes it after the group - both are turn-level rows, addressed
         // through the sentinels; a turn without one answers an empty descriptor
-        // (group == 0) and draws nothing. F1: the WORK header renders only
+        // (group == 0) and draws nothing. The WORK header renders only
         // while the group has work rows - an empty group (the adapter's list
         // always carries the header itself, so one entry) renders headerless
         // and the turn's rows stand alone.
@@ -549,7 +549,7 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
                 std::string text = "Thinking";
                 // The shadow's count is its own: the Tool rows after the
                 // shadow's row are the batch's calls (reasoning precedes
-                // calls, DD-5), pending calls included. Not a descriptor
+                // calls), pending calls included. Not a descriptor
                 // field - the row is the stream's shadow, and the drawn
                 // rows are what the stream has.
                 int liveTools = 0;
@@ -571,7 +571,7 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
         // answer - so the turn's anatomy shares the one chrome/body path. `b` is
         // the row's adapter address: a work row's list index, a turn-level row's
         // sentinel. The bool is the work list's continuation answer, and it is
-        // `true` everywhere now (task 11): the fold is the rows' `visible`, so
+        // `true` everywhere: the fold is the rows' `visible`, so
         // no early stop and no exception list survives in the view.
         const auto drawRow = [&](const model::BlockDesc& desc, std::size_t b) -> bool {
             ui::Rect row;
@@ -582,30 +582,30 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
             // The batch's tool cards: each card hangs indented beneath the
             // batch's owner row, sharing one left rule - the indent starts
             // before the row is measured, so the card's own body narrows with
-            // it. The predicate is ownership, not the mode (task 11): a
+            // it. The predicate is ownership, not the mode: a
             // minimal fold hides the card through `visible`, so the shape
             // needs no mode test here.
             const bool card = desc.batchOwned && desc.kind == model::BlockKind::ToolStep;
-            // C7: the batch's children - thinking, content, cards - share one
+            // The batch's children - thinking, content, cards - share one
             // indent and one rail under the owner row; the owner itself stays
             // at the group's level. The minimal live-tail segment keeps the
-            // turn-level indent: it draws with no owner row above it (FR-5).
+            // turn-level indent: it draws with no owner row above it.
             const bool child = !styleMinimal && (card || (desc.batchOwned && !desc.ownsBatch));
             const bool focused = desc.id() == ts.focus;
-            // The loop's whole visibility contract (design §7.3.1/§C7, task
-            // 11): nothing else in the view may decide whether a row draws -
-            // the adapter already folded the owner's openness into it (I-5).
+            // The loop's whole visibility contract: nothing else in the view
+            // may decide whether a row draws - the adapter already folded the
+            // owner's openness into it.
             // A row the predicate hides paints nothing, takes no focus, opens
             // no menu, and the loop's caller keeps going.
             if (!desc.visible)
                 return true; // paints nothing, the loop's caller keeps going
-            // A body segment (DD-7, I-11): no header, so no measure, no
+            // A body segment: no header, so no measure, no
             // InvisibleButton, no menu, no copy chip and no `expanded` read -
             // the body is the row, and the renderer owns its height. Under its
             // owner it takes the batch's pad2, the same indent the batch's
-            // cards draw at (C10). With no owner row on screen - the minimal
-            // live tail's segment, FR-5 - it takes the mark column instead: the
-            // turn-level indent §4.6's art gives the body, one grid cell in
+            // cards draw at. With no owner row on screen - the minimal
+            // live tail's segment - it takes the mark column instead: the
+            // body indent one grid cell in
             // from the group's edge.
             if (desc.bodySegment) {
                 const float segIndent = child ? m.pad2 : m.gu;
@@ -625,10 +625,10 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
             // The block menu's owner: the one block the state names may submit
             // the popup, so an ImGui id that a transcript reset recycled cannot re-own a
             // menu the user opened on a different message.
-            // The openness is the adapter's resolved answer (§7.5, task 11):
+            // The openness is the adapter's resolved answer:
             // the turn-level sentinels are hard-coded open on the wire side, a
             // pin overrides, the live defaults decide the rest. The view keeps
-            // no mode special case (DD-16): the fold's exceptions are clauses
+            // no mode special case: the fold's exceptions are clauses
             // of the one predicate, never branches here.
             const bool rowOpen = desc.expanded;
             const BlockDraw draw{rowOpen, focused, desc.id() == ts.menuBlockId};
@@ -690,7 +690,7 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
                 ImGui::Unindent(m.pad1);
             }
             if (card) {
-                // The shared left rule (F5): from the card's top to its bottom,
+                // The shared left rule: from the card's top to its bottom,
                 // at the x the indent started from - every card's segment lands
                 // on the same vertical, so the batch's cards read as one rail.
                 const float cardBottom = ImGui::GetCursorScreenPos().y;
@@ -704,7 +704,7 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
             }
             // A collapsed work group hides the rows under its header: the header *is* the
             // group, and its steps are the rows `blockCount()` reports. The fold
-            // itself is those rows' `visible == false` (DD-16, task 11): the loop
+            // itself is those rows' `visible == false`: the loop
             // draws on, and each hidden row returns at the contract above - no
             // early return, no kind list here. The turn's rows (the query, the
             // answer) stand outside the fold, drawn before and after the loop,
@@ -736,13 +736,13 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
         // The query row opens the turn, above the WORK header.
         if (queryRow.group != 0)
             drawRow(queryRow, store::kQueryRow);
-        // The anchor contract (task 25's mechanism, unchanged): the group's
+        // The anchor contract: the group's
         // header row is the anchor, and it is sampled HERE - immediately
         // before that row draws - so the anchor is the header's own row,
         // never "the cursor after the query row": an owner row or a body
         // segment the projection invents above the header cannot shift it.
         // A fold changes how many rows follow the header, never where the
-        // header starts (task 16). A group with no work rows draws no header
+        // header starts. A group with no work rows draws no header
         // and records nothing: the cursor then sits on the next group's
         // query row, which is not a header row.
         if (hasWorkRows) {
@@ -780,7 +780,7 @@ void renderThreadBody(model::UiState& ui, store::ThreadStoreAdapter& thread, mod
         // The hint keeps using the height the group drew (not the `cell.h`
         // reservation): `endGroup` stores the drawn height, so a batch folding
         // in place changes the next hint, never the anchor row sampled above
-        // the fold (task 16).
+        // the fold.
         thread.endGroup(index, cell);
     }
     ts.drawnGroups = drawn.size();
