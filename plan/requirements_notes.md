@@ -67,3 +67,22 @@ turn in insertion order; I-13 a pin survives any default change.
 - R-4 (DD-12): `WORK - N steps` drops by 2 per hidden settled call.
 - R-9 (DD-10): content lifetime differs by mode (maximal folds with its batch, minimal keeps
   it until the turn closes). One-line alternative recorded in design §0.3.
+
+## Follow-up wave (tasks 27-31): the live pipeline-path gaps
+
+Found by comparing the agents drill-down's live app behaviour against
+`inspector-agents-drilldown-100x30.txt` (its store is typed-seeded, so the
+golden cannot show these). Decisions DD-19..DD-22 (see the overview).
+
+- FR-24 (DD-19/DD-20): the drill-down's live pipeline path draws the main
+  thread's shape per run: one batch per step, one reasoning/content pair per
+  batch, no overwrite; the payloads carry the batch index on the wire.
+- FR-25 (DD-21): the drill-down shows the run's task as a query row (`query`,
+  `<turnId>#q`, role `user`), opened at run start; one typed turn per run.
+- FR-26 (DD-22): the pipeline's progress notices and final report draw in the
+  main thread: `/code` and `/plan` open a display-only turn for the query, and
+  the report notice attaches to a live turn.
+- FR-27: the batch index rides the wire structs (a real ABI change,
+  `TUI_API_VERSION` 15 -> 16).
+- R-10 (DD-22): the `/code` and `/plan` turn is display-only - dropped on
+  session reload. The alternative pollutes the main agent's LLM context.

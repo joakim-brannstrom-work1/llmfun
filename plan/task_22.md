@@ -50,3 +50,10 @@ const char* kRetired[] = {"thinkingOpen", "batchTools", "groupOverrides", "openW
 Plan pointers:
 - NFR-8, D14, §8 "Observability"; design §10.4's "lying comments".
 - Anchors were verified at plan time; re-verify before each edit.
+
+### Follow-up (task 22 review, 2026-11-19)
+- The gate's `kProduction` covers where the tokens last lived; the paired headers
+  (`views/thread.h`, `views/blocks.h`, `views/palette.h`) and the rest of the
+  ~60-file production tree are ungated, so a returning symbol could live as a
+  declaration there. Extend `kProduction` in a follow-up wave (verified clean
+  for the three paired headers at review time) or accept the residual risk.

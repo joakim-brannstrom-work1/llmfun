@@ -127,3 +127,39 @@ the anchors it edits and re-verifies them before the edit (Standing Executor Rul
 | `cpp_tui/CMakeLists.txt:985-997` | `test_streaming` target + `TEST_STREAMING_SOURCE_DIR` |
 | `cpp_tui/CMakeLists.txt:841-846` | `test_thread_window` target |
 | `cpp_tui/CMakeLists.txt:864` | `test_typed_thread_store` include dir |
+
+## Follow-up wave (verified against the current tree, post task_15)
+
+| Anchor | Content |
+| `cpp_tui/tui_api.h:26-29` | `TUI_API_VERSION` (15; task_27 bumps to 16) |
+| `cpp_tui/tui_api.h:85-96` | `PipelineChatMessage` (104 bytes; task_27 adds `batch` at 104 -> 112) |
+| `cpp_tui/tui_api.h:98-109` | `TuiToolCallParam` (task_27 adds `batch`) |
+| `cpp_tui/tui_api.h:111-121` | `TuiToolResultParam` (task_27 adds `batch`) |
+| `cpp_tui/tui_api.h:591` | `tuiPipelineAgentUpdate` declaration (task_29 adds `tuiPipelineAgentStart` beside it) |
+| `cpp_tui/tui_api.cpp:108-129` | `openTypedTurn` (opens only when none active) |
+| `cpp_tui/tui_api.cpp:681-718` | `tuiPipelineAgentUpdate` (fixed ids `content#0`/`reasoning#0`; `batchId = turnId+"#0"` at :705-715; task_28 rewrites) |
+| `cpp_tui/tui_api.cpp:720-745` | `tuiPipelineAgentToolCall` (`batchId` at :733; task_28 rewrites) |
+| `cpp_tui/tui_api.cpp:747-779` | `tuiPipelineAgentToolResult` (`batchId` at :761, merged step :762-772; task_28 rewrites) |
+| `cpp_tui/tui_api.cpp:781+` | `tuiPipelineAgentDone` (closes the run's turn) |
+| `source/llm/app_agent/ui.d:544-558` | `emitStepToolEvents` (task_27 gains a `batch` parameter) |
+| `source/llm/app_agent/ui.d:560-604` | `PipelineStreamMessageUpdater` (`messageUpdate` :574-581, `streamMessageDone` deliberately empty :583-587, `runDone` :589-591, `stepEvent` :593-595) |
+| `source/llm/tui/package.d:485-521` | TUI composers for the `UiPipeline*` messages |
+| `source/llm/tui/package.d:1064-1078` | `uiMsg` forwarders |
+| `source/llm/tui/package.d:1196-1226` | `UiPipeline*` wire structs |
+| `source/llm/types.d:88-96` | `IStepEventEmitter` / `IRunDoneEmitter` (task_29 adds `IRunStartEmitter` beside them) |
+| `source/llm/pipeline/package.d:55-104` | `PipelineNode` (`runDoneEmitter_` :97; task_29 adds `runStartEmitter_`) |
+| `source/llm/pipeline/package.d:393-403` | `onAgentComplete` fires `runDone` |
+| `source/llm/pipeline/package.d:480-505` | submit (`addUserQuery` :495; task_29 fires `runStart` after it) |
+| `source/llm/pipeline/package.d:837-846` | builder wiring of the emitters per node |
+| `source/llm/app_agent/package.d:927-986` | `runAgent` (`query = null` :947, the bracket :954-975, `emitRunEndedTyped` :982) |
+| `source/llm/app_agent/package.d:1033-1044` | `emitTurnStartTyped` (the query block: id `query`, `<turnId>#q`, role `user`) |
+| `source/llm/app_agent/package.d:1191-1212` | `emitRunEndedTyped` (not reused by task_31's non-stopped close) |
+| `source/llm/app_agent/package.d:1217-1222` | `emitNoticeTyped` (attaches to `currentTurnId()`) |
+| `source/llm/app_agent/package.d:378-388` | `sendChatMessage` |
+| `source/llm/app_agent/slash_pipeline.d:26-62` | `planHandler` / `codeHandler` (task_31 brackets) |
+| `source/llm/app_agent/tests.d:3100-3148` | the updater tests (task_27 extends) |
+| `cpp_tui/test_tui_api_v4.cpp:1005-1140` | case 1f + the lane round-trips (task_27 extends) |
+| `cpp_tui/test_agents_tab.cpp:1755+` | the scenes + goldens (tasks 28/30 extend) |
+| `cpp_tui/test_agents_tab_gui.cpp:83-156` | the typed-store seeds |
+| `source/llm/chat.d:74-85` | `beginNewTurn` / `currentTurnId` |
+| `cpp_tui/store/typed_thread_store.h:119-121` | the implicit turn slot for orphan blocks |

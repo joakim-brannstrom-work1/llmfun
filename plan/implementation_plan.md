@@ -12,6 +12,11 @@ every run exit, so `task_done`'s block disappears and the answer appears once.
 Source: `plan/system_design.md` rev 2 (authoritative for tasks and interfaces),
 `plan/maximal_investigation.md` (observed behaviour). Design §11's T1..T26 map 1:1 to
 `task_01.md`..`task_26.md` (plus `task_06a.md`, the split of the scenes-first task).
+Tasks 27-31 are the follow-up wave: the live pipeline-path gaps found by
+comparing the drill-down's live app behaviour against the golden (the golden's
+store is typed-seeded, so it cannot show them). Their requirements and
+decisions live in `plan/requirements_notes.md` (follow-up wave); DD-19..DD-22
+extend the DD list above.
 
 ## Task Order
 
@@ -44,6 +49,11 @@ Execute in order; each task ends with the full suite green (NFR-10).
 24. task_24.md - Pin hygiene and "collapse all" (P2)
 25. task_25.md - Console parity for the intra-batch order (P2)
 26. task_26.md - Grid copy of a body segment: decision, not code (P3)
+27. task_27.md - D: the pipeline payloads carry the batch index (P1)
+28. task_28.md - C++: the drill-down draws the main-thread shape per run (P1)
+29. task_29.md - D: the run's task is the drill-down's query row (P1)
+30. task_30.md - C++: the run's task draws the drill-down's query row (P1)
+31. task_31.md - D: /code and /plan open a display-only turn in the main store (P1)
 
 ## Cross-cutting Concerns
 
@@ -78,6 +88,8 @@ Execute in order; each task ends with the full suite green (NFR-10).
 - **Regression.** Every task's Verification ends with the full suite green: `dub test`,
   `make test_blocks && ./test_blocks`, `./test_streaming`, `./test_thread_window`,
   `./test_typed_thread_store`, `./test_thread_anchor`, `./test_palette`, `./test_thread_view`.
+  The follow-up wave (tasks 27-31) adds: `./test_agents_tab`, `./test_tui_api_v4`,
+  `./test_e2e_gui` (and `./test_agents_tab_gui`, `./test_inspector` where the build has them).
   A task that leaves a golden red is not done. One exception, by design: task_06a lands the new
   scenes' *shape checks* red (B5's "the shape exists as a failing test") - every golden is green
   there, and every other task is fully green.
@@ -99,6 +111,12 @@ Execute in order; each task ends with the full suite green (NFR-10).
   replace `groupMinimal()`. DD-15 no owner row without a surviving child. DD-16 visibility is
   one adapter predicate. DD-17 the owner is invented in C++, not on the wire. DD-18 one chips
   helper for both modes.
+  Follow-up wave (tasks 27-31, the live pipeline-path gaps): DD-19 one typed
+  turn per pipeline run - the run is the boundary, `streamMessageDone` counts
+  batches and never closes. DD-20 the pipeline payloads carry the batch index;
+  the C++ derives no step numbering. DD-21 the run's task is the drill-down's
+  query row, fired at run start. DD-22 the /code and /plan turn is display-only:
+  no history entry, dropped on reload.
   I-1..I-13 (design §6.5) are the invariants the tests cite: one owner per batch; owner iff a
   surviving child; children contiguous; reason -> content -> cards; child visible implies owner
   visible and open; no repeated row id; bucket order = insertion order; no C++-written status;

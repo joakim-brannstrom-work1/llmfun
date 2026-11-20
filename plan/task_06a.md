@@ -8,7 +8,7 @@ of this task and names the task that turns it green; tasks 07-18 drive them gree
 is the acceptance surface B5 asked for, without a hand-authored golden.
 
 ### Changes Made
-- `cpp_tui/test_blocks.cpp` (new `rowOfSub(const Grid&, const char*)` next to `rowOf`).
+- `cpp_tui/test_blocks.cpp` (new `rowOfSub(const Grid&, const std::string&)` next to `rowOf`).
 - `cpp_tui/test_blocks.cpp` (new `checkOwnerShape()`, called from `main()` before the golden
   capture).
 

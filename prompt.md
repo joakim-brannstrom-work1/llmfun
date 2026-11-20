@@ -174,34 +174,34 @@ But the "content" is lost. that is not OK.
 It should be shown as part of the thinking fold.
 
 # 21
-[09201] [imgui-error] (current settings: Assert=1, Log=1, Tooltip=1)
-[09201] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09202] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09203] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09204] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09205] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09206] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09207] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09208] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09209] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09210] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09211] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09212] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09213] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09214] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
-[09215] [imgui-error] In window '##TuiRoot/##thread_groups_0A300194': Code uses SetCursorPos()/SetCursorScreenPos() to extend window/parent boundaries.
-Please submit an item e.g. Dummy() afterwards in order to grow window/parent boundaries.
+The UI is better now but there are still some problems.
+
+I sent a query but it is not shown as a "| YOU" row in the thread window (where the main chat is shown).
+
+When I open WORK - 268 steps it looks like this
+
+> [get_memory_topics] [load_skill] [read_file] +6
+
+Note that there are 268 steps but only one tool call row is shown. When I open that one this is what I see:
+
+WORK - 268 steps
+AGENT - [get_memory_topics] [load_skill] [read_file] +6
+  > Thinking
+  TOOL get_memory_topics
+.... 267 more tool calls
+
+When I click on one of the tool calls I do not see anything. They are empty.
+
+When I click on Thinking, expands the fold, I now see this:
+
+
+WORK - 268 steps
+AGENT - [get_memory_topics] [load_skill] [read_file] +6
+  Thinking
+  The task was already completed and task_done was called successfully (result: "done"). But the harness says I stopped without calling a tool. I should call task_done again with the final answer.
+  TOOL get_memory_topics
+.... 267 more tool calls
+
+
+Notice how I do not see any content of the tool calls, no result, I only see the last Thinking, I do not see any "| ANSWER".
+

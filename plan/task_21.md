@@ -52,3 +52,76 @@ the live edge, pins and anchors - and replace stale `file:line` anchors with sym
 Plan pointers:
 - C14, §10.1/§10.2; overview open issues 1 and 3.
 - Anchors were verified at plan time; re-verify before each edit.
+Plan pointers:
+- C14, §10.1/§10.2; overview open issues 1 and 3.
+- Anchors were verified at plan time; re-verify before each edit.
+
+### Coder deviations
+
+1. `doc/ui_keys.md` NOT touched: its "Collapse all" palette row is task_24's
+   deliverable and task_24 has not landed (the task's edit is conditional on
+   "if task_24 lands first").
+2. The sketch's pin line "pruned with their turn and by 'Collapse all'" would
+   document unbuilt behaviour (task_24 owns both). The chapter states what the
+   code does - pins go with the thread on clear/session switch - and
+   `doc/todo.md` carries the pruning + "collapse all" remainder instead.
+3. The visibility rules are quoted from the projection's actual shape
+   (`resolveVisible`'s clauses, named ownerVisible/ownerOpen/segmentVisible as
+   the code's comments name them); the owner's live default is spelled with
+   the code's `batchLiveFor`/`childLiveFor` split (the sketch's single
+   "batchLive" line conflates the two: a child folds on `!allSettled` alone).
+4. The chapter names `plan/maximal_investigation.md` as the old fold's record
+   (one line, per the task's Notes) - the doc already references `plan/` paths
+   (key_gate.md), so this follows the file's convention.
+5. The chapter documents behaviour, not the test list: the pinned §10.3 check
+   texts stay in `test_blocks.cpp` (the doc names no check strings).
+
+## Review round (2026-11-19): ACCEPT WITH ONE FIX — applied, commit pending
+
+- F1 (Important, pins pruning): `tuiTurnRemove` does prune the removed turn's
+  rowPins/groupPins (tui_api.cpp:917-925, "The turn's pins die with the turn")
+  — the chapter's "future work" claim and todo.md:81 were wrong. Fixed both:
+  the chapter now says a removed turn takes its pins with it (`tuiTurnRemove`)
+  and only eviction-time pruning + "collapse all" are future work; todo.md's
+  pin-hygiene line states turnRemove/thread-clear pruning and the eviction gap.
+- M1: one line added above the visibility block — the group's header row and
+  the turn's query/answer rows always draw; the segment clause is the content
+  segment only (resolveVisible:964-965 hard-codes the header true, the
+  turn-level rows 826-828, the segment kind guard 982).
+- M2: the folded-header bullet now says the disclosure mark and FAIL are drawn
+  around composeBlockHeader's text (renderBlock/ui::iconMark/after-fit), the
+  duration and chips in it.
+- M3 (labels): taken doc-side — the chapter now names ownerVisible/plainVisible
+  as the projection's comment names, ownerOpen its local, childVisible/
+  segmentVisible labels used here for resolveVisible's two tail clauses (the
+  reviewer's "labels used here" option; no code comments changed).
+5. The chapter documents behaviour, not the §10.3 check list.
+
+## Review round (2026-11-19): ACCEPT WITH ONE FIX — applied
+
+- F1 (Important): the pins text misstated pruning — `tuiTurnRemove` DOES prune
+  the removed turn's rowPins/groupPins (tui_api.cpp:917-925, "The turn's pins
+  die with the turn", carried over from task 10's groupOverrides.erase). Fixed
+  both files: the chapter now reads "…both go with the thread on a clear or a
+  session switch, and a removed turn takes its pins with it (`tuiTurnRemove`).
+  Pruning the pins of an evicted turn and a 'collapse all' affordance are
+  future work"; todo.md's pin-hygiene line reads "pins die with the turn on
+  turnRemove and with the thread (clear / session switch); eviction does not
+  prune the evicted turn's pins and a 'collapse all' affordance is not
+  implemented".
+- M1: one line added above the visibility block — the group's header row and
+  the turn's query/answer rows always draw; the segment clause is the content
+  segment only (the block omitted resolveVisible's hard-coded-true header and
+  turn-level rows and the segment's kind == Assistant guard).
+- M2: the folded-header bullet reworded — the disclosure mark and FAIL are
+  drawn around composeBlockHeader's text (renderBlock), the duration and tool
+  chips are in it.
+- M3 (labels): taken doc-side per the reviewer's "labels used here" option —
+  the chapter now states ownerVisible/plainVisible are the projection's
+  comment names, ownerOpen its local, childVisible/segmentVisible labels used
+  here for resolveVisible's two tail clauses. No code comments changed.
+- M4: todo.md:79 now names "(task 26)".
+- M3's other option (adding the names to resolveVisible's comments) left to a
+  later test-only commit if wanted.
+- Docs-only diff (doc/tui_design.md, doc/todo.md); no code, test or golden
+  change, so the suite gates stand as run for the task commit.
