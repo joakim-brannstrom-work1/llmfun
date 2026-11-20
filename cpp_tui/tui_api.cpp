@@ -679,12 +679,23 @@ void tuiInitQueryHistory(TuiState* state, const String* history, size_t count) {
 }
 
 void tuiPipelineAgentStart(TuiState* state, String agentId, String task) {
-    // task 29 lands the emitter first; the drill-down's query row is drawn by
-    // task 30's implementation. Nothing consumes the event yet, so the run's
-    // start is a no-op on this side until then.
-    (void)state;
-    (void)agentId;
-    (void)task;
+    if (!state || !state->inner)
+        return;
+    std::string id(agentId.data ? agentId.data : "", agentId.data ? agentId.len : 0);
+    if (id.empty())
+        return;
+    std::string t(task.data ? task.data : "", task.data ? task.len : 0);
+    auto& agent = agentStore(*state->inner, id);
+    // The run's query row, the exact block the main thread's turn start emits
+    // (`app_agent/package.d`'s turn open): one prose block on the query batch
+    // ("<turnId>#q", role "user"), so the drill-down's turn anatomy matches the
+    // main thread's - query -> work batches -> answer. Opening here owns the
+    // run's turn: `openTypedTurn` opens only when none is active, so every tick
+    // this run sends joins the already-open turn (one turn per run, DD-19) and
+    // the query rides its own batch, a turn-level row the fold never owns.
+    const std::int64_t turnId = openTypedTurn(agent);
+    upsertTypedBlock(agent, turnId, "query", std::to_string(turnId) + "#q", TuiBlockKind_Prose,
+                     TuiBlockStatus_None, 0, "", "user", t);
 }
 
 void tuiPipelineAgentUpdate(TuiState* state, String agentId, PipelineChatMessage msg) {

@@ -600,9 +600,11 @@ void tuiAddLogMessageEx(TuiState* state, TuiLogLevel level, String summary, Stri
 void tuiPipelineAgentUpdate(TuiState* state, String agentId, PipelineChatMessage msg);
 
 /* tuiPipelineAgentStart - one pipeline agent run started. `task` is inbound
- * (copied by the receiver), the run's task as the node was invoked with. The
- * drill-down draws it as the run's query row (the consumer is task_30's
- * implementation; nothing consumes the event before that).
+ * (copied by the receiver), the run's task as the node was invoked with.
+ * The drill-down draws it as the run's query row: the run's turn opens here
+ * (one turn per run), the run's ticks join it, and the query row is the same
+ * prose block the main thread's turn start emits (id "query", batch
+ * "<turnId>#q", role "user").
  * Null-safe: no-op if state is NULL or agentId is empty.
  */
 void tuiPipelineAgentStart(TuiState* state, String agentId, String task);

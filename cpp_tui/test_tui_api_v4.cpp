@@ -1061,6 +1061,12 @@ void casePipelineLaneFields() {
     tuiPipelineAgentUpdate(state, String{nullptr, 0}, PipelineChatMessage{});
     expect(state->inner->ui.agents.empty(), "an update with no agent id registers no lane");
 
+    // The start's own null-safety, the same contract the header states: a NULL
+    // state or an empty agent id is a silent no-op (no lane, no store, no turn).
+    tuiPipelineAgentStart(nullptr, makeStr("coder"), makeStr("the task"));
+    tuiPipelineAgentStart(state, String{nullptr, 0}, makeStr("the task"));
+    expect(state->inner->left.agents.empty(), "a start with no agent id opens no turn");
+
     const std::string content =
         "Let me read that file.\n--- Tool ---\nread_file\n```json\n{}\n```\n";
     const std::string role = "assistant";

@@ -1554,13 +1554,22 @@ void checkStructuredToolRows() {
 /// two-step run draws the main thread's shape - one reasoning/content pair per
 /// batch, the ids batch-scoped (`<turnId>#<n>` / `reasoning#<n>`), the next
 /// batch a fresh pair instead of a tick overwriting the previous one's blocks.
-/// One typed turn per run is unchanged (DD-19); only the batches inside multiply.
+/// One typed turn per run is unchanged (DD-19); only the batches inside
+/// multiply, and the run's start opens that turn with its query row (task 30):
+/// the steps below join the already-open turn, and the query is the turn-level
+/// row the fold never owns.
 void checkPipelineBatchSteps() {
     tui::TuiState state = drillState();
     state.agentThreadAdapter = {};
 
     const auto wire = [](const char* s) { return String{s, std::strlen(s)}; };
     ::TuiState api{&state};
+
+    // The run's start fires first (task 29's emitter, drawn here): the run's
+    // turn opens at the start with its query row, and the steps below join the
+    // already-open turn - no second turn, and the query is the same block the
+    // main thread's turn start emits (id "query", batch "<turnId>#q").
+    tuiPipelineAgentStart(&api, wire("coder"), wire("get the parser building"));
 
     // Step 0: a tick with content and reasoning, then the step's tool call and
     // its result - all on batch 0 (the zero value D sends for the first step).
@@ -1599,7 +1608,21 @@ void checkPipelineBatchSteps() {
           "premise: one typed turn per run (DD-19), not per batch");
     const std::int64_t run = store.typedTurns.turnAt(0).id;
     const std::size_t blocks = store.typedTurns.blockCount(run);
-    check(blocks == 5, "the two steps make five blocks (two reasoning, two content, one call)");
+    check(blocks == 6,
+          "the query row plus the two steps make six blocks (the query, two reasoning, two "
+          "content, one call)");
+
+    // The query row: the run's task on the query batch, the same block the
+    // main thread's turn start emits (DD-21) - turn-level, so it draws whatever
+    // the fold does with the batches. It opened the turn, so it is block 0
+    // (bucket order is insertion order, I-7).
+    {
+        const auto& query = store.typedTurns.blockAt(run, 0);
+        check(query.id == "query" && query.batchId == std::to_string(run) + "#q" &&
+                  query.kind == TuiBlockKind_Prose && query.meta == "user" &&
+                  query.body == "get the parser building",
+              "the run's start upserts the query row on the query batch (<turnId>#q)");
+    }
 
     // The batch-0 reasoning survived the batch-1 tick: the ids are batch-scoped,
     // so the second step's pair landed beside the first instead of over it.
@@ -1610,6 +1633,10 @@ void checkPipelineBatchSteps() {
         std::size_t seenCount = 0;
         for (std::size_t i = 0; i < blocks && i < 8; ++i) {
             const auto& b = store.typedTurns.blockAt(run, i);
+            // DD-4: the query row's batch is not a response batch - the scan
+            // counts the steps' batches alone.
+            if (b.batchId == std::to_string(run) + "#q")
+                continue;
             if (b.id == "reasoning#0")
                 reasoning0 = b.body;
             if (b.id == "reasoning#1")
@@ -1630,9 +1657,39 @@ void checkPipelineBatchSteps() {
     check(reasoning1 == "step one thinking",
           "the second step's reasoning landed under its own batch-scoped id");
     check(distinctBatches == 2,
-          "the run's turn carries two batches (the ids are the wire's, per batch)");
+          "the run's turn carries two response batches beside the query's (the ids are the "
+          "wire's, per batch)");
     check(callBatchId == std::to_string(run) + "#0",
           "the step's tool call rides the batch that made it (batch 0)");
+    check(store.typedTurns.turnAt(0).state == TuiTurnState_Done,
+          "the turn the run's start opened still closes Done on tuiPipelineAgentDone");
+
+    // On screen: the query row draws above the work. It is turn-level, so the
+    // fold never hides it (the query is not a batch-owned row), and it renders
+    // as the same YOU header over its body segment the main thread's turn start
+    // puts up. The group is pinned open (DD-6) so the work rows' shape does not
+    // ride the factory default.
+    state.left.agents.front().chat.groupPins[run] = true;
+    model::focusAgentLane(state.ui, "coder");
+    Grid agentGrid;
+    shellFrameGrid(state, 100, 30, agentGrid);
+    check(state.agentThreadAdapter.bound(), "the mount binds the API-driven store");
+    int queryRow = -1;
+    int bodyRow = -1;
+    int workRow = -1;
+    for (int y = 0; y < agentGrid.ny; ++y) {
+        const std::string row = agentGrid.rowText(y);
+        if (row.find("YOU") != std::string::npos && queryRow < 0)
+            queryRow = y;
+        if (row.find("get the parser building") != std::string::npos && bodyRow < 0)
+            bodyRow = y;
+        if (row.find("read_file") != std::string::npos && workRow < 0)
+            workRow = y;
+    }
+    check(queryRow >= 0, "the run's task draws the drill-down's query row (the YOU header)");
+    check(bodyRow > queryRow, "the query's body segment draws beneath its YOU row");
+    check(workRow >= 0, "premise: the run's work names its tool on the grid");
+    check(queryRow < workRow, "the query row draws above the work");
 }
 
 // ---------------------------------------------------------------------------
